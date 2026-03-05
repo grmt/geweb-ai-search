@@ -14,6 +14,7 @@ Geweb AI Search transforms your WordPress search into an intelligent assistant p
 The plugin intercepts the standard WordPress search form and opens a modal with two modes: instant autocomplete suggestions (via WP_Query) and a full AI chat powered by Google Gemini File Search.
 
 **[Official WordPress directory](https://wordpress.org/plugins/geweb-ai-search/)**
+
 **[Live Demo](https://aisearch.mygeweb.com/)**
 
 ## Features
