@@ -124,6 +124,10 @@ Currently: gemini-2.5-flash, gemini-2.5-pro, gemini-3-flash-preview, gemini-3-pr
 
 == Changelog ==
 
+= 2.1.0 =
+* Added: AI Indexed status column in post list for enabled post types
+* Added: Re-upload button to manually re-index individual posts
+
 = 2.0.0 =
 * Complete rewrite with modern architecture
 * Added PSR-4 namespace support (Geweb\AISearch)

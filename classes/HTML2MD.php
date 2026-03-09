@@ -20,9 +20,81 @@ class HTML2MD {
      * Constructor - registers WordPress hooks
      */
     public function __construct() {
+        add_action('init', [$this, 'registerPostColumns']);
+        add_action('admin_init', [$this, 'handleReupload']);
         add_action('save_post', [$this, 'onSavePost'], 10, 2);
         add_action('before_delete_post', [$this, 'deleteDocumentForPost']);
         add_action('wp_ajax_geweb_generate_library', [$this, 'ajaxGenerateLibrary']);
+    }
+
+    /**
+     * Register post list columns for all enabled post types
+     */
+    public function registerPostColumns(): void {
+        $postTypes = get_option('geweb_aisearch_post_types', []);
+        if ( !empty($postTypes) ) {
+            foreach ($postTypes as $postType) {
+                add_filter("manage_{$postType}_posts_columns", [$this, 'addIndexedColumn']);
+                add_action("manage_{$postType}_posts_custom_column", [$this, 'renderIndexedColumn'], 10, 2);
+            }
+        }
+    }
+
+    /**
+     * Add "AI Indexed" column header
+     */
+    public function addIndexedColumn(array $columns): array {
+        $columns['geweb_ai_indexed'] = 'AI Indexed';
+        return $columns;
+    }
+
+    /**
+     * Render "AI Indexed" column cell
+     */
+    public function renderIndexedColumn(string $column, int $postId): void {
+        if ($column !== 'geweb_ai_indexed') {
+            return;
+        }
+
+        $status = empty(get_post_meta($postId, self::META_DOCUMENT_NAME, true))
+            ? '<p style="color:#dc3232;">&#10007; Not indexed</p>'
+            : '<p style="color:#46b450;">&#10003; Indexed</p>';
+
+        $url = wp_nonce_url(
+            add_query_arg(['geweb_reupload' => $postId], admin_url('edit.php?post_type=' . get_post_type($postId))),
+            'geweb_reupload_' . $postId
+        );
+
+        echo wp_kses_post(
+            $status . ' <a href="' . esc_url($url) . '" class="button button-small">Re-upload</a>'
+        );
+    }
+
+    /**
+     * Handle re-upload request for a single post (GET action with nonce)
+     *
+     * @return void
+     */
+    public function handleReupload(): void {
+        if (!is_admin() || empty($_GET['geweb_reupload'])) {
+            return;
+        }
+
+        $postId = intval($_GET['geweb_reupload']);
+
+        check_admin_referer('geweb_reupload_' . $postId);
+
+        if (!current_user_can('edit_post', $postId)) {
+            wp_die('Insufficient permissions');
+        }
+
+        $post = get_post($postId);
+        if ($post) {
+            $this->onSavePost($postId, $post);
+        }
+
+        wp_safe_redirect(wp_get_referer());
+        exit;
     }
 
     /**
