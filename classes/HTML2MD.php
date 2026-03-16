@@ -180,7 +180,7 @@ class HTML2MD {
         if ($this->isExcluded($postId)) {
             $this->clearScheduledProcessing($postId);
             $this->schedulePostProcessing($postId, 'delete');
-            $this->setStatus($postId, 'excluded');
+            $this->setStatus($postId, 'removing');
             return;
         }
 
@@ -188,12 +188,12 @@ class HTML2MD {
         if ($post->post_status !== 'publish') {
             $this->clearScheduledProcessing($postId);
             $this->schedulePostProcessing($postId, 'delete');
-            $this->setStatus($postId, 'not_indexed');
+            $this->setStatus($postId, 'removing');
             return;
         }
 
         $this->clearScheduledProcessing($postId);
-        $this->setStatus($postId, 'pending');
+        $this->setStatus($postId, 'uploading');
         $this->schedulePostProcessing($postId, 'index');
     }
 
@@ -318,12 +318,10 @@ class HTML2MD {
         }
 
         if ($this->isExcluded($postId)) {
-            wp_send_json_error([
-                'message' => 'This content is excluded from AI indexing. Include it first to upload again.',
-                'html' => $this->getColumnHtml($postId),
-            ]);
+            delete_post_meta($postId, self::META_EXCLUDE);
         }
 
+        $this->setStatus($postId, 'uploading');
         $result = $this->indexPost($postId, false);
         if (!$result['success']) {
             wp_send_json_error([
@@ -358,6 +356,7 @@ class HTML2MD {
         }
 
         if ($exclude) {
+            $this->setStatus($postId, 'removing');
             update_post_meta($postId, self::META_EXCLUDE, '1');
             $this->deleteDocumentForPost($postId, 'excluded');
 
@@ -368,7 +367,7 @@ class HTML2MD {
         }
 
         delete_post_meta($postId, self::META_EXCLUDE);
-        if (get_post_meta($postId, self::META_STATUS, true) === 'excluded') {
+        if (in_array(get_post_meta($postId, self::META_STATUS, true), ['excluded', 'error', 'removing'], true)) {
             $this->setStatus($postId, 'not_indexed', '');
         }
 
@@ -422,13 +421,10 @@ class HTML2MD {
 
         $html .= '<p class="geweb-ai-index-feedback" style="display:none; margin:4px 0 0;"></p>';
         $html .= '<p style="margin:8px 0 0;">';
-
-        if ($this->isExcluded($postId)) {
-            $html .= '<button type="button" class="button button-small geweb-ai-toggle-exclude" data-exclude="0">Include</button>';
-        } else {
-            $html .= '<button type="button" class="button button-small geweb-ai-reupload">Upload</button> ';
-            $html .= '<button type="button" class="button button-small geweb-ai-toggle-exclude" data-exclude="1">Exclude</button>';
-        }
+        $html .= '<button type="button" class="button button-small geweb-ai-reupload">Upload</button> ';
+        $html .= '<label style="margin-left:8px;">';
+        $html .= '<input type="checkbox" class="geweb-ai-toggle-exclude" ' . checked($this->isExcluded($postId), true, false) . '> Exclude';
+        $html .= '</label>';
 
         $html .= '</p></div>';
 
@@ -564,6 +560,7 @@ class HTML2MD {
 
         $exclude = !empty($_POST['geweb_aisearch_exclude']);
         if ($exclude) {
+            $this->setStatus($postId, 'removing');
             update_post_meta($postId, self::META_EXCLUDE, '1');
             $this->deleteDocumentForPost($postId, 'excluded');
             return;
@@ -628,7 +625,7 @@ class HTML2MD {
         }
 
         if ($this->isExcluded($postId)) {
-            return ['success' => false, 'message' => 'This content is excluded from AI indexing.'];
+            delete_post_meta($postId, self::META_EXCLUDE);
         }
 
         $markdown = $this->convert($postId);
@@ -685,6 +682,8 @@ class HTML2MD {
     private function getStatusData(int $postId): array {
         $status = (string) get_post_meta($postId, self::META_STATUS, true);
         $documentName = (string) get_post_meta($postId, self::META_DOCUMENT_NAME, true);
+        $excluded = $this->isExcluded($postId);
+        $error = (string) get_post_meta($postId, self::META_LAST_ERROR, true);
 
         if ($status === '') {
             $status = $documentName !== '' ? 'indexed' : 'not_indexed';
@@ -693,17 +692,29 @@ class HTML2MD {
         $map = [
             'indexed' => ['label' => 'Indexed', 'color' => '#46b450'],
             'pending' => ['label' => 'Queued', 'color' => '#2271b1'],
+            'uploading' => ['label' => 'Uploading', 'color' => '#2271b1'],
+            'removing' => ['label' => 'Removing', 'color' => '#996800'],
             'not_indexed' => ['label' => 'Not indexed', 'color' => '#646970'],
             'error' => ['label' => 'Index error', 'color' => '#d63638'],
             'excluded' => ['label' => 'Excluded', 'color' => '#996800'],
         ];
         $resolved = $map[$status] ?? $map['not_indexed'];
 
+        if ($excluded) {
+            if ($status === 'removing') {
+                $resolved = ['label' => 'Removing, excluded', 'color' => '#996800'];
+            } elseif ($error !== '') {
+                $resolved = ['label' => 'Excluded, index error', 'color' => '#d63638'];
+            } else {
+                $resolved = ['label' => 'Excluded', 'color' => '#996800'];
+            }
+        }
+
         $lastIndexed = (int) get_post_meta($postId, self::META_LAST_INDEXED, true);
         $resolved['last_indexed'] = $lastIndexed > 0
             ? wp_date(get_option('date_format') . ' ' . get_option('time_format'), $lastIndexed)
             : '';
-        $resolved['error'] = (string) get_post_meta($postId, self::META_LAST_ERROR, true);
+        $resolved['error'] = $error;
 
         return $resolved;
     }
@@ -794,6 +805,7 @@ class HTML2MD {
             return;
         }
 
+        $this->setStatus($postId, 'uploading');
         $this->indexPost($postId, false);
     }
 }

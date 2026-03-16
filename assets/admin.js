@@ -132,15 +132,15 @@ jQuery(document).ready(function($) {
 				});
 		});
 
-		$(document).on('click', '.geweb-ai-toggle-exclude', function() {
-				var $button = $(this);
-				var $cell = $button.closest('.geweb-ai-index-cell');
+		$(document).on('change', '.geweb-ai-toggle-exclude', function() {
+				var $checkbox = $(this);
+				var $cell = $checkbox.closest('.geweb-ai-index-cell');
 				var postId = $cell.data('post-id');
-				var exclude = parseInt($button.data('exclude'), 10) === 1 ? 1 : 0;
+				var exclude = $checkbox.is(':checked') ? 1 : 0;
 				if (!postId) return;
 
-				$button.prop('disabled', true).text(exclude ? 'Excluding...' : 'Including...');
-				showCellFeedback($cell, exclude ? 'Updating exclusion...' : 'Including for indexing...', false);
+				$checkbox.prop('disabled', true);
+				showCellFeedback($cell, exclude ? 'Excluding in the background...' : 'Including for upload...', false);
 
 				$.ajax({
 						url: ajaxurl,
@@ -154,17 +154,17 @@ jQuery(document).ready(function($) {
 						},
 						success: function(response) {
 								if (response.success) {
-										replaceCellHtml($button, response.data.html);
+										replaceCellHtml($checkbox, response.data.html);
 										return;
 								}
 
-								replaceCellHtml($button, response.data && response.data.html ? response.data.html : '');
+								replaceCellHtml($checkbox, response.data && response.data.html ? response.data.html : '');
 								if ($cell.length) {
 										showCellFeedback($cell, response.data && response.data.message ? response.data.message : 'Could not update exclusion.', true);
 								}
 						},
 						error: function() {
-								$button.prop('disabled', false).text(exclude ? 'Exclude' : 'Include');
+								$checkbox.prop('disabled', false).prop('checked', !exclude);
 								showCellFeedback($cell, 'Could not update exclusion.', true);
 						}
 				});
