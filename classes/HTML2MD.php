@@ -71,7 +71,7 @@ class HTML2MD {
         if ($column !== 'geweb_ai_indexed') {
             return;
         }
-        echo wp_kses_post($this->getColumnHtml($postId));
+        echo wp_kses($this->getColumnHtml($postId), $this->getColumnAllowedHtml());
     }
 
     /**
@@ -408,6 +408,7 @@ class HTML2MD {
      */
     private function getColumnHtml(int $postId): string {
         $statusData = $this->getStatusData($postId);
+        $isExcluded = $this->isExcluded($postId);
         $html = '<div class="geweb-ai-index-cell" data-post-id="' . esc_attr((string) $postId) . '">';
         $html .= '<p style="margin:0; color:' . esc_attr($statusData['color']) . ';">' . esc_html($statusData['label']) . '</p>';
 
@@ -423,12 +424,47 @@ class HTML2MD {
         $html .= '<p style="margin:8px 0 0;">';
         $html .= '<button type="button" class="button button-small geweb-ai-reupload">Upload</button> ';
         $html .= '<label style="margin-left:8px;">';
-        $html .= '<input type="checkbox" class="geweb-ai-toggle-exclude" ' . checked($this->isExcluded($postId), true, false) . '> Exclude';
+        $html .= '<input type="checkbox" class="geweb-ai-toggle-exclude" ' . checked($isExcluded, true, false) . disabled($isExcluded, true, false) . '> Exclude';
         $html .= '</label>';
 
         $html .= '</p></div>';
 
         return $html;
+    }
+
+    /**
+     * Allowed HTML for the admin index-status column
+     *
+     * @return array<string,array<string,bool>>
+     */
+    private function getColumnAllowedHtml(): array {
+        return [
+            'div' => [
+                'class' => true,
+                'data-post-id' => true,
+                'style' => true,
+            ],
+            'p' => [
+                'class' => true,
+                'style' => true,
+            ],
+            'small' => [
+                'style' => true,
+            ],
+            'button' => [
+                'type' => true,
+                'class' => true,
+            ],
+            'label' => [
+                'style' => true,
+            ],
+            'input' => [
+                'type' => true,
+                'class' => true,
+                'checked' => true,
+                'disabled' => true,
+            ],
+        ];
     }
 
     /**

@@ -15,7 +15,12 @@ jQuery(document).ready(function($) {
 				return String(text)
 						.replace(/&/g, '&amp;')
 						.replace(/</g, '&lt;')
-						.replace(/>/g, '&gt;');
+						.replace(/>/g, '&gt;')
+						.replace(/ /g, '&nbsp;');
+		}
+
+		function lineNumberHtml(number) {
+				return '<span style="display:inline-block; width:3em; margin-right:12px; color:#8c8f94; user-select:none;">' + number + '</span>';
 		}
 
 		function buildPromptDiff(currentPrompt, historyPrompt) {
@@ -27,43 +32,42 @@ jQuery(document).ready(function($) {
 				for (var i = 0; i < maxLines; i++) {
 						var currentLine = currentLines[i];
 						var historyLine = historyLines[i];
+						var lineNumber = i + 1;
 
 						if (currentLine === historyLine) {
 								if (typeof historyLine !== 'undefined') {
-										html.push('<div>' + escapeHtml('  ' + historyLine) + '</div>');
+										html.push('<div>' + lineNumberHtml(lineNumber) + escapeHtml(historyLine) + '</div>');
 								}
 								continue;
 						}
 
 						if (typeof currentLine !== 'undefined') {
-								html.push('<div style="background:#fbeaea; color:#8a1f11;">' + escapeHtml('- ' + currentLine) + '</div>');
+								html.push('<div style="background:#fbeaea; color:#8a1f11;">' + lineNumberHtml(lineNumber) + escapeHtml('- ' + currentLine) + '</div>');
 						}
 
 						if (typeof historyLine !== 'undefined') {
-								html.push('<div style="background:#edf7ed; color:#166534;">' + escapeHtml('+ ' + historyLine) + '</div>');
+								html.push('<div style="background:#edf7ed; color:#166534;">' + lineNumberHtml(lineNumber) + escapeHtml('+ ' + historyLine) + '</div>');
 						}
 				}
 
-				return html.length ? html.join('') : '<div>No differences.</div>';
+				return html.length ? html.join('') : '<div>No differences from the current AI Prompt.</div>';
 		}
 
 		function updatePromptHistoryPreview() {
 				var $select = $('#geweb-ai-prompt-history-select');
-				var $preview = $('#geweb-ai-prompt-history-preview');
 				var $diff = $('#geweb-ai-prompt-history-diff');
-				var currentPrompt = $select.data('current-prompt') || '';
+				var $currentPrompt = $('#geweb_ai_search_custom_prompt');
 
-				if (!$select.length || !$preview.length || !$diff.length) return;
+				if (!$select.length || !$diff.length || !$currentPrompt.length) return;
 
 				var selectedPrompt = $select.val() || '';
-				$preview.val(selectedPrompt);
 
 				if (!selectedPrompt) {
 						$diff.text('Select a previous prompt to preview the full text and diff.');
 						return;
 				}
 
-				$diff.html(buildPromptDiff(currentPrompt, selectedPrompt));
+				$diff.html(buildPromptDiff($currentPrompt.val(), selectedPrompt));
 		}
 
 		function showCellFeedback($cell, message, isError) {
@@ -97,6 +101,7 @@ jQuery(document).ready(function($) {
 		});
 
 		$('#geweb-ai-prompt-history-select').on('change', updatePromptHistoryPreview);
+		$('#geweb_ai_search_custom_prompt').on('input', updatePromptHistoryPreview);
 		updatePromptHistoryPreview();
 
 		$(window).on('beforeunload', function() {

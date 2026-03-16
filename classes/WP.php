@@ -256,7 +256,7 @@ class WP {
                             >
                             <p class="description">Number of prompt versions to keep, including the current active prompt. Default: <?php echo esc_html((string) self::DEFAULT_PROMPT_HISTORY_LIMIT); ?>.</p>
                             <?php if (!empty($promptVersions)): ?>
-                                <select id="geweb-ai-prompt-history-select" data-current-prompt="<?php echo esc_attr($effectivePrompt); ?>">
+                                <select id="geweb-ai-prompt-history-select">
                                     <?php foreach ($promptVersions as $index => $entry): ?>
                                         <?php
                                         $label = '#' . ($index + 1);
@@ -275,17 +275,7 @@ class WP {
                                     <?php endforeach; ?>
                                 </select>
                                 <button type="button" class="button" id="geweb-ai-restore-history-prompt">Use selected prompt</button>
-                                <p style="margin-top:12px;">
-                                    <label for="geweb-ai-prompt-history-preview"><strong>Selected history prompt</strong></label>
-                                    <textarea
-                                        id="geweb-ai-prompt-history-preview"
-                                        rows="10"
-                                        class="large-text code"
-                                        readonly
-                                    ></textarea>
-                                </p>
                                 <div style="margin-top:12px;">
-                                    <strong>Diff vs current prompt</strong>
                                     <pre
                                         id="geweb-ai-prompt-history-diff"
                                         style="margin-top:8px; padding:12px; background:#fff; border:1px solid #dcdcde; max-height:320px; overflow:auto; white-space:pre-wrap;"
