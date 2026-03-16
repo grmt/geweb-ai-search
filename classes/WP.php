@@ -135,6 +135,7 @@ class WP {
             $models = array_values(array_unique($models));
         }
         $defaultModel = $gemini->getDefaultModel($models);
+        $modelStatuses = $gemini->getModelStatuses();
         $customPrompt = get_option(self::OPTION_CUSTOM_PROMPT, '');
         $defaultPrompt = $gemini->getDefaultSystemInstruction();
         $effectivePrompt = $gemini->getSystemInstruction();
@@ -175,6 +176,38 @@ class WP {
                             <p class="description">Current model: <code><?php echo esc_html($selectedModel); ?></code></p>
                             <p class="description">Default model: <code><?php echo esc_html($defaultModel); ?></code></p>
                             <p class="description">The list above is fetched from Gemini when possible and falls back to the bundled defaults if the API is unavailable.</p>
+                            <?php if (!empty($modelStatuses)): ?>
+                                <div style="margin-top:12px;">
+                                    <strong>Model status</strong>
+                                    <ul style="margin:8px 0 0 18px;">
+                                        <?php foreach ($models as $model): ?>
+                                            <?php
+                                            $entry = $modelStatuses[$model] ?? null;
+                                            if (!is_array($entry) || empty($entry['status'])) {
+                                                continue;
+                                            }
+
+                                            $status = $entry['status'] === 'failed' ? 'Failed' : 'OK';
+                                            $color = $entry['status'] === 'failed' ? '#d63638' : '#46b450';
+                                            $timestamp = !empty($entry['timestamp'])
+                                                ? wp_date(get_option('date_format') . ' ' . get_option('time_format'), intval($entry['timestamp']))
+                                                : '';
+                                            $message = isset($entry['message']) ? (string) $entry['message'] : '';
+                                            ?>
+                                            <li style="color:<?php echo esc_attr($color); ?>;">
+                                                <code><?php echo esc_html($model); ?></code>
+                                                <?php echo esc_html($status); ?>
+                                                <?php if ($timestamp !== ''): ?>
+                                                    at <?php echo esc_html($timestamp); ?>
+                                                <?php endif; ?>
+                                                <?php if ($message !== ''): ?>
+                                                    <br><small style="color:#50575e;"><?php echo esc_html($message); ?></small>
+                                                <?php endif; ?>
+                                            </li>
+                                        <?php endforeach; ?>
+                                    </ul>
+                                </div>
+                            <?php endif; ?>
                         </td>
                     </tr>
 
@@ -241,6 +274,22 @@ class WP {
                                     <?php endforeach; ?>
                                 </select>
                                 <button type="button" class="button" id="geweb-ai-restore-history-prompt">Use selected prompt</button>
+                                <p style="margin-top:12px;">
+                                    <label for="geweb-ai-prompt-history-preview"><strong>Selected history prompt</strong></label>
+                                    <textarea
+                                        id="geweb-ai-prompt-history-preview"
+                                        rows="10"
+                                        class="large-text code"
+                                        readonly
+                                    ></textarea>
+                                </p>
+                                <div style="margin-top:12px;">
+                                    <strong>Diff vs current prompt</strong>
+                                    <pre
+                                        id="geweb-ai-prompt-history-diff"
+                                        style="margin-top:8px; padding:12px; background:#fff; border:1px solid #dcdcde; max-height:320px; overflow:auto; white-space:pre-wrap;"
+                                    >Select a previous prompt to preview the full text and diff.</pre>
+                                </div>
                             <?php else: ?>
                                 <p class="description">No previous prompts saved yet.</p>
                             <?php endif; ?>

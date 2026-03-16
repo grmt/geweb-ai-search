@@ -1,4 +1,59 @@
 jQuery(document).ready(function($) {
+		function escapeHtml(text) {
+				return String(text)
+						.replace(/&/g, '&amp;')
+						.replace(/</g, '&lt;')
+						.replace(/>/g, '&gt;');
+		}
+
+		function buildPromptDiff(currentPrompt, historyPrompt) {
+				var currentLines = String(currentPrompt || '').split('\n');
+				var historyLines = String(historyPrompt || '').split('\n');
+				var maxLines = Math.max(currentLines.length, historyLines.length);
+				var html = [];
+
+				for (var i = 0; i < maxLines; i++) {
+						var currentLine = currentLines[i];
+						var historyLine = historyLines[i];
+
+						if (currentLine === historyLine) {
+								if (typeof historyLine !== 'undefined') {
+										html.push('<div>' + escapeHtml('  ' + historyLine) + '</div>');
+								}
+								continue;
+						}
+
+						if (typeof currentLine !== 'undefined') {
+								html.push('<div style="background:#fbeaea; color:#8a1f11;">' + escapeHtml('- ' + currentLine) + '</div>');
+						}
+
+						if (typeof historyLine !== 'undefined') {
+								html.push('<div style="background:#edf7ed; color:#166534;">' + escapeHtml('+ ' + historyLine) + '</div>');
+						}
+				}
+
+				return html.length ? html.join('') : '<div>No differences.</div>';
+		}
+
+		function updatePromptHistoryPreview() {
+				var $select = $('#geweb-ai-prompt-history-select');
+				var $preview = $('#geweb-ai-prompt-history-preview');
+				var $diff = $('#geweb-ai-prompt-history-diff');
+				var $currentPrompt = $('#geweb_ai_search_current_prompt');
+
+				if (!$select.length || !$preview.length || !$diff.length || !$currentPrompt.length) return;
+
+				var selectedPrompt = $select.val() || '';
+				$preview.val(selectedPrompt);
+
+				if (!selectedPrompt) {
+						$diff.text('Select a previous prompt to preview the full text and diff.');
+						return;
+				}
+
+				$diff.html(buildPromptDiff($currentPrompt.val(), selectedPrompt));
+		}
+
 		function showCellFeedback($cell, message, isError) {
 				var $feedback = $cell.find('.geweb-ai-index-feedback');
 				if (!$feedback.length) return;
@@ -26,7 +81,12 @@ jQuery(document).ready(function($) {
 				if (!$prompt.length || !value) return;
 
 				$prompt.val(value);
+				updatePromptHistoryPreview();
 		});
+
+		$('#geweb-ai-prompt-history-select').on('change', updatePromptHistoryPreview);
+		$('#geweb_ai_search_current_prompt').on('input', updatePromptHistoryPreview);
+		updatePromptHistoryPreview();
 
 		var isProcessing = false;
 		var totalSuccess = 0;

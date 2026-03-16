@@ -24,6 +24,7 @@ class Gemini {
      * Option key for Model
      */
     private const OPTION_MODEL = 'geweb_aisearch_model';
+    private const OPTION_MODEL_STATUS = 'geweb_aisearch_model_status';
 
     /**
      * Option key for custom system instruction
@@ -209,27 +210,33 @@ class Gemini {
         // Build request body
         $body = $this->buildSearchBody($messages, $storeName);
 
-        // Make API request
-        $url = self::API_BASE . '/models/' . $this->model . ':generateContent';
-        $result = $this->makeRequest($url, $body, 'POST');
+        try {
+            // Make API request
+            $url = self::API_BASE . '/models/' . $this->model . ':generateContent';
+            $result = $this->makeRequest($url, $body, 'POST');
 
-        // Parse response
-        if (empty($result['candidates'][0]['content']['parts'][0]['text'])) {
-            throw new \Exception('Empty response from AI');
-        }
+            // Parse response
+            if (empty($result['candidates'][0]['content']['parts'][0]['text'])) {
+                throw new \Exception('Empty response from AI');
+            }
 
-        $responseText = $result['candidates'][0]['content']['parts'][0]['text'];
+            $responseText = $result['candidates'][0]['content']['parts'][0]['text'];
 
-        // Gemini 3+ returns JSON, Gemini 2.5 returns plain text
-        if ($this->isGemini2Model($this->model)) {
-            return ['answer' => apply_filters('the_content', $responseText)];
-        } else {
+            $this->recordModelStatus($this->model, 'ok');
+
+            // Gemini 3+ returns JSON, Gemini 2.5 returns plain text
+            if ($this->isGemini2Model($this->model)) {
+                return ['answer' => apply_filters('the_content', $responseText)];
+            }
             $decoded = json_decode($responseText, true);
             if (json_last_error() !== JSON_ERROR_NONE) {
                 return ['answer' => apply_filters('the_content', $responseText)];
             }
             $decoded['answer'] = apply_filters('the_content', $decoded['answer']);
             return $decoded;
+        } catch (\Exception $e) {
+            $this->recordModelStatus($this->model, 'failed', $e->getMessage());
+            throw $e;
         }
     }
 
@@ -447,12 +454,45 @@ class Gemini {
     }
 
     /**
+     * Get recorded model statuses
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    public function getModelStatuses(): array {
+        $statuses = get_option(self::OPTION_MODEL_STATUS, []);
+        return is_array($statuses) ? $statuses : [];
+    }
+
+    /**
      * Clear cached Gemini models
      *
      * @return void
      */
     public function clearModelsCache(): void {
         delete_transient(self::TRANSIENT_MODELS);
+    }
+
+    /**
+     * Record whether a model worked or failed
+     *
+     * @param string $model Model name
+     * @param string $status ok|failed
+     * @param string $message Optional error message
+     * @return void
+     */
+    private function recordModelStatus(string $model, string $status, string $message = ''): void {
+        if ($model === '') {
+            return;
+        }
+
+        $statuses = $this->getModelStatuses();
+        $statuses[$model] = [
+            'status' => $status,
+            'timestamp' => current_time('timestamp'),
+            'message' => $message,
+        ];
+
+        update_option(self::OPTION_MODEL_STATUS, $statuses);
     }
 
     /**
