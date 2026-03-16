@@ -23,9 +23,34 @@ jQuery(document).ready(function($) {
 				return '<span style="display:inline-block; width:3em; margin-right:12px; color:#8c8f94; user-select:none;">' + number + '</span>';
 		}
 
+		function getAdminAjaxUrl() {
+				return gewebAisearchAdmin && gewebAisearchAdmin.ajaxUrl ? gewebAisearchAdmin.ajaxUrl : (typeof ajaxurl !== 'undefined' ? ajaxurl : '');
+		}
+
+		function decodeBase64Value(encodedValue) {
+				if (typeof encodedValue !== 'string' || encodedValue === '') {
+						return '';
+				}
+
+				try {
+						return window.atob(encodedValue);
+				} catch (error) {
+						return '';
+				}
+		}
+
+		function normalizePromptText(text) {
+				return String(text || '').replace(/\r\n?/g, '\n');
+		}
+
+		function getSelectedHistoryPrompt() {
+				var $selectedOption = $('#geweb-ai-prompt-history-select option:selected');
+				return decodeBase64Value($selectedOption.attr('data-prompt'));
+		}
+
 		function buildPromptDiff(currentPrompt, historyPrompt) {
-				var currentLines = String(currentPrompt || '').split('\n');
-				var historyLines = String(historyPrompt || '').split('\n');
+				var currentLines = normalizePromptText(currentPrompt).split('\n');
+				var historyLines = normalizePromptText(historyPrompt).split('\n');
 				var maxLines = Math.max(currentLines.length, historyLines.length);
 				var html = [];
 
@@ -60,7 +85,7 @@ jQuery(document).ready(function($) {
 
 				if (!$select.length || !$diff.length || !$currentPrompt.length) return;
 
-				var selectedPrompt = $select.val() || '';
+				var selectedPrompt = getSelectedHistoryPrompt();
 
 				if (!selectedPrompt) {
 						$diff.text('Select a previous prompt to preview the full text and diff.');
@@ -86,19 +111,51 @@ jQuery(document).ready(function($) {
 
 		$('#geweb-ai-restore-default-prompt').on('click', function() {
 				var $prompt = $('#geweb_ai_search_custom_prompt');
-				var $defaultPrompt = $('#geweb_ai_search_default_prompt');
+				var defaultPrompt = decodeBase64Value($(this).attr('data-default-prompt'));
 				if (!$prompt.length) return;
 
-				$prompt.val($defaultPrompt.val() || '').trigger('input').trigger('change');
+				$prompt.val(defaultPrompt).trigger('input').trigger('change').focus();
 		});
 
 		$('#geweb-ai-restore-history-prompt').on('click', function() {
 				var $prompt = $('#geweb_ai_search_custom_prompt');
-				var value = $('#geweb-ai-prompt-history-select').val();
+				var value = getSelectedHistoryPrompt();
 				if (!$prompt.length || !value) return;
 
 				$prompt.val(value).trigger('input').trigger('change');
 				updatePromptHistoryPreview();
+		});
+
+		$('#geweb-ai-clear-history').on('click', function() {
+				var $button = $(this);
+				var $select = $('#geweb-ai-prompt-history-select');
+				var $diff = $('#geweb-ai-prompt-history-diff');
+
+				if (!$button.length || !$select.length || !$diff.length) return;
+
+				$button.prop('disabled', true).text('Clearing...');
+
+				$.ajax({
+						url: getAdminAjaxUrl(),
+						type: 'POST',
+						dataType: 'json',
+						data: {
+								action: 'geweb_clear_prompt_history',
+								nonce: gewebAisearchAdmin.adminActionNonce
+						}
+				}).done(function(response) {
+						if (!response || !response.success) {
+								var message = response && response.data && response.data.message ? response.data.message : 'Could not clear prompt history.';
+								$diff.text(message);
+								$button.prop('disabled', false).text('Clear history');
+								return;
+						}
+
+						window.location.reload();
+				}).fail(function() {
+						$diff.text('Could not clear prompt history.');
+						$button.prop('disabled', false).text('Clear history');
+				});
 		});
 
 		$('#geweb-ai-prompt-history-select').on('change', updatePromptHistoryPreview);

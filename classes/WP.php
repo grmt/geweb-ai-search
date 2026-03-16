@@ -30,6 +30,7 @@ class WP {
 
         add_action('wp_ajax_geweb_ai_chat', [$this, 'ajaxAiChat']);
         add_action('wp_ajax_nopriv_geweb_ai_chat', [$this, 'ajaxAiChat']);
+        add_action('wp_ajax_geweb_clear_prompt_history', [$this, 'ajaxClearPromptHistory']);
 
         add_action('wp_ajax_geweb_get_nonce', [$this, 'ajaxGetNonce']);
         add_action('wp_ajax_nopriv_geweb_get_nonce', [$this, 'ajaxGetNonce']);
@@ -107,15 +108,16 @@ class WP {
         if (isset($_POST['geweb_ai_search_custom_prompt'])) {
             $newPrompt = sanitize_textarea_field(wp_unslash($_POST['geweb_ai_search_custom_prompt']));
             $currentPrompt = (string) get_option(self::OPTION_CUSTOM_PROMPT, '');
-            if ($newPrompt === '' && $currentPrompt === '') {
-                $newPrompt = (new Gemini())->getDefaultSystemInstruction();
-            }
 
             if ($newPrompt !== $currentPrompt) {
                 $this->storePromptHistory($currentPrompt, max(0, $historyLimit - 1));
             }
 
-            update_option(self::OPTION_CUSTOM_PROMPT, $newPrompt);
+            if ($newPrompt === '') {
+                delete_option(self::OPTION_CUSTOM_PROMPT);
+            } else {
+                update_option(self::OPTION_CUSTOM_PROMPT, $newPrompt);
+            }
         }
 
         wp_safe_redirect(wp_get_referer());
@@ -240,7 +242,12 @@ class WP {
                             ><?php echo esc_textarea($customPrompt); ?></textarea>
                             <textarea id="geweb_ai_search_default_prompt" style="display:none;" readonly><?php echo esc_textarea($defaultPrompt); ?></textarea>
                             <p>
-                                <button type="button" class="button" id="geweb-ai-restore-default-prompt">Restore default prompt</button>
+                                <button
+                                    type="button"
+                                    class="button"
+                                    id="geweb-ai-restore-default-prompt"
+                                    data-default-prompt="<?php echo esc_attr(base64_encode($defaultPrompt)); ?>"
+                                >Restore default prompt</button>
                             </p>
                             <p class="description">If this field is empty, the built-in default prompt is used. You can fully replace it here and restore the default at any time.</p>
                         </td>
@@ -259,7 +266,7 @@ class WP {
                                 class="small-text"
                             >
                             <p class="description">Number of prompt versions to keep, including the current active prompt. Default: <?php echo esc_html((string) self::DEFAULT_PROMPT_HISTORY_LIMIT); ?>.</p>
-                            <?php if (!empty($promptVersions)): ?>
+                            <?php if (!empty($promptHistory)): ?>
                                 <select id="geweb-ai-prompt-history-select">
                                     <?php foreach ($promptVersions as $index => $entry): ?>
                                         <?php
@@ -274,7 +281,8 @@ class WP {
                                         }
                                         ?>
                                         <option
-                                            value="<?php echo esc_attr((string) ($entry['prompt'] ?? '')); ?>"
+                                            value="<?php echo esc_attr((string) $index); ?>"
+                                            data-prompt="<?php echo esc_attr(base64_encode((string) ($entry['prompt'] ?? ''))); ?>"
                                             <?php selected($index, $selectedPromptIndex); ?>
                                         >
                                             <?php echo esc_html($label); ?>
@@ -282,6 +290,7 @@ class WP {
                                     <?php endforeach; ?>
                                 </select>
                                 <button type="button" class="button" id="geweb-ai-restore-history-prompt">Use selected prompt</button>
+                                <button type="button" class="button" id="geweb-ai-clear-history">Clear history</button>
                                 <div style="margin-top:12px;">
                                     <pre
                                         id="geweb-ai-prompt-history-diff"
@@ -408,6 +417,25 @@ class WP {
         }
 
         update_option(self::OPTION_PROMPT_HISTORY, array_slice($history, 0, max(0, $limit)));
+    }
+
+    /**
+     * AJAX: Clear saved prompt history immediately
+     *
+     * @return void
+     */
+    public function ajaxClearPromptHistory(): void {
+        check_ajax_referer('geweb_ai_search_admin_actions', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => 'Insufficient permissions'], 403);
+        }
+
+        update_option(self::OPTION_PROMPT_HISTORY, []);
+
+        wp_send_json_success([
+            'message' => 'Prompt history cleared.',
+        ]);
     }
 
     /**
@@ -544,6 +572,7 @@ class WP {
         );
 
         wp_localize_script('geweb-ai-search-admin', 'gewebAisearchAdmin', [
+            'ajaxUrl' => admin_url('admin-ajax.php'),
             'generateLibraryNonce' => wp_create_nonce('geweb_ai_search_generate_library'),
             'adminActionNonce' => wp_create_nonce('geweb_ai_search_admin_actions'),
         ]);
