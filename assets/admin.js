@@ -1,4 +1,16 @@
 jQuery(document).ready(function($) {
+		var $settingsForm = $('form[action*="admin-post.php"]').has('input[name="action"][value="geweb_save"]').first();
+		var initialFormState = $settingsForm.length ? $settingsForm.serialize() : '';
+
+		function markFormSaved() {
+				if (!$settingsForm.length) return;
+				initialFormState = $settingsForm.serialize();
+		}
+
+		function hasUnsavedChanges() {
+				return $settingsForm.length && initialFormState !== $settingsForm.serialize();
+		}
+
 		function escapeHtml(text) {
 				return String(text)
 						.replace(/&/g, '&amp;')
@@ -39,9 +51,9 @@ jQuery(document).ready(function($) {
 				var $select = $('#geweb-ai-prompt-history-select');
 				var $preview = $('#geweb-ai-prompt-history-preview');
 				var $diff = $('#geweb-ai-prompt-history-diff');
-				var $currentPrompt = $('#geweb_ai_search_current_prompt');
+				var currentPrompt = $select.data('current-prompt') || '';
 
-				if (!$select.length || !$preview.length || !$diff.length || !$currentPrompt.length) return;
+				if (!$select.length || !$preview.length || !$diff.length) return;
 
 				var selectedPrompt = $select.val() || '';
 				$preview.val(selectedPrompt);
@@ -51,7 +63,7 @@ jQuery(document).ready(function($) {
 						return;
 				}
 
-				$diff.html(buildPromptDiff($currentPrompt.val(), selectedPrompt));
+				$diff.html(buildPromptDiff(currentPrompt, selectedPrompt));
 		}
 
 		function showCellFeedback($cell, message, isError) {
@@ -72,7 +84,7 @@ jQuery(document).ready(function($) {
 				var $prompt = $('#geweb_ai_search_custom_prompt');
 				if (!$prompt.length) return;
 
-				$prompt.val($prompt.data('default-prompt'));
+				$prompt.val($prompt.data('default-prompt')).trigger('input').trigger('change');
 		});
 
 		$('#geweb-ai-restore-history-prompt').on('click', function() {
@@ -80,13 +92,24 @@ jQuery(document).ready(function($) {
 				var value = $('#geweb-ai-prompt-history-select').val();
 				if (!$prompt.length || !value) return;
 
-				$prompt.val(value);
+				$prompt.val(value).trigger('input').trigger('change');
 				updatePromptHistoryPreview();
 		});
 
 		$('#geweb-ai-prompt-history-select').on('change', updatePromptHistoryPreview);
-		$('#geweb_ai_search_current_prompt').on('input', updatePromptHistoryPreview);
 		updatePromptHistoryPreview();
+
+		$(window).on('beforeunload', function() {
+				if (!hasUnsavedChanges()) return;
+
+				return 'You have unsaved changes. Are you sure you want to leave this page?';
+		});
+
+		if ($settingsForm.length) {
+				$settingsForm.on('submit', function() {
+						markFormSaved();
+				});
+		}
 
 		var isProcessing = false;
 		var totalSuccess = 0;

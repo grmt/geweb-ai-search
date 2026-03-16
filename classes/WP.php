@@ -101,7 +101,7 @@ class WP {
             $historyLimit = max(1, intval($_POST['geweb_ai_search_prompt_history_limit']));
         }
         update_option(self::OPTION_PROMPT_HISTORY_LIMIT, $historyLimit);
-        $this->trimPromptHistory($historyLimit);
+        $this->trimPromptHistory(max(0, $historyLimit - 1));
 
         // Save custom prompt
         if (isset($_POST['geweb_ai_search_custom_prompt'])) {
@@ -109,7 +109,7 @@ class WP {
             $currentPrompt = (string) get_option(self::OPTION_CUSTOM_PROMPT, '');
 
             if ($newPrompt !== $currentPrompt) {
-                $this->storePromptHistory($currentPrompt, $historyLimit);
+                $this->storePromptHistory($currentPrompt, max(0, $historyLimit - 1));
             }
 
             update_option(self::OPTION_CUSTOM_PROMPT, $newPrompt);
@@ -144,6 +144,19 @@ class WP {
         if (!is_array($promptHistory)) {
             $promptHistory = [];
         }
+        $promptVersions = [];
+        foreach (array_reverse($promptHistory) as $entry) {
+            $promptVersions[] = [
+                'prompt' => (string) ($entry['prompt'] ?? ''),
+                'saved_at' => intval($entry['saved_at'] ?? 0),
+                'is_current' => false,
+            ];
+        }
+        $promptVersions[] = [
+            'prompt' => $effectivePrompt,
+            'saved_at' => current_time('timestamp'),
+            'is_current' => true,
+        ];
 
         $postTypes = get_option('geweb_aisearch_post_types', []);
         $allPostTypes = get_post_types(['public' => true], 'objects');
@@ -212,33 +225,20 @@ class WP {
                     </tr>
 
                     <tr>
-                        <th><label for="geweb_ai_search_custom_prompt">Custom AI Prompt:</label></th>
+                        <th><label for="geweb_ai_search_custom_prompt">AI Prompt:</label></th>
                         <td>
                             <textarea
                                 id="geweb_ai_search_custom_prompt"
                                 name="geweb_ai_search_custom_prompt"
                                 rows="10"
                                 class="large-text code"
-                                placeholder="Add extra instructions for the AI assistant here."
+                                placeholder="Enter the AI prompt used for Gemini requests."
                                 data-default-prompt="<?php echo esc_attr($defaultPrompt); ?>"
                             ><?php echo esc_textarea($customPrompt); ?></textarea>
                             <p>
                                 <button type="button" class="button" id="geweb-ai-restore-default-prompt">Restore default prompt</button>
                             </p>
                             <p class="description">If this field is empty, the built-in default prompt is used. You can fully replace it here and restore the default at any time.</p>
-                        </td>
-                    </tr>
-
-                    <tr>
-                        <th><label for="geweb_ai_search_current_prompt">Current Effective Prompt:</label></th>
-                        <td>
-                            <textarea
-                                id="geweb_ai_search_current_prompt"
-                                rows="10"
-                                class="large-text code"
-                                readonly
-                            ><?php echo esc_textarea($effectivePrompt); ?></textarea>
-                            <p class="description">This is the prompt currently used for Gemini requests after applying the saved plugin setting and any WordPress filters.</p>
                         </td>
                     </tr>
 
@@ -254,21 +254,22 @@ class WP {
                                 value="<?php echo esc_attr((string) $promptHistoryLimit); ?>"
                                 class="small-text"
                             >
-                            <p class="description">Number of previous prompts to keep. Default: <?php echo esc_html((string) self::DEFAULT_PROMPT_HISTORY_LIMIT); ?>.</p>
-                            <?php if (!empty($promptHistory)): ?>
-                                <select id="geweb-ai-prompt-history-select">
-                                    <option value="">Select a previous prompt</option>
-                                    <?php foreach ($promptHistory as $entry): ?>
+                            <p class="description">Number of prompt versions to keep, including the current active prompt. Default: <?php echo esc_html((string) self::DEFAULT_PROMPT_HISTORY_LIMIT); ?>.</p>
+                            <?php if (!empty($promptVersions)): ?>
+                                <select id="geweb-ai-prompt-history-select" data-current-prompt="<?php echo esc_attr($effectivePrompt); ?>">
+                                    <?php foreach ($promptVersions as $index => $entry): ?>
                                         <?php
-                                        $label = !empty($entry['saved_at'])
-                                            ? wp_date(get_option('date_format') . ' ' . get_option('time_format'), intval($entry['saved_at']))
-                                            : 'Saved prompt';
+                                        $label = '#' . ($index + 1);
+                                        $label .= !empty($entry['is_current']) ? ' Current' : ' Saved';
+                                        if (!empty($entry['saved_at'])) {
+                                            $label .= ' - ' . wp_date(get_option('date_format') . ' ' . get_option('time_format'), intval($entry['saved_at']));
+                                        }
                                         $preview = isset($entry['prompt']) ? wp_strip_all_tags((string) $entry['prompt']) : '';
                                         if ($preview !== '') {
                                             $label .= ' - ' . wp_html_excerpt($preview, 80, '...');
                                         }
                                         ?>
-                                        <option value="<?php echo esc_attr((string) ($entry['prompt'] ?? '')); ?>">
+                                        <option value="<?php echo esc_attr((string) ($entry['prompt'] ?? '')); ?>" <?php selected(!empty($entry['is_current']), true); ?>>
                                             <?php echo esc_html($label); ?>
                                         </option>
                                     <?php endforeach; ?>
@@ -360,7 +361,7 @@ class WP {
      */
     private function storePromptHistory(string $prompt, int $limit): void {
         $prompt = trim($prompt);
-        if ($prompt === '') {
+        if ($prompt === '' || $limit <= 0) {
             return;
         }
 
@@ -409,7 +410,7 @@ class WP {
             return;
         }
 
-        update_option(self::OPTION_PROMPT_HISTORY, array_slice($history, 0, $limit));
+        update_option(self::OPTION_PROMPT_HISTORY, array_slice($history, 0, max(0, $limit)));
     }
 
     /**
