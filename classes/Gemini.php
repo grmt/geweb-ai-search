@@ -52,6 +52,7 @@ class Gemini {
      * Default model name
      */
     private const DEFAULT_MODEL = 'gemini-2.5-flash';
+    private const TRANSIENT_MODELS = 'geweb_aisearch_gemini_models';
 
     /**
      * @var string Gemini API key
@@ -241,12 +242,12 @@ class Gemini {
      * @return array Decoded JSON response
      * @throws \Exception On request error
      */
-    private function makeRequest(string $url, array $body, string $method = 'POST'): array {
+    private function makeRequest(string $url, ?array $body = null, string $method = 'POST'): array {
         if (empty($this->apiKey)) {
             throw new \Exception('Configuration error');
         }
-        
-        $response = wp_remote_request($url, [
+
+        $args = [
             'method'  => $method,
             'timeout' => 120,
             'headers' => [
@@ -254,8 +255,13 @@ class Gemini {
                 'Accept'        => 'application/json',
                 'x-goog-api-key' => $this->apiKey,
             ],
-            'body' => wp_json_encode($body),
-        ]);
+        ];
+
+        if ($body !== null) {
+            $args['body'] = wp_json_encode($body);
+        }
+
+        $response = wp_remote_request($url, $args);
 
         if (is_wp_error($response)) {
             throw new \Exception(esc_html('API request failed: ' . $response->get_error_message()));
@@ -368,13 +374,40 @@ class Gemini {
      * @return array Model names
      */
     public function getModels(): array {
-        $models = [
+        $models = $this->getDefaultModels();
+
+        if (empty($this->apiKey)) {
+            return apply_filters('geweb_aisearch_gemini_models', $models);
+        }
+
+        $cachedModels = get_transient(self::TRANSIENT_MODELS);
+        if (is_array($cachedModels) && !empty($cachedModels)) {
+            return apply_filters('geweb_aisearch_gemini_models', $cachedModels);
+        }
+
+        try {
+            $remoteModels = $this->fetchUsableModels();
+            if (!empty($remoteModels)) {
+                set_transient(self::TRANSIENT_MODELS, $remoteModels, 12 * HOUR_IN_SECONDS);
+                return apply_filters('geweb_aisearch_gemini_models', $remoteModels);
+            }
+        } catch (\Exception $e) {}
+
+        return apply_filters('geweb_aisearch_gemini_models', $models);
+    }
+
+    /**
+     * Get bundled fallback models
+     *
+     * @return array<int,string>
+     */
+    private function getDefaultModels(): array {
+        return [
             self::DEFAULT_MODEL,
             'gemini-2.5-pro',
             'gemini-3-flash-preview',
             'gemini-3.1-pro-preview'
         ];
-        return apply_filters('geweb_aisearch_gemini_models', $models);
     }
 
     /**
@@ -383,8 +416,13 @@ class Gemini {
      * @return string Model
      */
     public function getModel(): string {
+        $storedModel = (string) get_option(self::OPTION_MODEL, '');
+        if ($storedModel !== '') {
+            return $storedModel;
+        }
+
         $models = $this->getModels();
-        return get_option(self::OPTION_MODEL, $this->getDefaultModel($models));
+        return $this->getDefaultModel($models);
     }
 
     /**
@@ -406,6 +444,52 @@ class Gemini {
      */
     public function getDefaultSystemInstruction(): string {
         return self::DEFAULT_SYSTEM_INSTRUCTION;
+    }
+
+    /**
+     * Clear cached Gemini models
+     *
+     * @return void
+     */
+    public function clearModelsCache(): void {
+        delete_transient(self::TRANSIENT_MODELS);
+    }
+
+    /**
+     * Fetch currently usable Gemini models from the API
+     *
+     * @return array<int,string>
+     */
+    private function fetchUsableModels(): array {
+        $result = $this->makeRequest(self::API_BASE . '/models', null, 'GET');
+        $models = [];
+
+        foreach (($result['models'] ?? []) as $model) {
+            $name = isset($model['name']) ? (string) $model['name'] : '';
+            $methods = isset($model['supportedGenerationMethods']) && is_array($model['supportedGenerationMethods'])
+                ? $model['supportedGenerationMethods']
+                : [];
+
+            if ($name === '' || !in_array('generateContent', $methods, true)) {
+                continue;
+            }
+
+            $shortName = preg_replace('#^models/#', '', $name);
+            if (!is_string($shortName) || $shortName === '') {
+                continue;
+            }
+
+            if (strpos($shortName, 'embedding') !== false) {
+                continue;
+            }
+
+            $models[] = $shortName;
+        }
+
+        $models = array_values(array_unique($models));
+        sort($models);
+
+        return $models;
     }
 
     /**

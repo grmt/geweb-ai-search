@@ -1,9 +1,31 @@
 jQuery(document).ready(function($) {
+		function showCellFeedback($cell, message, isError) {
+				var $feedback = $cell.find('.geweb-ai-index-feedback');
+				if (!$feedback.length) return;
+
+				$feedback.text(message).css('color', isError ? '#d63638' : '#2271b1').show();
+		}
+
+		function replaceCellHtml($button, html) {
+				var $cell = $button.closest('.geweb-ai-index-cell');
+				if (!$cell.length || !html) return;
+
+				$cell.replaceWith(html);
+		}
+
 		$('#geweb-ai-restore-default-prompt').on('click', function() {
 				var $prompt = $('#geweb_ai_search_custom_prompt');
 				if (!$prompt.length) return;
 
 				$prompt.val($prompt.data('default-prompt'));
+		});
+
+		$('#geweb-ai-restore-history-prompt').on('click', function() {
+				var $prompt = $('#geweb_ai_search_custom_prompt');
+				var value = $('#geweb-ai-prompt-history-select').val();
+				if (!$prompt.length || !value) return;
+
+				$prompt.val(value);
 		});
 
 		var isProcessing = false;
@@ -14,6 +36,7 @@ jQuery(document).ready(function($) {
 				$.ajax({
 						url: ajaxurl,
 						type: 'POST',
+						timeout: 180000,
 						data: {
 								action: 'geweb_generate_library',
 								nonce: gewebAisearchAdmin.generateLibraryNonce,
@@ -37,7 +60,7 @@ jQuery(document).ready(function($) {
 												// Finished
 												var finalMessage = 'Completed! ' + totalSuccess + ' documents uploaded';
 												if (totalErrors > 0) {
-														finalMessage += ', ' + totalErrors + ' errors';
+														finalMessage += ', ' + totalErrors + ' errors (failed items were automatically excluded)';
 												}
 												$('#geweb-generate-status').html('<p style="color: green;">' + finalMessage + '</p>');
 												$('#geweb-generate-library').prop('disabled', false);
@@ -71,5 +94,79 @@ jQuery(document).ready(function($) {
 				$status.html('<p>Starting...</p>');
 
 				processPage(1);
+		});
+
+		$(document).on('click', '.geweb-ai-reupload', function() {
+				var $button = $(this);
+				var $cell = $button.closest('.geweb-ai-index-cell');
+				var postId = $cell.data('post-id');
+				if (!postId) return;
+
+				$button.prop('disabled', true).text('Uploading...');
+				showCellFeedback($cell, 'Uploading in the background...', false);
+
+				$.ajax({
+						url: ajaxurl,
+						type: 'POST',
+						timeout: 180000,
+						data: {
+								action: 'geweb_reupload_post',
+								nonce: gewebAisearchAdmin.adminActionNonce,
+								post_id: postId
+						},
+						success: function(response) {
+								if (response.success) {
+										replaceCellHtml($button, response.data.html);
+										return;
+								}
+
+								replaceCellHtml($button, response.data && response.data.html ? response.data.html : '');
+								if ($cell.length) {
+										showCellFeedback($cell, response.data && response.data.message ? response.data.message : 'Upload failed.', true);
+								}
+						},
+						error: function() {
+								$button.prop('disabled', false).text('Upload');
+								showCellFeedback($cell, 'Upload failed or timed out.', true);
+						}
+				});
+		});
+
+		$(document).on('click', '.geweb-ai-toggle-exclude', function() {
+				var $button = $(this);
+				var $cell = $button.closest('.geweb-ai-index-cell');
+				var postId = $cell.data('post-id');
+				var exclude = parseInt($button.data('exclude'), 10) === 1 ? 1 : 0;
+				if (!postId) return;
+
+				$button.prop('disabled', true).text(exclude ? 'Excluding...' : 'Including...');
+				showCellFeedback($cell, exclude ? 'Updating exclusion...' : 'Including for indexing...', false);
+
+				$.ajax({
+						url: ajaxurl,
+						type: 'POST',
+						timeout: 60000,
+						data: {
+								action: 'geweb_toggle_exclude',
+								nonce: gewebAisearchAdmin.adminActionNonce,
+								post_id: postId,
+								exclude: exclude
+						},
+						success: function(response) {
+								if (response.success) {
+										replaceCellHtml($button, response.data.html);
+										return;
+								}
+
+								replaceCellHtml($button, response.data && response.data.html ? response.data.html : '');
+								if ($cell.length) {
+										showCellFeedback($cell, response.data && response.data.message ? response.data.message : 'Could not update exclusion.', true);
+								}
+						},
+						error: function() {
+								$button.prop('disabled', false).text(exclude ? 'Exclude' : 'Include');
+								showCellFeedback($cell, 'Could not update exclusion.', true);
+						}
+				});
 		});
 	});

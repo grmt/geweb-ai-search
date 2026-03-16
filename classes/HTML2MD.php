@@ -25,19 +25,22 @@ class HTML2MD {
     private const META_LAST_ERROR = 'geweb_aisearch_last_error';
     private const NONCE_ACTION = 'geweb_aisearch_post_settings';
     private const NONCE_NAME = 'geweb_aisearch_post_settings_nonce';
+    private const CRON_HOOK_PROCESS = 'geweb_aisearch_process_post';
 
     /**
      * Constructor - registers WordPress hooks
      */
     public function __construct() {
         add_action('init', [$this, 'registerPostColumns']);
-        add_action('admin_init', [$this, 'handleReupload']);
         add_action('save_post', [$this, 'onSavePost'], 10, 2);
         add_action('before_delete_post', [$this, 'deleteDocumentForPost']);
         add_action('wp_ajax_geweb_generate_library', [$this, 'ajaxGenerateLibrary']);
+        add_action('wp_ajax_geweb_reupload_post', [$this, 'ajaxReuploadPost']);
+        add_action('wp_ajax_geweb_toggle_exclude', [$this, 'ajaxToggleExclude']);
         add_action('add_meta_boxes', [$this, 'registerMetaBox']);
         add_action('restrict_manage_posts', [$this, 'renderStatusFilter']);
         add_action('pre_get_posts', [$this, 'applyStatusFilter']);
+        add_action(self::CRON_HOOK_PROCESS, [$this, 'processQueuedPost'], 10, 2);
     }
 
     /**
@@ -68,56 +71,7 @@ class HTML2MD {
         if ($column !== 'geweb_ai_indexed') {
             return;
         }
-
-        $statusData = $this->getStatusData($postId);
-        $status = '<p style="margin:0; color:' . esc_attr($statusData['color']) . ';">' . esc_html($statusData['label']) . '</p>';
-
-        if (!empty($statusData['last_indexed'])) {
-            $status .= '<p style="margin:4px 0 0;"><small>Last indexed: ' . esc_html($statusData['last_indexed']) . '</small></p>';
-        }
-
-        if (!empty($statusData['error'])) {
-            $status .= '<p style="margin:4px 0 0; color:#d63638;"><small>' . esc_html($statusData['error']) . '</small></p>';
-        }
-
-        $url = wp_nonce_url(
-            add_query_arg(['geweb_reupload' => $postId], admin_url('edit.php?post_type=' . get_post_type($postId))),
-            'geweb_reupload_' . $postId
-        );
-
-        $actions = '';
-        if (!$this->isExcluded($postId)) {
-            $actions = ' <a href="' . esc_url($url) . '" class="button button-small">Re-upload</a>';
-        }
-
-        echo wp_kses_post($status . $actions);
-    }
-
-    /**
-     * Handle re-upload request for a single post (GET action with nonce)
-     *
-     * @return void
-     */
-    public function handleReupload(): void {
-        if (!is_admin() || empty($_GET['geweb_reupload'])) {
-            return;
-        }
-
-        $postId = intval($_GET['geweb_reupload']);
-
-        check_admin_referer('geweb_reupload_' . $postId);
-
-        if (!current_user_can('edit_post', $postId)) {
-            wp_die('Insufficient permissions');
-        }
-
-        $post = get_post($postId);
-        if ($post) {
-            $this->onSavePost($postId, $post);
-        }
-
-        wp_safe_redirect(wp_get_referer());
-        exit;
+        echo wp_kses_post($this->getColumnHtml($postId));
     }
 
     /**
@@ -224,36 +178,23 @@ class HTML2MD {
         }
 
         if ($this->isExcluded($postId)) {
-            $this->deleteDocumentForPost($postId, 'excluded');
+            $this->clearScheduledProcessing($postId);
+            $this->schedulePostProcessing($postId, 'delete');
+            $this->setStatus($postId, 'excluded');
             return;
         }
 
         // Only for published posts
         if ($post->post_status !== 'publish') {
-            $this->deleteDocumentForPost($postId, 'not_indexed');
+            $this->clearScheduledProcessing($postId);
+            $this->schedulePostProcessing($postId, 'delete');
+            $this->setStatus($postId, 'not_indexed');
             return;
         }
 
-        // Convert to markdown
-        $markdown = $this->convert($postId);
-        if (!$markdown) {
-            $this->setStatus($postId, 'error', 'Could not convert post content for indexing.');
-            return;
-        }
-
-        try {
-            $this->deleteDocumentForPost($postId);
-
-            // Upload new document
-            $gemini = new Gemini();
-            $documentName = $gemini->uploadDocument($markdown, $postId);
-
-            // Save document name in post meta
-            update_post_meta($postId, self::META_DOCUMENT_NAME, $documentName);
-            $this->setStatus($postId, 'indexed');
-        } catch (\Exception $e) {
-            $this->setStatus($postId, 'error', $e->getMessage());
-        }
+        $this->clearScheduledProcessing($postId);
+        $this->setStatus($postId, 'pending');
+        $this->schedulePostProcessing($postId, 'index');
     }
 
     /**
@@ -305,7 +246,7 @@ class HTML2MD {
                 // Convert to markdown
                 $markdown = $this->convert($postId);
                 if (!$markdown) {
-                    $this->setStatus($postId, 'error', 'Could not convert post content for indexing.');
+                    $this->excludeAfterFailure($postId, 'Could not convert post content for indexing.');
                     $errors++;
                     continue;
                 }
@@ -323,7 +264,7 @@ class HTML2MD {
 
                 $success++;
             } catch (\Exception $e) {
-                $this->setStatus($postId, 'error', $e->getMessage());
+                $this->excludeAfterFailure($postId, $e->getMessage());
                 $errors++;
             }
         }
@@ -360,6 +301,84 @@ class HTML2MD {
     }
 
     /**
+     * AJAX: re-upload a single post in the background
+     *
+     * @return void
+     */
+    public function ajaxReuploadPost(): void {
+        check_ajax_referer('geweb_ai_search_admin_actions', 'nonce');
+
+        $postId = isset($_POST['post_id']) ? intval($_POST['post_id']) : 0;
+        if ($postId <= 0) {
+            wp_send_json_error(['message' => 'Invalid post ID']);
+        }
+
+        if (!current_user_can('edit_post', $postId)) {
+            wp_send_json_error(['message' => 'Insufficient permissions']);
+        }
+
+        if ($this->isExcluded($postId)) {
+            wp_send_json_error([
+                'message' => 'This content is excluded from AI indexing. Include it first to upload again.',
+                'html' => $this->getColumnHtml($postId),
+            ]);
+        }
+
+        $result = $this->indexPost($postId, false);
+        if (!$result['success']) {
+            wp_send_json_error([
+                'message' => $result['message'],
+                'html' => $this->getColumnHtml($postId),
+            ]);
+        }
+
+        wp_send_json_success([
+            'message' => 'Indexed successfully.',
+            'html' => $this->getColumnHtml($postId),
+        ]);
+    }
+
+    /**
+     * AJAX: toggle exclude/include for a single post
+     *
+     * @return void
+     */
+    public function ajaxToggleExclude(): void {
+        check_ajax_referer('geweb_ai_search_admin_actions', 'nonce');
+
+        $postId = isset($_POST['post_id']) ? intval($_POST['post_id']) : 0;
+        $exclude = !empty($_POST['exclude']);
+
+        if ($postId <= 0) {
+            wp_send_json_error(['message' => 'Invalid post ID']);
+        }
+
+        if (!current_user_can('edit_post', $postId)) {
+            wp_send_json_error(['message' => 'Insufficient permissions']);
+        }
+
+        if ($exclude) {
+            update_post_meta($postId, self::META_EXCLUDE, '1');
+            $this->deleteDocumentForPost($postId, 'excluded');
+
+            wp_send_json_success([
+                'message' => 'Excluded from AI indexing.',
+                'html' => $this->getColumnHtml($postId),
+            ]);
+        }
+
+        delete_post_meta($postId, self::META_EXCLUDE);
+        if (get_post_meta($postId, self::META_STATUS, true) === 'excluded') {
+            $this->setStatus($postId, 'not_indexed', '');
+        }
+
+        wp_send_json_success([
+            'message' => 'Included for AI indexing again.',
+            'html' => $this->getColumnHtml($postId),
+        ]);
+    }
+
+    /**
      * Delete document from Gemini for given post
      *
      * @param int $postId Post ID
@@ -383,6 +402,40 @@ class HTML2MD {
     }
 
     /**
+     * Build admin column HTML for a post
+     *
+     * @param int $postId Post ID
+     * @return string
+     */
+    private function getColumnHtml(int $postId): string {
+        $statusData = $this->getStatusData($postId);
+        $html = '<div class="geweb-ai-index-cell" data-post-id="' . esc_attr((string) $postId) . '">';
+        $html .= '<p style="margin:0; color:' . esc_attr($statusData['color']) . ';">' . esc_html($statusData['label']) . '</p>';
+
+        if (!empty($statusData['last_indexed'])) {
+            $html .= '<p style="margin:4px 0 0;"><small>Last indexed: ' . esc_html($statusData['last_indexed']) . '</small></p>';
+        }
+
+        if (!empty($statusData['error'])) {
+            $html .= '<p style="margin:4px 0 0; color:#d63638;"><small>' . esc_html($statusData['error']) . '</small></p>';
+        }
+
+        $html .= '<p class="geweb-ai-index-feedback" style="display:none; margin:4px 0 0;"></p>';
+        $html .= '<p style="margin:8px 0 0;">';
+
+        if ($this->isExcluded($postId)) {
+            $html .= '<button type="button" class="button button-small geweb-ai-toggle-exclude" data-exclude="0">Include</button>';
+        } else {
+            $html .= '<button type="button" class="button button-small geweb-ai-reupload">Upload</button> ';
+            $html .= '<button type="button" class="button button-small geweb-ai-toggle-exclude" data-exclude="1">Exclude</button>';
+        }
+
+        $html .= '</p></div>';
+
+        return $html;
+    }
+
+    /**
      * Render status filter on post list pages
      *
      * @return void
@@ -399,6 +452,7 @@ class HTML2MD {
         <select name="geweb_ai_index_status">
             <option value="">All AI statuses</option>
             <option value="indexed" <?php selected($selected, 'indexed'); ?>>Indexed</option>
+            <option value="pending" <?php selected($selected, 'pending'); ?>>Queued</option>
             <option value="not_indexed" <?php selected($selected, 'not_indexed'); ?>>Not indexed</option>
             <option value="error" <?php selected($selected, 'error'); ?>>Index error</option>
             <option value="excluded" <?php selected($selected, 'excluded'); ?>>Excluded</option>
@@ -511,7 +565,7 @@ class HTML2MD {
         $exclude = !empty($_POST['geweb_aisearch_exclude']);
         if ($exclude) {
             update_post_meta($postId, self::META_EXCLUDE, '1');
-            $this->setStatus($postId, 'excluded', '');
+            $this->deleteDocumentForPost($postId, 'excluded');
             return;
         }
 
@@ -556,6 +610,73 @@ class HTML2MD {
     }
 
     /**
+     * Index a single post
+     *
+     * @param int $postId Post ID
+     * @param bool $excludeOnFailure Whether failures should auto-exclude the post
+     * @return array<string,mixed>
+     */
+    private function indexPost(int $postId, bool $excludeOnFailure): array {
+        $post = get_post($postId);
+        if (!$post) {
+            return ['success' => false, 'message' => 'Post not found.'];
+        }
+
+        if ($post->post_status !== 'publish') {
+            $this->deleteDocumentForPost($postId, 'not_indexed');
+            return ['success' => false, 'message' => 'Only published content can be indexed.'];
+        }
+
+        if ($this->isExcluded($postId)) {
+            return ['success' => false, 'message' => 'This content is excluded from AI indexing.'];
+        }
+
+        $markdown = $this->convert($postId);
+        if (!$markdown) {
+            $message = 'Could not convert post content for indexing.';
+            if ($excludeOnFailure) {
+                $this->excludeAfterFailure($postId, $message);
+            } else {
+                $this->setStatus($postId, 'error', $message);
+            }
+
+            return ['success' => false, 'message' => $message];
+        }
+
+        try {
+            $this->deleteDocumentForPost($postId);
+            $gemini = new Gemini();
+            $documentName = $gemini->uploadDocument($markdown, $postId);
+            update_post_meta($postId, self::META_DOCUMENT_NAME, $documentName);
+            $this->setStatus($postId, 'indexed');
+
+            return ['success' => true, 'message' => 'Indexed successfully.'];
+        } catch (\Exception $e) {
+            $message = $e->getMessage();
+            if ($excludeOnFailure) {
+                $this->excludeAfterFailure($postId, $message);
+            } else {
+                $this->setStatus($postId, 'error', $message);
+            }
+
+            return ['success' => false, 'message' => $message];
+        }
+    }
+
+    /**
+     * Exclude a post after a bulk indexing failure
+     *
+     * @param int $postId Post ID
+     * @param string $message Error message
+     * @return void
+     */
+    private function excludeAfterFailure(int $postId, string $message): void {
+        update_post_meta($postId, self::META_EXCLUDE, '1');
+        $this->deleteDocumentForPost($postId, 'excluded');
+        update_post_meta($postId, self::META_LAST_ERROR, $message);
+    }
+
+    /**
      * Get UI status data for a post
      *
      * @param int $postId Post ID
@@ -571,6 +692,7 @@ class HTML2MD {
 
         $map = [
             'indexed' => ['label' => 'Indexed', 'color' => '#46b450'],
+            'pending' => ['label' => 'Queued', 'color' => '#2271b1'],
             'not_indexed' => ['label' => 'Not indexed', 'color' => '#646970'],
             'error' => ['label' => 'Index error', 'color' => '#d63638'],
             'excluded' => ['label' => 'Excluded', 'color' => '#996800'],
@@ -614,5 +736,64 @@ class HTML2MD {
      */
     private function isManagedPostType(string $postType): bool {
         return $postType !== '' && in_array($postType, get_option('geweb_aisearch_post_types', []), true);
+    }
+
+    /**
+     * Queue background processing for a post
+     *
+     * @param int $postId Post ID
+     * @param string $operation index|delete
+     * @return void
+     */
+    private function schedulePostProcessing(int $postId, string $operation): void {
+        wp_schedule_single_event(time() + 1, self::CRON_HOOK_PROCESS, [$postId, $operation]);
+    }
+
+    /**
+     * Remove queued processing jobs for a post
+     *
+     * @param int $postId Post ID
+     * @return void
+     */
+    private function clearScheduledProcessing(int $postId): void {
+        foreach (['index', 'delete'] as $operation) {
+            $timestamp = wp_next_scheduled(self::CRON_HOOK_PROCESS, [$postId, $operation]);
+            while ($timestamp) {
+                wp_unschedule_event($timestamp, self::CRON_HOOK_PROCESS, [$postId, $operation]);
+                $timestamp = wp_next_scheduled(self::CRON_HOOK_PROCESS, [$postId, $operation]);
+            }
+        }
+    }
+
+    /**
+     * Process a queued indexing job
+     *
+     * @param int $postId Post ID
+     * @param string $operation index|delete
+     * @return void
+     */
+    public function processQueuedPost(int $postId, string $operation): void {
+        if ($operation === 'delete') {
+            $status = $this->isExcluded($postId) ? 'excluded' : 'not_indexed';
+            $this->deleteDocumentForPost($postId, $status);
+            return;
+        }
+
+        $post = get_post($postId);
+        if (!$post instanceof \WP_Post) {
+            return;
+        }
+
+        if ($this->isExcluded($postId)) {
+            $this->deleteDocumentForPost($postId, 'excluded');
+            return;
+        }
+
+        if ($post->post_status !== 'publish') {
+            $this->deleteDocumentForPost($postId, 'not_indexed');
+            return;
+        }
+
+        $this->indexPost($postId, false);
     }
 }

@@ -13,6 +13,9 @@ class WP {
      * Option key for custom AI prompt
      */
     private const OPTION_CUSTOM_PROMPT = 'geweb_aisearch_custom_prompt';
+    private const OPTION_PROMPT_HISTORY = 'geweb_aisearch_prompt_history';
+    private const OPTION_PROMPT_HISTORY_LIMIT = 'geweb_aisearch_prompt_history_limit';
+    private const DEFAULT_PROMPT_HISTORY_LIMIT = 10;
 
     /**
      * Constructor - registers WordPress hooks
@@ -74,6 +77,7 @@ class WP {
 
             // Create store if doesn't exist or if forced
             $gemini = new Gemini();
+            $gemini->clearModelsCache();
             if (empty($gemini->getStoreData()) || isset($_POST['geweb_ai_search_create_store'])) {
                 $gemini->createStore();
             }
@@ -92,12 +96,23 @@ class WP {
             update_option('geweb_aisearch_model', sanitize_text_field(wp_unslash($_POST['geweb_ai_search_model'])));
         }
 
+        $historyLimit = self::DEFAULT_PROMPT_HISTORY_LIMIT;
+        if (isset($_POST['geweb_ai_search_prompt_history_limit'])) {
+            $historyLimit = max(1, intval($_POST['geweb_ai_search_prompt_history_limit']));
+        }
+        update_option(self::OPTION_PROMPT_HISTORY_LIMIT, $historyLimit);
+        $this->trimPromptHistory($historyLimit);
+
         // Save custom prompt
         if (isset($_POST['geweb_ai_search_custom_prompt'])) {
-            update_option(
-                self::OPTION_CUSTOM_PROMPT,
-                sanitize_textarea_field(wp_unslash($_POST['geweb_ai_search_custom_prompt']))
-            );
+            $newPrompt = sanitize_textarea_field(wp_unslash($_POST['geweb_ai_search_custom_prompt']));
+            $currentPrompt = (string) get_option(self::OPTION_CUSTOM_PROMPT, '');
+
+            if ($newPrompt !== $currentPrompt) {
+                $this->storePromptHistory($currentPrompt, $historyLimit);
+            }
+
+            update_option(self::OPTION_CUSTOM_PROMPT, $newPrompt);
         }
 
         wp_safe_redirect(wp_get_referer());
@@ -115,9 +130,19 @@ class WP {
 
         $models = $gemini->getModels();
         $selectedModel = $gemini->getModel();
+        if (!in_array($selectedModel, $models, true)) {
+            array_unshift($models, $selectedModel);
+            $models = array_values(array_unique($models));
+        }
         $defaultModel = $gemini->getDefaultModel($models);
         $customPrompt = get_option(self::OPTION_CUSTOM_PROMPT, '');
         $defaultPrompt = $gemini->getDefaultSystemInstruction();
+        $effectivePrompt = $gemini->getSystemInstruction();
+        $promptHistoryLimit = (int) get_option(self::OPTION_PROMPT_HISTORY_LIMIT, self::DEFAULT_PROMPT_HISTORY_LIMIT);
+        $promptHistory = get_option(self::OPTION_PROMPT_HISTORY, []);
+        if (!is_array($promptHistory)) {
+            $promptHistory = [];
+        }
 
         $postTypes = get_option('geweb_aisearch_post_types', []);
         $allPostTypes = get_post_types(['public' => true], 'objects');
@@ -149,6 +174,7 @@ class WP {
                             </select>
                             <p class="description">Current model: <code><?php echo esc_html($selectedModel); ?></code></p>
                             <p class="description">Default model: <code><?php echo esc_html($defaultModel); ?></code></p>
+                            <p class="description">The list above is fetched from Gemini when possible and falls back to the bundled defaults if the API is unavailable.</p>
                         </td>
                     </tr>
 
@@ -167,6 +193,57 @@ class WP {
                                 <button type="button" class="button" id="geweb-ai-restore-default-prompt">Restore default prompt</button>
                             </p>
                             <p class="description">If this field is empty, the built-in default prompt is used. You can fully replace it here and restore the default at any time.</p>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <th><label for="geweb_ai_search_current_prompt">Current Effective Prompt:</label></th>
+                        <td>
+                            <textarea
+                                id="geweb_ai_search_current_prompt"
+                                rows="10"
+                                class="large-text code"
+                                readonly
+                            ><?php echo esc_textarea($effectivePrompt); ?></textarea>
+                            <p class="description">This is the prompt currently used for Gemini requests after applying the saved plugin setting and any WordPress filters.</p>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <th><label for="geweb_ai_search_prompt_history_limit">Prompt History:</label></th>
+                        <td>
+                            <input
+                                type="number"
+                                id="geweb_ai_search_prompt_history_limit"
+                                name="geweb_ai_search_prompt_history_limit"
+                                min="1"
+                                step="1"
+                                value="<?php echo esc_attr((string) $promptHistoryLimit); ?>"
+                                class="small-text"
+                            >
+                            <p class="description">Number of previous prompts to keep. Default: <?php echo esc_html((string) self::DEFAULT_PROMPT_HISTORY_LIMIT); ?>.</p>
+                            <?php if (!empty($promptHistory)): ?>
+                                <select id="geweb-ai-prompt-history-select">
+                                    <option value="">Select a previous prompt</option>
+                                    <?php foreach ($promptHistory as $entry): ?>
+                                        <?php
+                                        $label = !empty($entry['saved_at'])
+                                            ? wp_date(get_option('date_format') . ' ' . get_option('time_format'), intval($entry['saved_at']))
+                                            : 'Saved prompt';
+                                        $preview = isset($entry['prompt']) ? wp_strip_all_tags((string) $entry['prompt']) : '';
+                                        if ($preview !== '') {
+                                            $label .= ' - ' . wp_html_excerpt($preview, 80, '...');
+                                        }
+                                        ?>
+                                        <option value="<?php echo esc_attr((string) ($entry['prompt'] ?? '')); ?>">
+                                            <?php echo esc_html($label); ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <button type="button" class="button" id="geweb-ai-restore-history-prompt">Use selected prompt</button>
+                            <?php else: ?>
+                                <p class="description">No previous prompts saved yet.</p>
+                            <?php endif; ?>
                         </td>
                     </tr>
 
@@ -223,6 +300,67 @@ class WP {
         array_unshift($links, $settingsLink);
 
         return $links;
+    }
+
+    /**
+     * Store previous prompts for later restore
+     *
+     * @param string $prompt Prompt text
+     * @param int $limit Maximum number of entries
+     * @return void
+     */
+    private function storePromptHistory(string $prompt, int $limit): void {
+        $prompt = trim($prompt);
+        if ($prompt === '') {
+            return;
+        }
+
+        $history = get_option(self::OPTION_PROMPT_HISTORY, []);
+        if (!is_array($history)) {
+            $history = [];
+        }
+
+        array_unshift($history, [
+            'prompt' => $prompt,
+            'saved_at' => current_time('timestamp'),
+        ]);
+
+        $uniqueHistory = [];
+        $seen = [];
+        foreach ($history as $entry) {
+            $entryPrompt = isset($entry['prompt']) ? trim((string) $entry['prompt']) : '';
+            if ($entryPrompt === '' || isset($seen[$entryPrompt])) {
+                continue;
+            }
+
+            $seen[$entryPrompt] = true;
+            $uniqueHistory[] = [
+                'prompt' => $entryPrompt,
+                'saved_at' => intval($entry['saved_at'] ?? current_time('timestamp')),
+            ];
+
+            if (count($uniqueHistory) >= $limit) {
+                break;
+            }
+        }
+
+        update_option(self::OPTION_PROMPT_HISTORY, $uniqueHistory);
+    }
+
+    /**
+     * Trim stored prompt history to the configured limit
+     *
+     * @param int $limit Maximum number of entries
+     * @return void
+     */
+    private function trimPromptHistory(int $limit): void {
+        $history = get_option(self::OPTION_PROMPT_HISTORY, []);
+        if (!is_array($history)) {
+            update_option(self::OPTION_PROMPT_HISTORY, []);
+            return;
+        }
+
+        update_option(self::OPTION_PROMPT_HISTORY, array_slice($history, 0, $limit));
     }
 
     /**
@@ -360,6 +498,7 @@ class WP {
 
         wp_localize_script('geweb-ai-search-admin', 'gewebAisearchAdmin', [
             'generateLibraryNonce' => wp_create_nonce('geweb_ai_search_generate_library'),
+            'adminActionNonce' => wp_create_nonce('geweb_ai_search_admin_actions'),
         ]);
     }
 
