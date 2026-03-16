@@ -358,7 +358,7 @@ class HTML2MD {
         if ($exclude) {
             $this->setStatus($postId, 'removing');
             update_post_meta($postId, self::META_EXCLUDE, '1');
-            $this->deleteDocumentForPost($postId, 'excluded');
+            $this->excludePost($postId);
 
             wp_send_json_success([
                 'message' => 'Excluded from AI indexing.',
@@ -517,6 +517,17 @@ class HTML2MD {
             return;
         }
 
+        if ($status === 'excluded') {
+            $query->set('meta_query', [
+                [
+                    'key' => self::META_EXCLUDE,
+                    'value' => '1',
+                    'compare' => '=',
+                ],
+            ]);
+            return;
+        }
+
         if ($status === 'indexed') {
             $query->set('meta_query', [
                 [
@@ -598,7 +609,7 @@ class HTML2MD {
         if ($exclude) {
             $this->setStatus($postId, 'removing');
             update_post_meta($postId, self::META_EXCLUDE, '1');
-            $this->deleteDocumentForPost($postId, 'excluded');
+            $this->excludePost($postId);
             return;
         }
 
@@ -705,8 +716,24 @@ class HTML2MD {
      */
     private function excludeAfterFailure(int $postId, string $message): void {
         update_post_meta($postId, self::META_EXCLUDE, '1');
-        $this->deleteDocumentForPost($postId, 'excluded');
+        $this->excludePost($postId);
         update_post_meta($postId, self::META_LAST_ERROR, $message);
+    }
+
+    /**
+     * Exclude a post and remove it from Gemini only if it is currently indexed
+     *
+     * @param int $postId Post ID
+     * @return void
+     */
+    private function excludePost(int $postId): void {
+        $documentName = (string) get_post_meta($postId, self::META_DOCUMENT_NAME, true);
+        if ($documentName === '') {
+            $this->setStatus($postId, 'excluded', '');
+            return;
+        }
+
+        $this->deleteDocumentForPost($postId, 'excluded');
     }
 
     /**

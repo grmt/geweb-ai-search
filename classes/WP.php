@@ -107,6 +107,9 @@ class WP {
         if (isset($_POST['geweb_ai_search_custom_prompt'])) {
             $newPrompt = sanitize_textarea_field(wp_unslash($_POST['geweb_ai_search_custom_prompt']));
             $currentPrompt = (string) get_option(self::OPTION_CUSTOM_PROMPT, '');
+            if ($newPrompt === '' && $currentPrompt === '') {
+                $newPrompt = (new Gemini())->getDefaultSystemInstruction();
+            }
 
             if ($newPrompt !== $currentPrompt) {
                 $this->storePromptHistory($currentPrompt, max(0, $historyLimit - 1));
@@ -157,6 +160,7 @@ class WP {
             'saved_at' => current_time('timestamp'),
             'is_current' => true,
         ];
+        $selectedPromptIndex = max(0, count($promptVersions) - 2);
 
         $postTypes = get_option('geweb_aisearch_post_types', []);
         $allPostTypes = get_post_types(['public' => true], 'objects');
@@ -233,8 +237,8 @@ class WP {
                                 rows="10"
                                 class="large-text code"
                                 placeholder="Enter the AI prompt used for Gemini requests."
-                                data-default-prompt="<?php echo esc_attr($defaultPrompt); ?>"
                             ><?php echo esc_textarea($customPrompt); ?></textarea>
+                            <textarea id="geweb_ai_search_default_prompt" style="display:none;" readonly><?php echo esc_textarea($defaultPrompt); ?></textarea>
                             <p>
                                 <button type="button" class="button" id="geweb-ai-restore-default-prompt">Restore default prompt</button>
                             </p>
@@ -269,7 +273,10 @@ class WP {
                                             $label .= ' - ' . wp_html_excerpt($preview, 80, '...');
                                         }
                                         ?>
-                                        <option value="<?php echo esc_attr((string) ($entry['prompt'] ?? '')); ?>" <?php selected(!empty($entry['is_current']), true); ?>>
+                                        <option
+                                            value="<?php echo esc_attr((string) ($entry['prompt'] ?? '')); ?>"
+                                            <?php selected($index, $selectedPromptIndex); ?>
+                                        >
                                             <?php echo esc_html($label); ?>
                                         </option>
                                     <?php endforeach; ?>
@@ -278,7 +285,7 @@ class WP {
                                 <div style="margin-top:12px;">
                                     <pre
                                         id="geweb-ai-prompt-history-diff"
-                                        style="margin-top:8px; padding:12px; background:#fff; border:1px solid #dcdcde; max-height:320px; overflow:auto; white-space:pre-wrap;"
+                                        style="margin-top:8px; padding:12px; background:#fff; border:1px solid #dcdcde; min-height:20em; max-height:none; overflow:auto; white-space:pre-wrap;"
                                     >Select a previous prompt to preview the full text and diff.</pre>
                                 </div>
                             <?php else: ?>

@@ -86,9 +86,10 @@ jQuery(document).ready(function($) {
 
 		$('#geweb-ai-restore-default-prompt').on('click', function() {
 				var $prompt = $('#geweb_ai_search_custom_prompt');
+				var $defaultPrompt = $('#geweb_ai_search_default_prompt');
 				if (!$prompt.length) return;
 
-				$prompt.val($prompt.data('default-prompt')).trigger('input').trigger('change');
+				$prompt.val($defaultPrompt.val() || '').trigger('input').trigger('change');
 		});
 
 		$('#geweb-ai-restore-history-prompt').on('click', function() {
