@@ -11,7 +11,7 @@
 
 Geweb AI Search adds an AI layer to your existing WordPress search powered by Google Gemini AI. Visitors can keep using the standard WordPress search results page from your theme, including excerpts and surrounding context, and optionally continue their search with AI for a direct, contextual answer with source links.
 
-**[Official WordPress Plugin Page](https://wordpress.org/plugins/geweb-ai-search/)**  
+**[Official WordPress Plugin Page](https://wordpress.org/plugins/geweb-ai-search/)**
 **[Live Demo](https://aisearch.mygeweb.com/)**
 
 ## Features

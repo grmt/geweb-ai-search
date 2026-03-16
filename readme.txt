@@ -171,6 +171,9 @@ Available filters:
 = 2.1.4 =
 * Fixed: Nonce compatibility with page caching plugins
 
+= 2.1.4 =
+* Fixed: Nonce compatibility with page caching plugins
+
 = 2.1.3 =
 * Improved: Modal overlay background opacity
 * Added: Filters for customizing interface text labels
@@ -178,6 +181,10 @@ Available filters:
 
 = 2.1.2 =
 * Improved: AI response display and formatting
+=======
+= 2.1.2 =
+* Changed: Restored native WordPress search results flow and made AI search optional from the search form
+>>>>>>> be178eb (bump version to 2.1.2)
 
 = 2.1.1 =
 * Fixed: Changed method visibility from private to public for better extensibility
