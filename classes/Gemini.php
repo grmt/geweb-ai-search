@@ -26,6 +26,11 @@ class Gemini {
     private const OPTION_MODEL = 'geweb_aisearch_model';
 
     /**
+     * Option key for custom system instruction
+     */
+    private const OPTION_CUSTOM_PROMPT = 'geweb_aisearch_custom_prompt';
+
+    /**
      * Default system instruction
      */
     private const DEFAULT_SYSTEM_INSTRUCTION = "You are a knowledge base search assistant.\n\n" .
@@ -42,6 +47,11 @@ class Gemini {
         "- Do not use markdown in response, change it to html\n" .
         "- URL is taken from the document's frontmatter (---\\nurl: ...\\n---)\n" .
         "- Title is taken from H1 in the document\n\n";
+
+    /**
+     * Default model name
+     */
+    private const DEFAULT_MODEL = 'gemini-2.5-flash';
 
     /**
      * @var string Gemini API key
@@ -275,10 +285,7 @@ class Gemini {
      */
     private function buildSearchBody(array $messages, string $storeName): array {
         // Get system instruction with filter support
-        $systemInstruction = apply_filters(
-            'geweb_aisearch_gemini_system_instruction',
-            self::DEFAULT_SYSTEM_INSTRUCTION
-        );
+        $systemInstruction = $this->getSystemInstruction();
 
         // Format messages for Gemini API
         $contents = [];
@@ -344,13 +351,25 @@ class Gemini {
     }
 
     /**
+     * Get the effective system instruction
+     *
+     * @return string
+     */
+    public function getSystemInstruction(): string {
+        $customPrompt = trim((string) get_option(self::OPTION_CUSTOM_PROMPT, ''));
+        $systemInstruction = $customPrompt !== '' ? $customPrompt : self::DEFAULT_SYSTEM_INSTRUCTION;
+
+        return apply_filters('geweb_aisearch_gemini_system_instruction', $systemInstruction);
+    }
+
+    /**
      * Get list of available Gemini models
      *
      * @return array Model names
      */
     public function getModels(): array {
         $models = [
-            'gemini-2.5-flash',
+            self::DEFAULT_MODEL,
             'gemini-2.5-pro',
             'gemini-3-flash-preview',
             'gemini-3.1-pro-preview'
@@ -365,7 +384,28 @@ class Gemini {
      */
     public function getModel(): string {
         $models = $this->getModels();
-        return get_option(self::OPTION_MODEL, $models[0]);
+        return get_option(self::OPTION_MODEL, $this->getDefaultModel($models));
+    }
+
+    /**
+     * Get the default model name
+     *
+     * @param array<int,string>|null $models Available models
+     * @return string
+     */
+    public function getDefaultModel(?array $models = null): string {
+        $models = $models ?? $this->getModels();
+
+        return in_array(self::DEFAULT_MODEL, $models, true) ? self::DEFAULT_MODEL : $models[0];
+    }
+
+    /**
+     * Get the built-in default system instruction
+     *
+     * @return string
+     */
+    public function getDefaultSystemInstruction(): string {
+        return self::DEFAULT_SYSTEM_INSTRUCTION;
     }
 
     /**

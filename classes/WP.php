@@ -10,11 +10,17 @@ defined('ABSPATH') || exit;
  */
 class WP {
     /**
+     * Option key for custom AI prompt
+     */
+    private const OPTION_CUSTOM_PROMPT = 'geweb_aisearch_custom_prompt';
+
+    /**
      * Constructor - registers WordPress hooks
      */
     public function __construct() {
         add_action('admin_menu', [$this, 'adminMenu']);
         add_action('admin_post_geweb_save', [$this, 'saveSettings']);
+        add_filter('plugin_action_links_' . plugin_basename(GEWEB_AI_SEARCH_PATH . 'geweb-ai-search.php'), [$this, 'addPluginActionLinks']);
 
         add_action('wp_ajax_geweb_search', [$this, 'ajaxSearch']);
         add_action('wp_ajax_nopriv_geweb_search', [$this, 'ajaxSearch']);
@@ -86,6 +92,14 @@ class WP {
             update_option('geweb_aisearch_model', sanitize_text_field(wp_unslash($_POST['geweb_ai_search_model'])));
         }
 
+        // Save custom prompt
+        if (isset($_POST['geweb_ai_search_custom_prompt'])) {
+            update_option(
+                self::OPTION_CUSTOM_PROMPT,
+                sanitize_textarea_field(wp_unslash($_POST['geweb_ai_search_custom_prompt']))
+            );
+        }
+
         wp_safe_redirect(wp_get_referer());
         exit;
     }
@@ -101,6 +115,9 @@ class WP {
 
         $models = $gemini->getModels();
         $selectedModel = $gemini->getModel();
+        $defaultModel = $gemini->getDefaultModel($models);
+        $customPrompt = get_option(self::OPTION_CUSTOM_PROMPT, '');
+        $defaultPrompt = $gemini->getDefaultSystemInstruction();
 
         $postTypes = get_option('geweb_aisearch_post_types', []);
         $allPostTypes = get_post_types(['public' => true], 'objects');
@@ -130,6 +147,26 @@ class WP {
                                     </option>
                                 <?php endforeach; ?>
                             </select>
+                            <p class="description">Current model: <code><?php echo esc_html($selectedModel); ?></code></p>
+                            <p class="description">Default model: <code><?php echo esc_html($defaultModel); ?></code></p>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <th><label for="geweb_ai_search_custom_prompt">Custom AI Prompt:</label></th>
+                        <td>
+                            <textarea
+                                id="geweb_ai_search_custom_prompt"
+                                name="geweb_ai_search_custom_prompt"
+                                rows="10"
+                                class="large-text code"
+                                placeholder="Add extra instructions for the AI assistant here."
+                                data-default-prompt="<?php echo esc_attr($defaultPrompt); ?>"
+                            ><?php echo esc_textarea($customPrompt); ?></textarea>
+                            <p>
+                                <button type="button" class="button" id="geweb-ai-restore-default-prompt">Restore default prompt</button>
+                            </p>
+                            <p class="description">If this field is empty, the built-in default prompt is used. You can fully replace it here and restore the default at any time.</p>
                         </td>
                     </tr>
 
@@ -173,6 +210,19 @@ class WP {
             </form>
         </div>
         <?php
+    }
+
+    /**
+     * Add settings link on the plugins screen
+     *
+     * @param array $links Existing action links
+     * @return array
+     */
+    public function addPluginActionLinks(array $links): array {
+        $settingsLink = '<a href="' . esc_url(admin_url('options-general.php?page=geweb-ai-search')) . '">Settings</a>';
+        array_unshift($links, $settingsLink);
+
+        return $links;
     }
 
     /**

@@ -1,4 +1,11 @@
 jQuery(document).ready(function($) {
+		$('#geweb-ai-restore-default-prompt').on('click', function() {
+				var $prompt = $('#geweb_ai_search_custom_prompt');
+				if (!$prompt.length) return;
+
+				$prompt.val($prompt.data('default-prompt'));
+		});
+
 		var isProcessing = false;
 		var totalSuccess = 0;
 		var totalErrors = 0;
