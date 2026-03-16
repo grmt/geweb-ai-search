@@ -98,7 +98,7 @@ class WP {
     public function renderOptionsPage(): void {
         $gemini = new Gemini();
         $storeEnabled = !empty($gemini->getStoreData());
-            
+
         $models = $gemini->getModels();
         $selectedModel = $gemini->getModel();
 
@@ -233,14 +233,14 @@ class WP {
             if (!is_array($rawMessage)) {
                 continue;
             }
-            
+
             $role = isset($rawMessage['role']) ? sanitize_text_field($rawMessage['role']) : '';
             $content = isset($rawMessage['content']) ? sanitize_text_field($rawMessage['content']) : '';
 
             if (!in_array($role, $allowedRoles, true)) {
                 $role = 'user';
             }
-            
+
             $messages[] = [
                 'role' => $role,
                 'content' => $content,
@@ -320,14 +320,6 @@ class WP {
      */
     public function renderModals(): void {
         ?>
-        <dialog id="geweb-search-modal" class="geweb-aisearch-modal-window">
-            <div class="modal-header">
-                <input id="geweb-search-text" type="text" placeholder="<?php echo esc_attr(apply_filters('geweb_aisearch_search_placeholder', 'Type here what you are looking for...')); ?>">
-                <button class="basic-button ask-ai" type="button" disabled><?php echo esc_html(apply_filters('geweb_aisearch_ask_ai_button_text', 'Ask AI')); ?></button>
-                <div class="close"></div>
-            </div>
-            <div class="results-box" id="geweb-autocomplete-results"></div>
-        </dialog>
         <dialog id="geweb-ai-modal" class="geweb-aisearch-modal-window">
             <div class="modal-header">
                 <strong class="ai-assistant-title"><?php echo esc_html(apply_filters('geweb_aisearch_ai_modal_title', 'AI Assistant')); ?></strong>

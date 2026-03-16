@@ -1,5 +1,5 @@
 === Geweb AI Search ===
-Contributors: gavrilovweb
+Contributors: gavrilovweb, grmt
 Tags: search, ai, gemini, artificial intelligence, semantic search
 Requires at least: 6.0
 Tested up to: 6.9
@@ -9,15 +9,13 @@ License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 Text Domain: geweb-ai-search
 
-AI-powered search for WordPress using Google Gemini. Smart answers, source links, and instant autocomplete — all in one modal.
+Keep native WordPress search results, and add optional AI answers powered by Google Gemini.
 
 == Description ==
 
 Live demo: https://aisearch.mygeweb.com/
 
-Geweb AI Search transforms your WordPress search into an intelligent assistant powered by Google Gemini AI. Instead of returning a plain list of matching posts, it understands the user's question and provides a direct, contextual answer — along with links to the source pages.
-
-The plugin intercepts the standard WordPress search form and opens a modal with two modes: instant autocomplete suggestions (via WP_Query) and a full AI chat powered by Google Gemini File Search.
+Geweb AI Search adds an AI layer to your existing WordPress search powered by Google Gemini AI. Visitors can keep using the standard WordPress search results page from your theme, including excerpts and surrounding context, and optionally continue their search with AI for a direct, contextual answer with source links.
 
 = Key Features =
 
@@ -36,7 +34,7 @@ The plugin intercepts the standard WordPress search form and opens a modal with 
 1. The plugin converts your WordPress posts to Markdown format (with URL and title in frontmatter)
 2. Each document is uploaded to a Google Gemini File Search Store
 3. When a user submits a search query, Gemini searches the indexed documents and generates an answer
-4. The answer is displayed in a chat modal along with source links
+4. Visitors can optionally open the AI assistant from the search form and get an answer with source links
 
 = Third-Party Services =
 

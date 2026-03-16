@@ -8,77 +8,49 @@ jQuery(document).ready(function($) {
 	});
 	
 	const GewebModal = {
-	    el: document.getElementById('geweb-search-modal'),
 	    ai: document.getElementById('geweb-ai-modal'),
 
 	    init() {
-	        if (!this.el || !this.ai) return;
-	        this.bindTriggers();
+	        if (!this.ai) return;
+	        this.injectAIButtons();
 	        this.bindClose();
-	        this.bindAIButton();
 	    },
 
-	    bindAIButton() {
-	        $('.ask-ai').on('click', () => {
-	            const query = $('#geweb-search-text').val().trim();
-	            this.openAI(query);
+	    injectAIButtons() {
+	        $('form').has('input[name="s"]').each((_, form) => {
+	            const $form = $(form);
+	            const $input = $form.find('input[name="s"]').first();
+
+	            if (!$input.length || $form.find('.geweb-ai-trigger').length) {
+	                return;
+	            }
+
+	            const $button = $('<button type="button" class="geweb-ai-trigger">Ask AI</button>');
+	            $button.on('click', () => {
+	                const query = $input.val().trim();
+	                this.openAI(query);
+	            });
+
+	            $form.addClass('geweb-ai-search-form');
+	            $input.addClass('geweb-ai-search-input');
+	            $form.append($button);
 	        });
 	    },
 
 	    openAI(query) {
-			this.el.close();
-		    $('#geweb-ai-query-display').val(query);
-		    GewebAIChat.toggleSubmitButton();
-		    document.body.classList.add('no-scroll');
-		    this.ai.showModal();
-	    },
-
-	    bindTriggers() {
-	        const searchInputs = $('input[name="s"]');
-	        const searchForms = searchInputs.closest('form');
-	        const searchButtons = searchForms.find('button[type="submit"], button:not([type])');
-
-	        searchInputs.on('click', (e) => {
-	            e.preventDefault();
-	            this.open();
-	        });
-
-			searchInputs.on('input', (e) => {
-				if (!this.el.open) {
-					this.open();
-					$('#geweb-search-text').val($(e.target).val()).focus();
-				}
-			});
-
-	        searchButtons.on('click', (e) => {
-	            e.preventDefault();
-	            this.open();
-	        });
-
-	        searchForms.on('submit', (e) => {
-	            e.preventDefault();
-	            this.open();
-	        });
+	        const trimmedQuery = (query || '').trim();
+	        $('#geweb-ai-query-display').val(trimmedQuery);
+	        GewebAIChat.toggleSubmitButton();
+	        document.body.classList.add('no-scroll');
+	        this.ai.showModal();
 	    },
 
         bindClose() {
             const unlockScroll = () => {
-                if (!this.el.open && !this.ai.open) {
+                if (!this.ai.open) {
                     document.body.classList.remove('no-scroll');
                 }
             };
-
-            $('.close', this.el).on('click', () => {
-                this.el.close();
-                unlockScroll();
-            });
-
-            $(this.el).on('click', (e) => {
-                if (e.target === this.el) {
-                    this.el.close();
-                    unlockScroll();
-                }
-            });
 
             $('.close', this.ai).on('click', () => {
                 this.ai.close();
@@ -93,91 +65,7 @@ jQuery(document).ready(function($) {
             });
         },
 
-	    open() {
-            document.body.classList.add('no-scroll');
-	        this.el.showModal();
-	    }
 	};
-
-    const GewebAutocomplete = {
-        timeout: null,
-		$field: $('#geweb-search-text'),
-	    $results: $('#geweb-autocomplete-results'),
-	    $aiButton: $('.ask-ai'),
-
-        init() {
-            if (!this.$field.length) return;
-
-            this.$field.on('input', () => this.handleInput());
-        },
-
-        handleInput() {
-            clearTimeout(this.timeout);
-
-            const query = this.$field.val().trim();
-
-			this.toggleAIButton(query.length >= 3);
-
-            if (query === '') {
-                this.clearResults();
-                return;
-            }
-
-            this.timeout = setTimeout(() => this.search(query), 300);
-        },
-
-		toggleAIButton(enabled) {
-	        this.$aiButton.prop('disabled', !enabled);
-	    },
-
-        search(query) {
-            $.ajax({
-                url: geweb_aisearch.ajax_url,
-                type: 'POST',
-                data: {
-                    action: 'geweb_search',
-                    nonce: geweb_aisearch.search_nonce,
-                    query: query
-                },
-                beforeSend: () => this.showLoading(),
-                success: (response) => this.handleSuccess(response),
-                error: () => this.showError()
-            });
-        },
-
-        handleSuccess(response) {
-            if (response.success && response.data.length > 0) {
-                this.renderResults(response.data);
-            } else {
-                this.showNoResults();
-            }
-        },
-
-        renderResults(items) {
-            let html = '<small>Results:</small><ul>';
-            items.forEach(item => {
-                html += `<li><a href="${item.url}">${item.title}</a></li>`;
-            });
-            html += '</ul>';
-            this.$results.html(html);
-        },
-
-        showLoading() {
-            this.$results.html('<small>Searching...</small>');
-        },
-
-        showNoResults() {
-            this.$results.html('<small>No results found</small>');
-        },
-
-        showError() {
-            this.$results.html('<small>Error loading results</small>');
-        },
-
-        clearResults() {
-            this.$results.html('');
-        }
-    };
 
 	const GewebAIChat = {
 	    $textarea: $('#geweb-ai-query-display'),
@@ -324,6 +212,5 @@ jQuery(document).ready(function($) {
 	};
 
 	GewebModal.init();
-	GewebAutocomplete.init();
 	GewebAIChat.init();
 });

@@ -1,6 +1,28 @@
 body.no-scroll {
     overflow: hidden;
 }
+.geweb-ai-search-form {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.geweb-ai-search-form .geweb-ai-search-input {
+    min-width: 0;
+}
+.geweb-ai-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    white-space: nowrap;
+}
+.geweb-ai-trigger:before {
+    content: "";
+    width: 16px;
+    height: 16px;
+    background: url(../assets/img/ask-ai-icon-black.svg) center no-repeat;
+    background-size: contain;
+}
 .geweb-aisearch-modal-window {
     max-width: 800px;
     width: 100%;
@@ -225,17 +247,19 @@ body.no-scroll {
 .geweb-aisearch-modal-window .question-box .btn:hover {
     box-shadow: 0 4px 15px 0 rgba(0, 0, 0, 0.15);
 }
-@media only screen and (max-width: 1344px) {
-    .search-box .basic-button.search {
-        width: 110px;
-    }
-}
 @media only screen and (max-width: 1023px) {
     .geweb-aisearch-modal-window {
         max-width: calc(100% - 32px);
     }
 }
 @media only screen and (max-width: 767px) {
+    .geweb-ai-search-form {
+        flex-wrap: wrap;
+    }
+    .geweb-ai-search-form .geweb-ai-search-input,
+    .geweb-ai-search-form .geweb-ai-trigger {
+        width: 100%;
+    }
     .header-hold {
         flex-wrap: wrap;
         row-gap: 10px;
