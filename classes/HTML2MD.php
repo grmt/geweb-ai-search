@@ -11,6 +11,7 @@ use League\HTMLToMarkdown\HtmlConverter;
  * Converts WordPress posts to Markdown format for AI indexing
  */
 class HTML2MD {
+    private const OPTION_INCLUDE_REFERENCED_DOCUMENTS = 'geweb_aisearch_include_referenced_documents';
     /**
      * Post meta key for storing document name in Gemini
      */
@@ -26,7 +27,6 @@ class HTML2MD {
     private const NONCE_ACTION = 'geweb_aisearch_post_settings';
     private const NONCE_NAME = 'geweb_aisearch_post_settings_nonce';
     private const CRON_HOOK_PROCESS = 'geweb_aisearch_process_post';
-
     /**
      * Constructor - registers WordPress hooks
      */
@@ -243,26 +243,13 @@ class HTML2MD {
 
         foreach ($posts as $postId) {
             try {
-                // Convert to markdown
-                $markdown = $this->convert($postId);
-                if (!$markdown) {
-                    $this->excludeAfterFailure($postId, 'Could not convert post content for indexing.');
-                    $errors++;
+                $result = $this->indexPost($postId, true);
+                if ($result['success']) {
+                    $success++;
                     continue;
                 }
 
-                // Delete old document if exists
-                $this->deleteDocumentForPost($postId);
-
-                // Upload new document
-                $gemini = new Gemini();
-                $documentName = $gemini->uploadDocument($markdown, $postId);
-
-                // Save document name
-                update_post_meta($postId, self::META_DOCUMENT_NAME, $documentName);
-                $this->setStatus($postId, 'indexed');
-
-                $success++;
+                $errors++;
             } catch (\Exception $e) {
                 $this->excludeAfterFailure($postId, $e->getMessage());
                 $errors++;
@@ -385,6 +372,8 @@ class HTML2MD {
      */
     public function deleteDocumentForPost(int $postId, string $statusAfterDelete = 'not_indexed'): void {
         $documentName = get_post_meta($postId, self::META_DOCUMENT_NAME, true);
+        $documentStore = new DocumentStore();
+        $documentStore->disassociatePost($postId);
         if (empty($documentName)) {
             $this->setStatus($postId, $statusAfterDelete, '');
             return;
@@ -692,6 +681,11 @@ class HTML2MD {
             $gemini = new Gemini();
             $documentName = $gemini->uploadDocument($markdown, $postId);
             update_post_meta($postId, self::META_DOCUMENT_NAME, $documentName);
+            if ($this->shouldUploadReferencedDocuments()) {
+                $this->indexReferencedAttachments($postId);
+            } else {
+                (new DocumentStore())->disassociatePost($postId);
+            }
             $this->setStatus($postId, 'indexed');
 
             return ['success' => true, 'message' => 'Indexed successfully.'];
@@ -729,11 +723,144 @@ class HTML2MD {
     private function excludePost(int $postId): void {
         $documentName = (string) get_post_meta($postId, self::META_DOCUMENT_NAME, true);
         if ($documentName === '') {
+            (new DocumentStore())->disassociatePost($postId);
             $this->setStatus($postId, 'excluded', '');
             return;
         }
 
         $this->deleteDocumentForPost($postId, 'excluded');
+    }
+
+    /**
+     * Upload supported locally hosted files referenced by the post content.
+     *
+     * @param int $postId
+     * @return void
+     */
+    private function indexReferencedAttachments(int $postId): void {
+        $filePaths = $this->getReferencedAttachmentPaths($postId);
+        $documentStore = new DocumentStore();
+        $documentIds = [];
+
+        foreach ($filePaths as $filePath) {
+            $documentId = $documentStore->getOrCreateDocument($filePath, $postId);
+            if ($documentId !== null) {
+                $documentIds[] = $documentId;
+            }
+        }
+
+        $documentStore->updatePostAssociations($postId, $documentIds);
+    }
+
+    /**
+     * Whether referenced local documents should be uploaded with the page.
+     *
+     * @return bool
+     */
+    private function shouldUploadReferencedDocuments(): bool {
+        return get_option(self::OPTION_INCLUDE_REFERENCED_DOCUMENTS, '0') === '1';
+    }
+
+    /**
+     * Find supported local attachment paths referenced in post content.
+     *
+     * @param int $postId
+     * @return array<int,string>
+     */
+    private function getReferencedAttachmentPaths(int $postId): array {
+        $filePaths = [];
+        foreach (self::getReferencedAttachmentEntriesForPost($postId) as $reference) {
+            $filePath = isset($reference['file_path']) ? (string) $reference['file_path'] : '';
+            if ($filePath !== '') {
+                $filePaths[$filePath] = $filePath;
+            }
+        }
+
+        return array_values($filePaths);
+    }
+
+    /**
+     * Find referenced local attachment entries in post content.
+     *
+     * @param int $postId
+     * @return array<int,array<string,string>>
+     */
+    public static function getReferencedAttachmentEntriesForPost(int $postId): array {
+        $post = get_post($postId);
+        if (!$post instanceof \WP_Post) {
+            return [];
+        }
+
+        $content = (string) apply_filters('the_content', $post->post_content);
+        if ($content === '') {
+            return [];
+        }
+
+        $urls = [];
+        if (preg_match_all('/(?:href|src)\s*=\s*["\']([^"\']+)["\']/i', $content, $matches)) {
+            $urls = isset($matches[1]) && is_array($matches[1]) ? $matches[1] : [];
+        }
+
+        $entries = [];
+        foreach ($urls as $url) {
+            $resolved = self::resolveReferencedLocalFilePathFromUrl($url);
+            if ($resolved === null) {
+                continue;
+            }
+
+            $entries[$resolved['file_path']] = $resolved;
+        }
+
+        return array_values($entries);
+    }
+
+    /**
+     * Resolve a linked local URL to a readable uploads file path.
+     *
+     * @param string $url
+     * @return string|null
+     */
+    private function resolveReferencedLocalFilePath(string $url): ?string {
+        $resolved = self::resolveReferencedLocalFilePathFromUrl($url);
+        return is_array($resolved) ? (string) $resolved['file_path'] : null;
+    }
+
+    /**
+     * Resolve a linked local URL to a readable uploads file path and URL.
+     *
+     * @param string $url
+     * @return array<string,string>|null
+     */
+    public static function resolveReferencedLocalFilePathFromUrl(string $url): ?array {
+        $url = trim($url);
+        if ($url === '') {
+            return null;
+        }
+
+        $uploads = wp_get_upload_dir();
+        $baseUrl = (string) ($uploads['baseurl'] ?? '');
+        $baseDir = (string) ($uploads['basedir'] ?? '');
+        if ($baseUrl === '' || $baseDir === '') {
+            return null;
+        }
+
+        $normalizedUrl = explode('#', $url, 2)[0];
+        $normalizedUrl = explode('?', $normalizedUrl, 2)[0];
+        if (strpos($normalizedUrl, $baseUrl) !== 0) {
+            return null;
+        }
+
+        $relativePath = ltrim(substr($normalizedUrl, strlen($baseUrl)), '/');
+        $filePath = wp_normalize_path(trailingslashit($baseDir) . $relativePath);
+        $normalizedBaseDir = wp_normalize_path($baseDir);
+        if (strpos($filePath, $normalizedBaseDir) !== 0 || !is_readable($filePath)) {
+            return null;
+        }
+
+        return [
+            'file_path' => $filePath,
+            'file_url' => $normalizedUrl,
+        ];
     }
 
     /**

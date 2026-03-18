@@ -15,13 +15,19 @@ Domain Path: /languages
 defined('ABSPATH') || exit;
 
 // Plugin version
-define('GEWEB_AI_SEARCH_VERSION', '2.1.4.1');
+if (!defined('GEWEB_AI_SEARCH_VERSION')) {
+    define('GEWEB_AI_SEARCH_VERSION', '2.1.4.1');
+}
 
 // Plugin directory path
-define('GEWEB_AI_SEARCH_PATH', plugin_dir_path(__FILE__));
+if (!defined('GEWEB_AI_SEARCH_PATH')) {
+    define('GEWEB_AI_SEARCH_PATH', plugin_dir_path(__FILE__));
+}
 
 // Plugin directory URL
-define('GEWEB_AI_SEARCH_URL', plugin_dir_url(__FILE__));
+if (!defined('GEWEB_AI_SEARCH_URL')) {
+    define('GEWEB_AI_SEARCH_URL', plugin_dir_url(__FILE__));
+}
 
 // Load HTML to Markdown library
 require_once GEWEB_AI_SEARCH_PATH . 'libs/md/vendor/autoload.php';
@@ -55,4 +61,16 @@ register_activation_hook(__FILE__, function () {
         deactivate_plugins(plugin_basename(__FILE__));
         wp_die('Geweb AI Search requires PHP 7.2 or higher (for Sodium support). Your current version is ' . PHP_VERSION);
     }
+
+    $documentStoreFile = GEWEB_AI_SEARCH_PATH . 'classes/DocumentStore.php';
+    if (!class_exists('\\Geweb\\AISearch\\DocumentStore') && file_exists($documentStoreFile)) {
+        require_once $documentStoreFile;
+    }
+
+    if (!class_exists('\\Geweb\\AISearch\\DocumentStore')) {
+        wp_die('Geweb AI Search could not load the DocumentStore class during activation.');
+    }
+
+    // Create custom database tables
+    \Geweb\AISearch\DocumentStore::install();
 });

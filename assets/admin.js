@@ -40,14 +40,42 @@ jQuery(document).ready(function($) {
 		}
 
 		function normalizePromptText(text) {
-				return String(text || '').replace(/\r\n?/g, '\n');
+				return String(text || '')
+						.replace(/\r\n?/g, '\n')
+						.split('\n')
+						.map(function(line) {
+								return line.replace(/[ \t]+$/g, '');
+						})
+						.join('\n');
 		}
 
-		function getSelectedHistoryPrompt() {
-				var $selectedOption = $('#geweb-ai-prompt-history-select option:selected');
-				return decodeBase64Value($selectedOption.attr('data-prompt'));
+		function dispatchPromptEvent(element, eventName) {
+				if (!element) return;
+
+				try {
+						element.dispatchEvent(new Event(eventName, { bubbles: true }));
+						return;
+				} catch (error) {
+				}
+
+				if (document.createEvent) {
+						var event = document.createEvent('Event');
+						event.initEvent(eventName, true, true);
+						element.dispatchEvent(event);
+				}
 		}
 
+		function setPromptValue(value) {
+				var $prompt = $('#geweb_ai_search_custom_prompt');
+				var promptElement = $prompt.get(0);
+				if (!promptElement) return;
+
+				promptElement.value = value;
+				$prompt.val(value);
+				dispatchPromptEvent(promptElement, 'input');
+				dispatchPromptEvent(promptElement, 'change');
+				promptElement.focus();
+		}
 		function buildPromptDiff(currentPrompt, historyPrompt) {
 				var currentLines = normalizePromptText(currentPrompt).split('\n');
 				var historyLines = normalizePromptText(historyPrompt).split('\n');
@@ -78,17 +106,14 @@ jQuery(document).ready(function($) {
 				return html.length ? html.join('') : '<div>No differences from the current AI Prompt.</div>';
 		}
 
-		function updatePromptHistoryPreview() {
-				var $select = $('#geweb-ai-prompt-history-select');
+		function updatePromptHistoryPreview(selectedPrompt) {
 				var $diff = $('#geweb-ai-prompt-history-diff');
 				var $currentPrompt = $('#geweb_ai_search_custom_prompt');
 
-				if (!$select.length || !$diff.length || !$currentPrompt.length) return;
-
-				var selectedPrompt = getSelectedHistoryPrompt();
+				if (!$diff.length || !$currentPrompt.length) return;
 
 				if (!selectedPrompt) {
-						$diff.text('Select a previous prompt to preview the full text and diff.');
+						$diff.html('Click on a prompt version to preview the full text and diff.');
 						return;
 				}
 
@@ -109,29 +134,83 @@ jQuery(document).ready(function($) {
 				$cell.replaceWith(html);
 		}
 
-		$('#geweb-ai-restore-default-prompt').on('click', function() {
-				var $prompt = $('#geweb_ai_search_custom_prompt');
-				var defaultPrompt = decodeBase64Value($(this).attr('data-default-prompt'));
-				if (!$prompt.length) return;
-
-				$prompt.val(defaultPrompt).trigger('input').trigger('change').focus();
+		$('#geweb-ai-restore-default-prompt').on('click', function(event) {
+				event.preventDefault();
+				var defaultPrompt = $('#geweb_ai_search_default_prompt').val() || decodeBase64Value($(this).attr('data-default-prompt'));
+				setPromptValue(defaultPrompt);
 		});
 
-		$('#geweb-ai-restore-history-prompt').on('click', function() {
-				var $prompt = $('#geweb_ai_search_custom_prompt');
-				var value = getSelectedHistoryPrompt();
-				if (!$prompt.length || !value) return;
+		var $promptHistoryList = $('#geweb-ai-prompt-history-list');
 
-				$prompt.val(value).trigger('input').trigger('change');
-				updatePromptHistoryPreview();
+		$promptHistoryList.on('click', '.geweb-ai-prompt-history-item', function(e) {
+				if ($(e.target).is('input, button, .dashicons')) {
+						return;
+				}
+				var $item = $(this);
+				$promptHistoryList.find('.geweb-ai-prompt-history-item').removeClass('selected').css('border-color', '#dcdcde');
+				$item.addClass('selected').css('border-color', '#2271b1');
+				var selectedPrompt = decodeBase64Value($item.data('prompt'));
+				updatePromptHistoryPreview(selectedPrompt);
+		});
+
+		$promptHistoryList.on('click', '.geweb-ai-use-history-prompt', function(e) {
+				e.preventDefault();
+				e.stopPropagation();
+				var $item = $(this).closest('.geweb-ai-prompt-history-item');
+				var value = decodeBase64Value($item.data('prompt'));
+				if (!value) return;
+
+				setPromptValue(value);
+				updatePromptHistoryPreview(value);
+		});
+
+		$promptHistoryList.on('click', '.geweb-ai-delete-history-prompt', function(e) {
+				e.preventDefault();
+				e.stopPropagation();
+				var $button = $(this);
+				var $item = $button.closest('.geweb-ai-prompt-history-item');
+				var timestamp = $item.data('timestamp');
+
+				if (!timestamp || !confirm('Are you sure you want to delete this prompt version?')) {
+						return;
+				}
+
+				$button.prop('disabled', true);
+
+				$.ajax({
+						url: getAdminAjaxUrl(),
+						type: 'POST',
+						dataType: 'json',
+						data: {
+								action: 'geweb_delete_prompt_history_item',
+								nonce: gewebAisearchAdmin.adminActionNonce,
+								timestamp: timestamp
+						}
+				}).done(function(response) {
+						if (!response || !response.success) {
+								var message = response && response.data && response.data.message ? response.data.message : 'Could not delete prompt version.';
+								alert(message);
+								$button.prop('disabled', false);
+								return;
+						}
+						$item.remove();
+						if ($promptHistoryList.children().length === 0) {
+								var $p = $('<p class="description">No previous prompts saved yet.</p>');
+								$('#geweb-ai-prompt-history-list').replaceWith($p);
+								$('#geweb-ai-clear-history').remove();
+								$('#geweb-ai-prompt-history-diff').parent().remove();
+						}
+				}).fail(function() {
+						alert('Could not delete prompt version due to a network error.');
+						$button.prop('disabled', false);
+				});
 		});
 
 		$('#geweb-ai-clear-history').on('click', function() {
 				var $button = $(this);
-				var $select = $('#geweb-ai-prompt-history-select');
 				var $diff = $('#geweb-ai-prompt-history-diff');
 
-				if (!$button.length || !$select.length || !$diff.length) return;
+				if (!$button.length) return;
 
 				$button.prop('disabled', true).text('Clearing...');
 
@@ -146,26 +225,46 @@ jQuery(document).ready(function($) {
 				}).done(function(response) {
 						if (!response || !response.success) {
 								var message = response && response.data && response.data.message ? response.data.message : 'Could not clear prompt history.';
-								$diff.text(message);
-								$button.prop('disabled', false).text('Clear history');
+								if ($diff.length) {
+										$diff.text(message);
+								} else {
+										alert(message);
+								}
+								$button.prop('disabled', false).text('Clear All History');
 								return;
 						}
 
-						window.location.reload();
+						var $p = $('<p class="description">No previous prompts saved yet.</p>');
+						$('#geweb-ai-prompt-history-list').replaceWith($p);
+						$('#geweb-ai-clear-history').remove();
+						$('#geweb-ai-prompt-history-diff').parent().remove();
 				}).fail(function() {
-						$diff.text('Could not clear prompt history.');
-						$button.prop('disabled', false).text('Clear history');
+						if ($diff.length) {
+								$diff.text('Could not clear prompt history.');
+						} else {
+								alert('Could not clear prompt history.');
+						}
+						$button.prop('disabled', false).text('Clear All History');
 				});
 		});
 
-		$('#geweb-ai-prompt-history-select').on('change', updatePromptHistoryPreview);
-		$('#geweb_ai_search_custom_prompt').on('input', updatePromptHistoryPreview);
-		updatePromptHistoryPreview();
+		$('#geweb_ai_search_custom_prompt').on('input', function() {
+				var $selectedItem = $promptHistoryList.find('.geweb-ai-prompt-history-item.selected');
+				var selectedPrompt = $selectedItem.length ? decodeBase64Value($selectedItem.data('prompt')) : null;
+				updatePromptHistoryPreview(selectedPrompt);
+		});
+		updatePromptHistoryPreview(null);
 
 		$(window).on('beforeunload', function() {
 				if (!hasUnsavedChanges()) return;
 
 				return 'You have unsaved changes. Are you sure you want to leave this page?';
+		});
+
+		$('#geweb_ai_search_preserve_data_on_uninstall').on('change', function() {
+				if (!this.checked) return;
+
+				alert('Plugin data can be preserved on uninstall, but the stored API key and encryption key will always be removed.');
 		});
 
 		if ($settingsForm.length) {
@@ -196,7 +295,7 @@ jQuery(document).ready(function($) {
 
 										var percentage = Math.round((data.processed / data.total) * 100);
 										var statusText = 'Processing: ' + data.processed + '/' + data.total + ' (' + percentage + '%)';
-										
+
 										$('#geweb-generate-status').html('<p>' + statusText + '</p>');
 
 										if (data.has_more) {

@@ -4,6 +4,11 @@ namespace Geweb\AISearch;
 defined('ABSPATH') || exit;
 
 /**
+ * Configuration exception
+ */
+class ConfigurationException extends \Exception {}
+
+/**
  * Gemini AI Provider
  *
  * Handles all interactions with Google Gemini API
@@ -86,10 +91,17 @@ class Gemini {
     public function createStore(string $name = 'WebsiteSearch'): bool {
         $url = self::API_BASE . '/fileSearchStores';
         $body = ['display_name' => $name . '-' . time()];
+        $previousStore = $this->getStoreData();
 
         try {
             $result = $this->makeRequest($url, $body, 'POST');
             if (!empty($result['name']) && update_option(self::OPTION_STORE, $result['name'])) {
+                $newStore = (string) $result['name'];
+                if ($previousStore !== '' && $previousStore !== $newStore) {
+                    try {
+                        $this->deleteStoreByName($previousStore);
+                    } catch (\Exception $e) {}
+                }
                 return true;
             }
         } catch (\Exception $e) {}
@@ -106,6 +118,22 @@ class Gemini {
     }
 
     /**
+     * Delete the currently configured File Search Store.
+     *
+     * @return void
+     * @throws \Exception
+     */
+    public function deleteStore(): void {
+        $storeName = $this->getStoreData();
+        if ($storeName === '') {
+            return;
+        }
+
+        $this->deleteStoreByName($storeName);
+        delete_option(self::OPTION_STORE);
+    }
+
+    /**
      * Upload document to Gemini File Search Store
      *
      * @param string $content Markdown document content
@@ -114,24 +142,67 @@ class Gemini {
      * @throws \Exception On upload error
      */
     public function uploadDocument(string $content, int $postId): string {
+        return $this->uploadNamedDocument($content, "{$postId}.md");
+    }
+
+    /**
+     * Upload a named markdown document to Gemini File Search Store.
+     *
+     * @param string $content Markdown document content
+     * @param string $displayName Uploaded filename shown in Gemini
+     * @return string
+     * @throws \Exception
+     */
+    public function uploadNamedDocument(string $content, string $displayName): string {
+        return $this->uploadMultipartDocument($content, $displayName, 'text/markdown');
+    }
+
+    /**
+     * Upload a local file to Gemini File Search Store without converting it.
+     *
+     * @param string $filePath Absolute local path
+     * @param string $displayName Uploaded filename shown in Gemini
+     * @param string $mimeType File MIME type
+     * @return string
+     * @throws \Exception
+     */
+    public function uploadLocalFile(string $filePath, string $displayName, string $mimeType): string {
+        $content = file_get_contents($filePath);
+        if ($content === false) {
+            throw new \Exception('Could not read local file for upload.');
+        }
+
+        return $this->uploadMultipartDocument($content, $displayName, $mimeType);
+    }
+
+    /**
+     * Upload arbitrary multipart content to Gemini File Search Store.
+     *
+     * @param string $content File content
+     * @param string $displayName Uploaded filename shown in Gemini
+     * @param string $mimeType File MIME type
+     * @return string
+     * @throws \Exception
+     */
+    private function uploadMultipartDocument(string $content, string $displayName, string $mimeType): string {
         $storeName = $this->getStoreData();
         if (empty($this->apiKey) || empty($storeName)) {
-            throw new \Exception('Configuration error');
+            throw new ConfigurationException('Configuration error');
         }
 
         $url = self::API_UPLOAD_BASE . '/' . $storeName . ':uploadToFileSearchStore?key=' . $this->apiKey;
 
         $boundary = uniqid();
         $metadata = wp_json_encode([
-            'displayName' => "{$postId}.md",
-            'mimeType'    => 'text/markdown',
+            'displayName' => $displayName,
+            'mimeType'    => $mimeType,
         ]);
 
         $body  = "--{$boundary}\r\n";
         $body .= "Content-Type: application/json; charset=UTF-8\r\n\r\n";
         $body .= $metadata . "\r\n";
         $body .= "--{$boundary}\r\n";
-        $body .= "Content-Type: text/markdown\r\n\r\n";
+        $body .= "Content-Type: {$mimeType}\r\n\r\n";
         $body .= $content . "\r\n";
         $body .= "--{$boundary}--";
 
@@ -172,7 +243,7 @@ class Gemini {
      */
     public function deleteDocument(string $documentName): void {
         if (empty($this->apiKey)) {
-            throw new \Exception('Configuration error');
+            throw new ConfigurationException('Configuration error');
         }
 
         $url = self::API_BASE . '/' . $documentName . '?key=' . $this->apiKey . '&force=1';
@@ -191,6 +262,37 @@ class Gemini {
     }
 
     /**
+     * Delete a specific File Search Store by resource name.
+     *
+     * @param string $storeName
+     * @return void
+     * @throws \Exception
+     */
+    private function deleteStoreByName(string $storeName): void {
+        if (empty($this->apiKey)) {
+            throw new ConfigurationException('Configuration error');
+        }
+
+        $url = self::API_BASE . '/' . ltrim($storeName, '/') . '?key=' . $this->apiKey . '&force=1';
+        $response = wp_remote_request($url, [
+            'method' => 'DELETE',
+            'timeout' => 30,
+            'headers' => [
+                'Content-Type' => 'application/json',
+            ],
+        ]);
+
+        if (is_wp_error($response)) {
+            throw new \Exception(esc_html('Delete store failed: ' . $response->get_error_message()));
+        }
+
+        $httpCode = wp_remote_retrieve_response_code($response);
+        if ($httpCode < 200 || $httpCode >= 300) {
+            throw new \Exception(esc_html('Delete store failed with HTTP code ' . $httpCode));
+        }
+    }
+
+    /**
      * Search in documents using Gemini File Search
      *
      * @param array $messages Array of messages in format [['role' => 'user', 'content' => '...'], ...]
@@ -200,7 +302,7 @@ class Gemini {
     public function search(array $messages): array {
         $storeName = $this->getStoreData();
         if (empty($this->apiKey) || empty($storeName)) {
-            throw new \Exception('Configuration error');
+            throw new ConfigurationException('Configuration error');
         }
 
         if (empty($messages)) {
@@ -251,7 +353,7 @@ class Gemini {
      */
     private function makeRequest(string $url, ?array $body = null, string $method = 'POST'): array {
         if (empty($this->apiKey)) {
-            throw new \Exception('Configuration error');
+            throw new ConfigurationException('Configuration error');
         }
 
         $args = [

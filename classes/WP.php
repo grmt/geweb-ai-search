@@ -15,6 +15,8 @@ class WP {
     private const OPTION_CUSTOM_PROMPT = 'geweb_aisearch_custom_prompt';
     private const OPTION_PROMPT_HISTORY = 'geweb_aisearch_prompt_history';
     private const OPTION_PROMPT_HISTORY_LIMIT = 'geweb_aisearch_prompt_history_limit';
+    private const OPTION_INCLUDE_REFERENCED_DOCUMENTS = 'geweb_aisearch_include_referenced_documents';
+    private const OPTION_PRESERVE_DATA_ON_UNINSTALL = 'geweb_aisearch_preserve_data_on_uninstall';
     private const DEFAULT_PROMPT_HISTORY_LIMIT = 10;
 
     /**
@@ -31,6 +33,7 @@ class WP {
         add_action('wp_ajax_geweb_ai_chat', [$this, 'ajaxAiChat']);
         add_action('wp_ajax_nopriv_geweb_ai_chat', [$this, 'ajaxAiChat']);
         add_action('wp_ajax_geweb_clear_prompt_history', [$this, 'ajaxClearPromptHistory']);
+        add_action('wp_ajax_geweb_delete_prompt_history_item', [$this, 'ajaxDeletePromptHistoryItem']);
 
         add_action('wp_ajax_geweb_get_nonce', [$this, 'ajaxGetNonce']);
         add_action('wp_ajax_nopriv_geweb_get_nonce', [$this, 'ajaxGetNonce']);
@@ -50,13 +53,54 @@ class WP {
      * @return void
      */
     public function adminMenu(): void {
-        add_options_page(
+        add_menu_page(
             'Geweb AI Search',
             'Geweb AI Search',
             'manage_options',
             'geweb-ai-search',
+            [$this, 'renderOptionsPage'],
+            'dashicons-search'
+        );
+
+        add_submenu_page(
+            'geweb-ai-search',
+            'Settings',
+            'Settings',
+            'manage_options',
+            'geweb-ai-search',
             [$this, 'renderOptionsPage']
         );
+
+        add_submenu_page(
+            'geweb-ai-search',
+            'Referenced Documents',
+            'Referenced Documents',
+            'manage_options',
+            'geweb-ai-search-referenced-documents',
+            [$this, 'renderReferencedDocumentListPage']
+        );
+    }
+
+    /**
+     * Render referenced documents overview page.
+     *
+     * @return void
+     */
+    public function renderReferencedDocumentListPage(): void {
+        $table = new ReferencedDocumentListTable();
+        $table->prepare_items();
+        ?>
+        <div class="wrap">
+            <h1 class="wp-heading-inline">Referenced Documents</h1>
+            <p>This table shows local files found in managed content, whether they have been uploaded to the Gemini store, and any uploaded documents that are no longer referenced.</p>
+            <hr class="wp-header-end">
+
+            <form method="get">
+                <input type="hidden" name="page" value="geweb-ai-search-referenced-documents">
+                <?php $table->display(); ?>
+            </form>
+        </div>
+        <?php
     }
 
     /**
@@ -97,6 +141,15 @@ class WP {
             update_option('geweb_aisearch_model', sanitize_text_field(wp_unslash($_POST['geweb_ai_search_model'])));
         }
 
+        update_option(
+            self::OPTION_INCLUDE_REFERENCED_DOCUMENTS,
+            !empty($_POST['geweb_ai_search_include_referenced_documents']) ? '1' : '0'
+        );
+        update_option(
+            self::OPTION_PRESERVE_DATA_ON_UNINSTALL,
+            !empty($_POST['geweb_ai_search_preserve_data_on_uninstall']) ? '1' : '0'
+        );
+
         $historyLimit = self::DEFAULT_PROMPT_HISTORY_LIMIT;
         if (isset($_POST['geweb_ai_search_prompt_history_limit'])) {
             $historyLimit = max(1, intval($_POST['geweb_ai_search_prompt_history_limit']));
@@ -118,6 +171,11 @@ class WP {
             } else {
                 update_option(self::OPTION_CUSTOM_PROMPT, $newPrompt);
             }
+        }
+
+        // Save prompt history names
+        if (isset($_POST['geweb_ai_search_prompt_history_names']) && is_array($_POST['geweb_ai_search_prompt_history_names'])) {
+            $this->updatePromptHistoryNames(wp_unslash($_POST['geweb_ai_search_prompt_history_names']));
         }
 
         wp_safe_redirect(wp_get_referer());
@@ -149,22 +207,9 @@ class WP {
         if (!is_array($promptHistory)) {
             $promptHistory = [];
         }
-        $promptVersions = [];
-        foreach (array_reverse($promptHistory) as $entry) {
-            $promptVersions[] = [
-                'prompt' => (string) ($entry['prompt'] ?? ''),
-                'saved_at' => intval($entry['saved_at'] ?? 0),
-                'is_current' => false,
-            ];
-        }
-        $promptVersions[] = [
-            'prompt' => $effectivePrompt,
-            'saved_at' => current_time('timestamp'),
-            'is_current' => true,
-        ];
-        $selectedPromptIndex = max(0, count($promptVersions) - 2);
-
         $postTypes = get_option('geweb_aisearch_post_types', []);
+        $includeReferencedDocuments = get_option(self::OPTION_INCLUDE_REFERENCED_DOCUMENTS, '0') === '1';
+        $preserveDataOnUninstall = get_option(self::OPTION_PRESERVE_DATA_ON_UNINSTALL, '0') === '1';
         $allPostTypes = get_post_types(['public' => true], 'objects');
         ?>
         <div class="wrap">
@@ -265,37 +310,37 @@ class WP {
                                 value="<?php echo esc_attr((string) $promptHistoryLimit); ?>"
                                 class="small-text"
                             >
-                            <p class="description">Number of prompt versions to keep, including the current active prompt. Default: <?php echo esc_html((string) self::DEFAULT_PROMPT_HISTORY_LIMIT); ?>.</p>
+                            <p class="description">Number of prompt versions to keep. Default: <?php echo esc_html((string) self::DEFAULT_PROMPT_HISTORY_LIMIT); ?>. Names are saved when you save settings.</p>
                             <?php if (!empty($promptHistory)): ?>
-                                <select id="geweb-ai-prompt-history-select">
-                                    <?php foreach ($promptVersions as $index => $entry): ?>
+                                <div id="geweb-ai-prompt-history-list" style="margin-top: 12px; display: flex; flex-direction: column; gap: 8px; max-width: 800px;">
+                                    <?php foreach ($promptHistory as $entry): ?>
                                         <?php
-                                        $label = '#' . ($index + 1);
-                                        $label .= !empty($entry['is_current']) ? ' Current' : ' Saved';
-                                        if (!empty($entry['saved_at'])) {
-                                            $label .= ' - ' . wp_date(get_option('date_format') . ' ' . get_option('time_format'), intval($entry['saved_at']));
+                                        $saved_at = intval($entry['saved_at'] ?? 0);
+                                        if ($saved_at === 0) {
+                                            continue;
                                         }
-                                        $preview = isset($entry['prompt']) ? wp_strip_all_tags((string) $entry['prompt']) : '';
-                                        if ($preview !== '') {
-                                            $label .= ' - ' . wp_html_excerpt($preview, 80, '...');
+                                        $name = (string) ($entry['name'] ?? '');
+                                        if ($name === '') {
+                                            $name = 'Version from ' . wp_date(get_option('date_format') . ' ' . get_option('time_format'), $saved_at);
                                         }
+                                        $prompt_b64 = base64_encode((string) ($entry['prompt'] ?? ''));
                                         ?>
-                                        <option
-                                            value="<?php echo esc_attr((string) $index); ?>"
-                                            data-prompt="<?php echo esc_attr(base64_encode((string) ($entry['prompt'] ?? ''))); ?>"
-                                            <?php selected($index, $selectedPromptIndex); ?>
-                                        >
-                                            <?php echo esc_html($label); ?>
-                                        </option>
+                                        <div class="geweb-ai-prompt-history-item" data-timestamp="<?php echo esc_attr($saved_at); ?>" data-prompt="<?php echo esc_attr($prompt_b64); ?>" style="padding: 8px; border: 1px solid #dcdcde; border-radius: 4px; cursor: pointer;">
+                                            <div style="display: flex; align-items: center; justify-content: space-between;">
+                                                <input type="text" name="geweb_ai_search_prompt_history_names[<?php echo esc_attr($saved_at); ?>]" value="<?php echo esc_attr($name); ?>" class="regular-text" style="flex-grow: 1; margin-right: 10px;" />
+                                                <span style="color: #646970; white-space: nowrap; margin-right: 10px;"><?php echo wp_date(get_option('date_format') . ' ' . get_option('time_format'), $saved_at); ?></span>
+                                                <button type="button" class="button geweb-ai-use-history-prompt">Use</button>
+                                                <button type="button" class="button-link button-link-delete geweb-ai-delete-history-prompt" style="margin-left: 5px;" title="Delete"><span class="dashicons dashicons-trash"></span></button>
+                                            </div>
+                                        </div>
                                     <?php endforeach; ?>
-                                </select>
-                                <button type="button" class="button" id="geweb-ai-restore-history-prompt">Use selected prompt</button>
-                                <button type="button" class="button" id="geweb-ai-clear-history">Clear history</button>
-                                <div style="margin-top:12px;">
+                                </div>
+                                <button type="button" class="button" id="geweb-ai-clear-history" style="margin-top: 12px;">Clear All History</button>
+                                <div style="margin-top:12px; max-width: 800px;">
                                     <pre
                                         id="geweb-ai-prompt-history-diff"
                                         style="margin-top:8px; padding:12px; background:#fff; border:1px solid #dcdcde; min-height:20em; max-height:none; overflow:auto; white-space:pre-wrap;"
-                                    >Select a previous prompt to preview the full text and diff.</pre>
+                                    >Click on a prompt version to preview the full text and diff.</pre>
                                 </div>
                             <?php else: ?>
                                 <p class="description">No previous prompts saved yet.</p>
@@ -315,6 +360,40 @@ class WP {
                                 </label>
                             </p>
                             <?php endforeach; ?>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <th><label for="geweb_ai_search_include_referenced_documents">Referenced Documents:</label></th>
+                        <td>
+                            <label for="geweb_ai_search_include_referenced_documents">
+                                <input
+                                    type="checkbox"
+                                    id="geweb_ai_search_include_referenced_documents"
+                                    name="geweb_ai_search_include_referenced_documents"
+                                    value="1"
+                                    <?php checked($includeReferencedDocuments); ?>
+                                >
+                                Upload referenced local documents together with indexed pages
+                            </label>
+                            <p class="description">When enabled, files linked from post content in the WordPress uploads folder are uploaded to the Gemini store as separate documents. When disabled, linked files are detected but not uploaded.</p>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <th><label for="geweb_ai_search_preserve_data_on_uninstall">Uninstall Cleanup:</label></th>
+                        <td>
+                            <label for="geweb_ai_search_preserve_data_on_uninstall">
+                                <input
+                                    type="checkbox"
+                                    id="geweb_ai_search_preserve_data_on_uninstall"
+                                    name="geweb_ai_search_preserve_data_on_uninstall"
+                                    value="1"
+                                    <?php checked($preserveDataOnUninstall); ?>
+                                >
+                                Keep plugin data when uninstalling
+                            </label>
+                            <p class="description">When enabled, uninstalling the plugin keeps its settings, status metadata, and indexed document tables in the WordPress database. The stored API key and encryption key are always removed on uninstall.</p>
                         </td>
                     </tr>
 
@@ -352,7 +431,7 @@ class WP {
      * @return array
      */
     public function addPluginActionLinks(array $links): array {
-        $settingsLink = '<a href="' . esc_url(admin_url('options-general.php?page=geweb-ai-search')) . '">Settings</a>';
+        $settingsLink = '<a href="' . esc_url(admin_url('admin.php?page=geweb-ai-search')) . '">Settings</a>';
         array_unshift($links, $settingsLink);
 
         return $links;
@@ -404,6 +483,32 @@ class WP {
     }
 
     /**
+     * Update names for prompt history entries
+     *
+     * @param array<int,string> $names Array of timestamp => name
+     * @return void
+     */
+    private function updatePromptHistoryNames(array $names): void {
+        $history = get_option(self::OPTION_PROMPT_HISTORY, []);
+        if (!is_array($history) || empty($history)) {
+            return;
+        }
+
+        $newHistory = [];
+        foreach ($history as $entry) {
+            $saved_at = (int) ($entry['saved_at'] ?? 0);
+            if (isset($names[$saved_at])) {
+                $entry['name'] = sanitize_text_field($names[$saved_at]);
+            }
+            $newHistory[] = $entry;
+        }
+
+        if ($newHistory !== $history) {
+            update_option(self::OPTION_PROMPT_HISTORY, $newHistory);
+        }
+    }
+
+    /**
      * Trim stored prompt history to the configured limit
      *
      * @param int $limit Maximum number of entries
@@ -436,6 +541,48 @@ class WP {
         wp_send_json_success([
             'message' => 'Prompt history cleared.',
         ]);
+    }
+
+    /**
+     * AJAX: Delete a single prompt history item
+     *
+     * @return void
+     */
+    public function ajaxDeletePromptHistoryItem(): void {
+        check_ajax_referer('geweb_ai_search_admin_actions', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => 'Insufficient permissions'], 403);
+        }
+
+        $timestamp = isset($_POST['timestamp']) ? (int) $_POST['timestamp'] : 0;
+        if ($timestamp <= 0) {
+            wp_send_json_error(['message' => 'Invalid timestamp.'], 400);
+        }
+
+        $history = get_option(self::OPTION_PROMPT_HISTORY, []);
+        if (!is_array($history)) {
+            wp_send_json_success(['message' => 'History is already empty.']);
+            return;
+        }
+
+        $newHistory = [];
+        $found = false;
+        foreach ($history as $entry) {
+            if (isset($entry['saved_at']) && (int) $entry['saved_at'] === $timestamp) {
+                $found = true;
+                continue;
+            }
+            $newHistory[] = $entry;
+        }
+
+        if (!$found) {
+            wp_send_json_error(['message' => 'Prompt version not found.'], 404);
+        }
+
+        update_option(self::OPTION_PROMPT_HISTORY, $newHistory);
+
+        wp_send_json_success(['message' => 'Prompt version deleted.']);
     }
 
     /**
@@ -498,7 +645,7 @@ class WP {
             }
 
             $role = isset($rawMessage['role']) ? sanitize_text_field($rawMessage['role']) : '';
-            $content = isset($rawMessage['content']) ? sanitize_text_field($rawMessage['content']) : '';
+            $content = isset($rawMessage['content']) ? sanitize_textarea_field($rawMessage['content']) : '';
 
             if (!in_array($role, $allowedRoles, true)) {
                 $role = 'user';
