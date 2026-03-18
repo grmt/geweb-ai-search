@@ -17,6 +17,7 @@ class WP {
     private const OPTION_PROMPT_HISTORY_LIMIT = 'geweb_aisearch_prompt_history_limit';
     private const OPTION_INCLUDE_REFERENCED_DOCUMENTS = 'geweb_aisearch_include_referenced_documents';
     private const OPTION_PRESERVE_DATA_ON_UNINSTALL = 'geweb_aisearch_preserve_data_on_uninstall';
+    private const OPTION_CONNECTION_STATUS = 'geweb_aisearch_connection_status';
     private const DEFAULT_PROMPT_HISTORY_LIMIT = 10;
 
     /**
@@ -34,6 +35,7 @@ class WP {
         add_action('wp_ajax_nopriv_geweb_ai_chat', [$this, 'ajaxAiChat']);
         add_action('wp_ajax_geweb_clear_prompt_history', [$this, 'ajaxClearPromptHistory']);
         add_action('wp_ajax_geweb_delete_prompt_history_item', [$this, 'ajaxDeletePromptHistoryItem']);
+        add_action('wp_ajax_geweb_refresh_referenced_documents', [$this, 'ajaxRefreshReferencedDocuments']);
 
         add_action('wp_ajax_geweb_get_nonce', [$this, 'ajaxGetNonce']);
         add_action('wp_ajax_nopriv_geweb_get_nonce', [$this, 'ajaxGetNonce']);
@@ -87,20 +89,84 @@ class WP {
      * @return void
      */
     public function renderReferencedDocumentListPage(): void {
-        $table = new ReferencedDocumentListTable();
-        $table->prepare_items();
+        $documentStore = new DocumentStore();
+        $hasCache = $documentStore->hasReferencedDocumentOverviewCache();
+        $cacheTime = $documentStore->getReferencedDocumentOverviewCacheTime();
+        $debug = $documentStore->getReferencedDocumentOverviewDebug();
         ?>
         <div class="wrap">
             <h1 class="wp-heading-inline">Referenced Documents</h1>
             <p>This table shows local files found in managed content, whether they have been uploaded to the Gemini store, and any uploaded documents that are no longer referenced.</p>
+            <p>
+                <button type="button" class="button" id="geweb-refresh-referenced-documents" <?php disabled(!$hasCache); ?>>Refresh List</button>
+                <span id="geweb-referenced-documents-status" style="margin-left:10px; color:#646970;">
+                    <?php if ($cacheTime > 0): ?>
+                        Last refreshed: <?php echo esc_html(wp_date(get_option('date_format') . ' ' . get_option('time_format'), $cacheTime)); ?>
+                    <?php else: ?>
+                        Loading referenced documents...
+                    <?php endif; ?>
+                </span>
+            </p>
+            <?php if (!empty($debug)): ?>
+                <p class="description">
+                    Scanned posts: <?php echo esc_html((string) ($debug['managed_posts'] ?? 0)); ?>,
+                    posts with document links: <?php echo esc_html((string) ($debug['posts_with_document_links'] ?? 0)); ?>,
+                    accepted document references: <?php echo esc_html((string) ($debug['accepted_documents'] ?? 0)); ?>
+                </p>
+            <?php endif; ?>
             <hr class="wp-header-end">
 
-            <form method="get">
-                <input type="hidden" name="page" value="geweb-ai-search-referenced-documents">
-                <?php $table->display(); ?>
-            </form>
+            <div id="geweb-referenced-documents-container" data-needs-refresh="<?php echo $hasCache ? '0' : '1'; ?>">
+                <?php if ($hasCache): ?>
+                    <?php $this->renderReferencedDocumentsTable(); ?>
+                <?php else: ?>
+                    <p>Loading referenced documents for the first time. This can take a moment on larger sites.</p>
+                <?php endif; ?>
+            </div>
         </div>
         <?php
+    }
+
+    /**
+     * Render referenced documents table HTML.
+     *
+     * @return void
+     */
+    private function renderReferencedDocumentsTable(): void {
+        $table = new ReferencedDocumentListTable();
+        $table->prepare_items();
+        ?>
+        <form method="get">
+            <input type="hidden" name="page" value="geweb-ai-search-referenced-documents">
+            <?php $table->display(); ?>
+        </form>
+        <?php
+    }
+
+    /**
+     * AJAX: Refresh referenced documents cache and return rendered table.
+     *
+     * @return void
+     */
+    public function ajaxRefreshReferencedDocuments(): void {
+        check_ajax_referer('geweb_ai_search_admin_actions', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => 'Insufficient permissions'], 403);
+        }
+
+        $documentStore = new DocumentStore();
+        $items = $documentStore->getReferencedDocumentOverview(true);
+
+        ob_start();
+        $this->renderReferencedDocumentsTable();
+        $html = ob_get_clean();
+
+        wp_send_json_success([
+            'html' => $html,
+            'refreshed_at' => wp_date(get_option('date_format') . ' ' . get_option('time_format'), time()),
+            'count' => count($items),
+        ]);
     }
 
     /**
@@ -123,7 +189,8 @@ class WP {
             // Create store if doesn't exist or if forced
             $gemini = new Gemini();
             $gemini->clearModelsCache();
-            if (empty($gemini->getStoreData()) || isset($_POST['geweb_ai_search_create_store'])) {
+            $connectionStatus = $gemini->validateConnection();
+            if (($connectionStatus['status'] ?? '') === 'ok' && (empty($gemini->getStoreData()) || isset($_POST['geweb_ai_search_create_store']))) {
                 $gemini->createStore();
             }
         }
@@ -199,6 +266,7 @@ class WP {
         }
         $defaultModel = $gemini->getDefaultModel($models);
         $modelStatuses = $gemini->getModelStatuses();
+        $connectionStatus = get_option(self::OPTION_CONNECTION_STATUS, []);
         $customPrompt = get_option(self::OPTION_CUSTOM_PROMPT, '');
         $defaultPrompt = $gemini->getDefaultSystemInstruction();
         $effectivePrompt = $gemini->getSystemInstruction();
@@ -224,6 +292,26 @@ class WP {
                         <td>
                             <input type="password" id="geweb_api_key" name="geweb_api_key" placeholder="<?php echo esc_attr($storeEnabled ? 'API Key is set' : 'Enter API Key'); ?>" class="regular-text">
                             <p class="description">Get your API key from <a href="https://aistudio.google.com/app/api-keys" target="_blank">Google AI Studio</a></p>
+                            <?php if (is_array($connectionStatus) && !empty($connectionStatus['status'])): ?>
+                                <?php
+                                $apiStatus = (string) $connectionStatus['status'];
+                                $apiMessage = isset($connectionStatus['message']) ? (string) $connectionStatus['message'] : '';
+                                $apiTimestamp = !empty($connectionStatus['timestamp'])
+                                    ? wp_date(get_option('date_format') . ' ' . get_option('time_format'), intval($connectionStatus['timestamp']))
+                                    : '';
+                                $apiColor = $apiStatus === 'ok' ? '#46b450' : ($apiStatus === 'missing' ? '#646970' : '#d63638');
+                                $apiLabel = $apiStatus === 'ok' ? 'Valid' : ($apiStatus === 'missing' ? 'Missing' : 'Invalid');
+                                ?>
+                                <p class="description" style="color: <?php echo esc_attr($apiColor); ?>;">
+                                    <strong>API key status:</strong> <?php echo esc_html($apiLabel); ?>
+                                    <?php if ($apiTimestamp !== ''): ?>
+                                        at <?php echo esc_html($apiTimestamp); ?>
+                                    <?php endif; ?>
+                                    <?php if ($apiMessage !== ''): ?>
+                                        <br><small><?php echo esc_html($apiMessage); ?></small>
+                                    <?php endif; ?>
+                                </p>
+                            <?php endif; ?>
                         </td>
                     </tr>
 

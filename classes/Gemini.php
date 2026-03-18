@@ -30,6 +30,7 @@ class Gemini {
      */
     private const OPTION_MODEL = 'geweb_aisearch_model';
     private const OPTION_MODEL_STATUS = 'geweb_aisearch_model_status';
+    private const OPTION_CONNECTION_STATUS = 'geweb_aisearch_connection_status';
 
     /**
      * Option key for custom system instruction
@@ -486,6 +487,7 @@ class Gemini {
         $models = $this->getDefaultModels();
 
         if (empty($this->apiKey)) {
+            $this->recordConnectionStatus('missing', 'No API key saved.');
             return apply_filters('geweb_aisearch_gemini_models', $models);
         }
 
@@ -498,9 +500,12 @@ class Gemini {
             $remoteModels = $this->fetchUsableModels();
             if (!empty($remoteModels)) {
                 set_transient(self::TRANSIENT_MODELS, $remoteModels, 12 * HOUR_IN_SECONDS);
+                $this->recordConnectionStatus('ok', 'Gemini API key is valid.');
                 return apply_filters('geweb_aisearch_gemini_models', $remoteModels);
             }
-        } catch (\Exception $e) {}
+        } catch (\Exception $e) {
+            $this->recordConnectionStatus('failed', $e->getMessage());
+        }
 
         return apply_filters('geweb_aisearch_gemini_models', $models);
     }
@@ -566,12 +571,99 @@ class Gemini {
     }
 
     /**
+     * Get recorded API connection status.
+     *
+     * @return array<string,mixed>
+     */
+    public function getConnectionStatus(): array {
+        $status = get_option(self::OPTION_CONNECTION_STATUS, []);
+        return is_array($status) ? $status : [];
+    }
+
+    /**
+     * Validate the configured API key by fetching usable models.
+     *
+     * @return array<string,mixed>
+     */
+    public function validateConnection(): array {
+        if (empty($this->apiKey)) {
+            $result = [
+                'status' => 'missing',
+                'message' => 'No API key saved.',
+                'timestamp' => current_time('timestamp'),
+            ];
+            update_option(self::OPTION_CONNECTION_STATUS, $result);
+            return $result;
+        }
+
+        try {
+            $remoteModels = $this->fetchUsableModels();
+            $result = [
+                'status' => !empty($remoteModels) ? 'ok' : 'failed',
+                'message' => !empty($remoteModels) ? 'Gemini API key is valid.' : 'Gemini API returned no usable models.',
+                'timestamp' => current_time('timestamp'),
+            ];
+            update_option(self::OPTION_CONNECTION_STATUS, $result);
+            if (!empty($remoteModels)) {
+                set_transient(self::TRANSIENT_MODELS, $remoteModels, 12 * HOUR_IN_SECONDS);
+            }
+            return $result;
+        } catch (\Exception $e) {
+            $result = [
+                'status' => 'failed',
+                'message' => $this->sanitizeConnectionErrorMessage($e->getMessage()),
+                'timestamp' => current_time('timestamp'),
+            ];
+            update_option(self::OPTION_CONNECTION_STATUS, $result);
+            return $result;
+        }
+    }
+
+    /**
      * Clear cached Gemini models
      *
      * @return void
      */
     public function clearModelsCache(): void {
         delete_transient(self::TRANSIENT_MODELS);
+    }
+
+    /**
+     * Record API connection status.
+     *
+     * @param string $status
+     * @param string $message
+     * @return void
+     */
+    private function recordConnectionStatus(string $status, string $message = ''): void {
+        update_option(self::OPTION_CONNECTION_STATUS, [
+            'status' => $status,
+            'timestamp' => current_time('timestamp'),
+            'message' => $message,
+        ]);
+    }
+
+    /**
+     * Convert verbose API errors into concise admin-facing messages.
+     *
+     * @param string $message
+     * @return string
+     */
+    private function sanitizeConnectionErrorMessage(string $message): string {
+        $message = trim($message);
+        if ($message === '') {
+            return 'Could not validate the API key.';
+        }
+
+        if (stripos($message, 'API_KEY_INVALID') !== false || stripos($message, 'API key not valid') !== false) {
+            return 'The API key is invalid.';
+        }
+
+        if (preg_match('/HTTP code\s+(\d{3})/', $message, $matches)) {
+            return 'Gemini API request failed (HTTP ' . $matches[1] . ').';
+        }
+
+        return preg_replace('/\s+/', ' ', $message) ?: 'Could not validate the API key.';
     }
 
     /**

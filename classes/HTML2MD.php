@@ -50,6 +50,11 @@ class HTML2MD {
         $postTypes = get_option('geweb_aisearch_post_types', []);
         if ( !empty($postTypes) ) {
             foreach ($postTypes as $postType) {
+                if ($postType === 'attachment') {
+                    add_filter('manage_upload_columns', [$this, 'addIndexedColumn']);
+                    add_action('manage_media_custom_column', [$this, 'renderIndexedColumn'], 10, 2);
+                    continue;
+                }
                 add_filter("manage_{$postType}_posts_columns", [$this, 'addIndexedColumn']);
                 add_action("manage_{$postType}_posts_custom_column", [$this, 'renderIndexedColumn'], 10, 2);
             }
@@ -797,7 +802,7 @@ class HTML2MD {
         }
 
         $urls = [];
-        if (preg_match_all('/(?:href|src)\s*=\s*["\']([^"\']+)["\']/i', $content, $matches)) {
+        if (preg_match_all('/href\s*=\s*["\']([^"\']+)["\']/i', $content, $matches)) {
             $urls = isset($matches[1]) && is_array($matches[1]) ? $matches[1] : [];
         }
 
@@ -854,6 +859,13 @@ class HTML2MD {
         $filePath = wp_normalize_path(trailingslashit($baseDir) . $relativePath);
         $normalizedBaseDir = wp_normalize_path($baseDir);
         if (strpos($filePath, $normalizedBaseDir) !== 0 || !is_readable($filePath)) {
+            return null;
+        }
+
+        $fileType = wp_check_filetype(basename($filePath));
+        $extension = isset($fileType['ext']) ? (string) $fileType['ext'] : '';
+        $typeGroup = $extension !== '' ? wp_ext2type($extension) : false;
+        if (in_array($typeGroup, ['image', 'audio', 'video'], true)) {
             return null;
         }
 

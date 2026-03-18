@@ -414,4 +414,57 @@ jQuery(document).ready(function($) {
 						}
 				});
 		});
+
+		var isRefreshingReferencedDocuments = false;
+
+		function refreshReferencedDocuments() {
+				var $container = $('#geweb-referenced-documents-container');
+				var $button = $('#geweb-refresh-referenced-documents');
+				var $status = $('#geweb-referenced-documents-status');
+				if (!$container.length || !$button.length || isRefreshingReferencedDocuments) return;
+
+				isRefreshingReferencedDocuments = true;
+				$button.prop('disabled', true).text('Refreshing...');
+				$status.text('Loading referenced documents...');
+				$container.html('<p>Loading referenced documents...</p>');
+
+				$.ajax({
+						url: getAdminAjaxUrl(),
+						type: 'POST',
+						dataType: 'json',
+						data: {
+								action: 'geweb_refresh_referenced_documents',
+								nonce: gewebAisearchAdmin.adminActionNonce
+						}
+				}).done(function(response) {
+						if (!response || !response.success || !response.data || !response.data.html) {
+								$status.text('Could not refresh referenced documents.');
+								isRefreshingReferencedDocuments = false;
+								$button.prop('disabled', false).text('Refresh List');
+								return;
+						}
+
+						$container.html(response.data.html).attr('data-needs-refresh', '0');
+						var suffix = typeof response.data.count === 'number'
+								? ' (' + response.data.count + ' documents)'
+								: '';
+						$status.text('Last refreshed: ' + (response.data.refreshed_at || 'just now') + suffix);
+						isRefreshingReferencedDocuments = false;
+						$button.prop('disabled', false).text('Refresh List');
+				}).fail(function() {
+						$status.text('Could not refresh referenced documents.');
+						$container.html('<p>Could not load referenced documents.</p>');
+						isRefreshingReferencedDocuments = false;
+						$button.prop('disabled', false).text('Refresh List');
+				});
+		}
+
+		$('#geweb-refresh-referenced-documents').on('click', function() {
+				refreshReferencedDocuments();
+		});
+
+		if ($('#geweb-referenced-documents-container').attr('data-needs-refresh') === '1') {
+				$('#geweb-refresh-referenced-documents').prop('disabled', true).text('Refreshing...');
+				refreshReferencedDocuments();
+		}
 	});
