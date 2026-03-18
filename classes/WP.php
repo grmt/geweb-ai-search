@@ -36,6 +36,7 @@ class WP {
         add_action('wp_ajax_geweb_clear_prompt_history', [$this, 'ajaxClearPromptHistory']);
         add_action('wp_ajax_geweb_delete_prompt_history_item', [$this, 'ajaxDeletePromptHistoryItem']);
         add_action('wp_ajax_geweb_refresh_referenced_documents', [$this, 'ajaxRefreshReferencedDocuments']);
+        add_action('wp_ajax_geweb_refresh_gemini_stores', [$this, 'ajaxRefreshGeminiStores']);
 
         add_action('wp_ajax_geweb_get_nonce', [$this, 'ajaxGetNonce']);
         add_action('wp_ajax_nopriv_geweb_get_nonce', [$this, 'ajaxGetNonce']);
@@ -80,6 +81,15 @@ class WP {
             'manage_options',
             'geweb-ai-search-referenced-documents',
             [$this, 'renderReferencedDocumentListPage']
+        );
+
+        add_submenu_page(
+            'geweb-ai-search',
+            'Gemini Stores',
+            'Gemini Stores',
+            'manage_options',
+            'geweb-ai-search-gemini-stores',
+            [$this, 'renderGeminiStoresPage']
         );
     }
 
@@ -128,6 +138,46 @@ class WP {
     }
 
     /**
+     * Render Gemini stores overview page.
+     *
+     * @return void
+     */
+    public function renderGeminiStoresPage(): void {
+        $gemini = new Gemini();
+        $hasCache = $gemini->hasStoreOverviewCache();
+        $cacheTime = $gemini->getStoreOverviewCacheTime();
+        $error = $gemini->getStoreOverviewError();
+        ?>
+        <div class="wrap">
+            <h1 class="wp-heading-inline">Gemini Stores</h1>
+            <p>This page shows all Gemini File Search Stores visible to the configured API key, marks the one used by this plugin, and helps spot likely orphaned stores.</p>
+            <p>
+                <button type="button" class="button" id="geweb-refresh-gemini-stores" <?php disabled(!$hasCache); ?>>Refresh List</button>
+                <span id="geweb-gemini-stores-status" style="margin-left:10px; color:#646970;">
+                    <?php if ($cacheTime > 0): ?>
+                        Last refreshed: <?php echo esc_html(wp_date(get_option('date_format') . ' ' . get_option('time_format'), $cacheTime)); ?>
+                    <?php else: ?>
+                        Loading Gemini stores...
+                    <?php endif; ?>
+                </span>
+            </p>
+            <?php if ($error !== ''): ?>
+                <p class="description" style="color:#d63638;"><?php echo esc_html($error); ?></p>
+            <?php endif; ?>
+            <hr class="wp-header-end">
+
+            <div id="geweb-gemini-stores-container" data-needs-refresh="<?php echo $hasCache ? '0' : '1'; ?>">
+                <?php if ($hasCache): ?>
+                    <?php $this->renderGeminiStoresTable(); ?>
+                <?php else: ?>
+                    <p>Loading Gemini stores for the first time. This can take a moment if multiple stores need to be checked.</p>
+                <?php endif; ?>
+            </div>
+        </div>
+        <?php
+    }
+
+    /**
      * Render referenced documents table HTML.
      *
      * @return void
@@ -138,6 +188,22 @@ class WP {
         ?>
         <form method="get">
             <input type="hidden" name="page" value="geweb-ai-search-referenced-documents">
+            <?php $table->display(); ?>
+        </form>
+        <?php
+    }
+
+    /**
+     * Render Gemini stores table HTML.
+     *
+     * @return void
+     */
+    private function renderGeminiStoresTable(): void {
+        $table = new GeminiStoreListTable();
+        $table->prepare_items();
+        ?>
+        <form method="get">
+            <input type="hidden" name="page" value="geweb-ai-search-gemini-stores">
             <?php $table->display(); ?>
         </form>
         <?php
@@ -166,6 +232,33 @@ class WP {
             'html' => $html,
             'refreshed_at' => wp_date(get_option('date_format') . ' ' . get_option('time_format'), time()),
             'count' => count($items),
+        ]);
+    }
+
+    /**
+     * AJAX: Refresh Gemini store cache and return rendered table.
+     *
+     * @return void
+     */
+    public function ajaxRefreshGeminiStores(): void {
+        check_ajax_referer('geweb_ai_search_admin_actions', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => 'Insufficient permissions'], 403);
+        }
+
+        $gemini = new Gemini();
+        $items = $gemini->getStoreOverview(true);
+
+        ob_start();
+        $this->renderGeminiStoresTable();
+        $html = ob_get_clean();
+
+        wp_send_json_success([
+            'html' => $html,
+            'refreshed_at' => wp_date(get_option('date_format') . ' ' . get_option('time_format'), time()),
+            'count' => count($items),
+            'error' => $gemini->getStoreOverviewError(),
         ]);
     }
 

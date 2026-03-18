@@ -416,6 +416,7 @@ jQuery(document).ready(function($) {
 		});
 
 		var isRefreshingReferencedDocuments = false;
+		var isRefreshingGeminiStores = false;
 
 		function refreshReferencedDocuments() {
 				var $container = $('#geweb-referenced-documents-container');
@@ -466,5 +467,59 @@ jQuery(document).ready(function($) {
 		if ($('#geweb-referenced-documents-container').attr('data-needs-refresh') === '1') {
 				$('#geweb-refresh-referenced-documents').prop('disabled', true).text('Refreshing...');
 				refreshReferencedDocuments();
+		}
+
+		function refreshGeminiStores() {
+				var $container = $('#geweb-gemini-stores-container');
+				var $button = $('#geweb-refresh-gemini-stores');
+				var $status = $('#geweb-gemini-stores-status');
+				if (!$container.length || !$button.length || isRefreshingGeminiStores) return;
+
+				isRefreshingGeminiStores = true;
+				$button.prop('disabled', true).text('Refreshing...');
+				$status.text('Loading Gemini stores...');
+				$container.html('<p>Loading Gemini stores...</p>');
+
+				$.ajax({
+						url: getAdminAjaxUrl(),
+						type: 'POST',
+						dataType: 'json',
+						data: {
+								action: 'geweb_refresh_gemini_stores',
+								nonce: gewebAisearchAdmin.adminActionNonce
+						}
+				}).done(function(response) {
+						if (!response || !response.success || !response.data || !response.data.html) {
+								$status.text('Could not refresh Gemini stores.');
+								isRefreshingGeminiStores = false;
+								$button.prop('disabled', false).text('Refresh List');
+								return;
+						}
+
+						$container.html(response.data.html).attr('data-needs-refresh', '0');
+						var suffix = typeof response.data.count === 'number'
+								? ' (' + response.data.count + ' stores)'
+								: '';
+						$status.text('Last refreshed: ' + (response.data.refreshed_at || 'just now') + suffix);
+						if (response.data.error) {
+								$container.prepend('<p class="description" style="color:#d63638;">' + $('<div>').text(response.data.error).html() + '</p>');
+						}
+						isRefreshingGeminiStores = false;
+						$button.prop('disabled', false).text('Refresh List');
+				}).fail(function() {
+						$status.text('Could not refresh Gemini stores.');
+						$container.html('<p>Could not load Gemini stores.</p>');
+						isRefreshingGeminiStores = false;
+						$button.prop('disabled', false).text('Refresh List');
+				});
+		}
+
+		$('#geweb-refresh-gemini-stores').on('click', function() {
+				refreshGeminiStores();
+		});
+
+		if ($('#geweb-gemini-stores-container').attr('data-needs-refresh') === '1') {
+				$('#geweb-refresh-gemini-stores').prop('disabled', true).text('Refreshing...');
+				refreshGeminiStores();
 		}
 	});

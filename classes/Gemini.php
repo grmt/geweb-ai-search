@@ -31,6 +31,9 @@ class Gemini {
     private const OPTION_MODEL = 'geweb_aisearch_model';
     private const OPTION_MODEL_STATUS = 'geweb_aisearch_model_status';
     private const OPTION_CONNECTION_STATUS = 'geweb_aisearch_connection_status';
+    private const OPTION_STORES_CACHE = 'geweb_aisearch_gemini_stores_cache';
+    private const OPTION_STORES_CACHE_TIME = 'geweb_aisearch_gemini_stores_cache_time';
+    private const OPTION_STORES_CACHE_ERROR = 'geweb_aisearch_gemini_stores_cache_error';
 
     /**
      * Option key for custom system instruction
@@ -98,6 +101,7 @@ class Gemini {
             $result = $this->makeRequest($url, $body, 'POST');
             if (!empty($result['name']) && update_option(self::OPTION_STORE, $result['name'])) {
                 $newStore = (string) $result['name'];
+                $this->clearStoresCache();
                 if ($previousStore !== '' && $previousStore !== $newStore) {
                     try {
                         $this->deleteStoreByName($previousStore);
@@ -132,6 +136,63 @@ class Gemini {
 
         $this->deleteStoreByName($storeName);
         delete_option(self::OPTION_STORE);
+        $this->clearStoresCache();
+    }
+
+    /**
+     * Get a cached overview of all Gemini File Search Stores.
+     *
+     * @param bool $forceRefresh
+     * @return array<int,array<string,mixed>>
+     */
+    public function getStoreOverview(bool $forceRefresh = false): array {
+        if (!$forceRefresh) {
+            $cached = get_option(self::OPTION_STORES_CACHE, null);
+            if (is_array($cached)) {
+                return $cached;
+            }
+        }
+
+        try {
+            $items = $this->buildStoreOverview();
+            update_option(self::OPTION_STORES_CACHE, $items, false);
+            update_option(self::OPTION_STORES_CACHE_TIME, (string) time(), false);
+            delete_option(self::OPTION_STORES_CACHE_ERROR);
+            return $items;
+        } catch (\Exception $e) {
+            update_option(self::OPTION_STORES_CACHE_ERROR, $this->sanitizeConnectionErrorMessage($e->getMessage()), false);
+            return [];
+        }
+    }
+
+    /**
+     * @return bool
+     */
+    public function hasStoreOverviewCache(): bool {
+        return is_array(get_option(self::OPTION_STORES_CACHE, null));
+    }
+
+    /**
+     * @return int
+     */
+    public function getStoreOverviewCacheTime(): int {
+        return (int) get_option(self::OPTION_STORES_CACHE_TIME, 0);
+    }
+
+    /**
+     * @return string
+     */
+    public function getStoreOverviewError(): string {
+        return (string) get_option(self::OPTION_STORES_CACHE_ERROR, '');
+    }
+
+    /**
+     * @return void
+     */
+    public function clearStoresCache(): void {
+        delete_option(self::OPTION_STORES_CACHE);
+        delete_option(self::OPTION_STORES_CACHE_TIME);
+        delete_option(self::OPTION_STORES_CACHE_ERROR);
     }
 
     /**
@@ -291,6 +352,120 @@ class Gemini {
         if ($httpCode < 200 || $httpCode >= 300) {
             throw new \Exception(esc_html('Delete store failed with HTTP code ' . $httpCode));
         }
+
+        $this->clearStoresCache();
+    }
+
+    /**
+     * Build a live overview of Gemini File Search Stores.
+     *
+     * @return array<int,array<string,mixed>>
+     * @throws \Exception
+     */
+    private function buildStoreOverview(): array {
+        $stores = $this->listStores();
+        $activeStore = $this->getStoreData();
+        $items = [];
+
+        foreach ($stores as $store) {
+            if (!is_array($store)) {
+                continue;
+            }
+
+            $name = isset($store['name']) ? (string) $store['name'] : '';
+            if ($name === '') {
+                continue;
+            }
+
+            $displayName = '';
+            if (!empty($store['displayName'])) {
+                $displayName = (string) $store['displayName'];
+            } elseif (!empty($store['display_name'])) {
+                $displayName = (string) $store['display_name'];
+            }
+
+            $status = $name === $activeStore ? 'Active in plugin' : 'Likely orphaned';
+            $statusColor = $name === $activeStore ? '#46b450' : '#996800';
+
+            $items[] = [
+                'name' => $name,
+                'display_name' => $displayName,
+                'status' => $status,
+                'status_color' => $statusColor,
+                'document_count' => $this->countStoreDocuments($name),
+            ];
+        }
+
+        usort($items, static function (array $left, array $right): int {
+            if ((string) ($left['status'] ?? '') !== (string) ($right['status'] ?? '')) {
+                return ((string) ($left['status'] ?? '')) === 'Active in plugin' ? -1 : 1;
+            }
+
+            return strcasecmp((string) ($left['display_name'] ?: $left['name']), (string) ($right['display_name'] ?: $right['name']));
+        });
+
+        return $items;
+    }
+
+    /**
+     * List all Gemini File Search Stores for the configured API key.
+     *
+     * @return array<int,array<string,mixed>>
+     * @throws \Exception
+     */
+    private function listStores(): array {
+        $stores = [];
+        $pageToken = '';
+
+        do {
+            $url = self::API_BASE . '/fileSearchStores';
+            if ($pageToken !== '') {
+                $url .= '?pageToken=' . rawurlencode($pageToken);
+            }
+
+            $result = $this->makeRequest($url, null, 'GET');
+            $pageStores = $result['fileSearchStores'] ?? $result['file_search_stores'] ?? [];
+            if (is_array($pageStores)) {
+                foreach ($pageStores as $store) {
+                    if (is_array($store)) {
+                        $stores[] = $store;
+                    }
+                }
+            }
+
+            $pageToken = isset($result['nextPageToken']) ? (string) $result['nextPageToken'] : '';
+        } while ($pageToken !== '');
+
+        return $stores;
+    }
+
+    /**
+     * Count documents in a specific Gemini File Search Store.
+     *
+     * @param string $storeName
+     * @return int
+     * @throws \Exception
+     */
+    private function countStoreDocuments(string $storeName): int {
+        $count = 0;
+        $pageToken = '';
+
+        do {
+            $url = self::API_BASE . '/' . ltrim($storeName, '/') . '/documents?pageSize=100';
+            if ($pageToken !== '') {
+                $url .= '&pageToken=' . rawurlencode($pageToken);
+            }
+
+            $result = $this->makeRequest($url, null, 'GET');
+            $documents = $result['documents'] ?? [];
+            if (is_array($documents)) {
+                $count += count($documents);
+            }
+
+            $pageToken = isset($result['nextPageToken']) ? (string) $result['nextPageToken'] : '';
+        } while ($pageToken !== '');
+
+        return $count;
     }
 
     /**
