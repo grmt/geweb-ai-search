@@ -5,7 +5,7 @@
 ![WordPress](https://img.shields.io/badge/WordPress-6.0%2B-blue?logo=wordpress)
 ![PHP](https://img.shields.io/badge/PHP-7.2%2B-777BB4?logo=php)
 ![License](https://img.shields.io/badge/License-GPLv2-green)
-![Version](https://img.shields.io/badge/Version-2.1.3-orange)
+![Version](https://img.shields.io/badge/Version-2.1.4.1-orange)
 
 ---
 
