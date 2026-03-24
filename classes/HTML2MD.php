@@ -385,7 +385,7 @@ class HTML2MD {
         }
 
         try {
-            $gemini = new Gemini();
+            $gemini = ProviderFactory::make();
             $gemini->deleteDocument($documentName);
         } catch (\Exception $e) {}
 
@@ -683,7 +683,7 @@ class HTML2MD {
 
         try {
             $this->deleteDocumentForPost($postId);
-            $gemini = new Gemini();
+            $gemini = ProviderFactory::make();
             $documentName = $gemini->uploadDocument($markdown, $postId);
             update_post_meta($postId, self::META_DOCUMENT_NAME, $documentName);
             if ($this->shouldUploadReferencedDocuments()) {
@@ -801,19 +801,41 @@ class HTML2MD {
             return [];
         }
 
-        $urls = [];
-        if (preg_match_all('/href\s*=\s*["\']([^"\']+)["\']/i', $content, $matches)) {
-            $urls = isset($matches[1]) && is_array($matches[1]) ? $matches[1] : [];
+        $entries = [];
+        if (preg_match_all('/<a\b[^>]*href\s*=\s*["\']([^"\']+)["\'][^>]*>(.*?)<\/a>/is', $content, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $match) {
+                $url = isset($match[1]) ? (string) $match[1] : '';
+                $resolved = self::resolveReferencedLocalFilePathFromUrl($url);
+                if ($resolved === null) {
+                    continue;
+                }
+
+                $labelHtml = isset($match[2]) ? (string) $match[2] : '';
+                $label = trim(wp_strip_all_tags(html_entity_decode($labelHtml, ENT_QUOTES | ENT_HTML5, get_bloginfo('charset'))));
+                if ($label !== '') {
+                    $resolved['display_name'] = $label;
+                }
+
+                $entries[$resolved['file_path']] = $resolved;
+            }
         }
 
-        $entries = [];
-        foreach ($urls as $url) {
-            $resolved = self::resolveReferencedLocalFilePathFromUrl($url);
-            if ($resolved === null) {
-                continue;
-            }
+        if (empty($entries) && preg_match_all('/href\s*=\s*["\']([^"\']+)["\']/i', $content, $matches)) {
+            $urls = isset($matches[1]) && is_array($matches[1]) ? $matches[1] : [];
+            foreach ($urls as $url) {
+                $resolved = self::resolveReferencedLocalFilePathFromUrl($url);
+                if ($resolved === null) {
+                    continue;
+                }
 
-            $entries[$resolved['file_path']] = $resolved;
+                $entries[$resolved['file_path']] = $resolved;
+            }
+        }
+
+        foreach ($entries as $filePath => $entry) {
+            if (empty($entry['display_name'])) {
+                $entries[$filePath]['display_name'] = basename((string) $filePath);
+            }
         }
 
         return array_values($entries);

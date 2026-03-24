@@ -12,18 +12,26 @@ if (get_option('geweb_aisearch_preserve_data_on_uninstall', '0') === '1') {
 }
 
 $encryptionFile = __DIR__ . '/classes/Encryption.php';
+$providerInterfaceFile = __DIR__ . '/classes/AIProviderInterface.php';
+$providerFactoryFile = __DIR__ . '/classes/ProviderFactory.php';
 $geminiFile = __DIR__ . '/classes/Gemini.php';
 if (file_exists($encryptionFile)) {
     require_once $encryptionFile;
+}
+if (file_exists($providerInterfaceFile)) {
+    require_once $providerInterfaceFile;
+}
+if (file_exists($providerFactoryFile)) {
+    require_once $providerFactoryFile;
 }
 if (file_exists($geminiFile)) {
     require_once $geminiFile;
 }
 
-if (class_exists('\\Geweb\\AISearch\\Gemini')) {
+if (class_exists('\\Geweb\\AISearch\\ProviderFactory')) {
     try {
-        $gemini = new \Geweb\AISearch\Gemini();
-        $gemini->deleteStore();
+        $provider = \Geweb\AISearch\ProviderFactory::make();
+        $provider->deleteStore();
     } catch (\Exception $e) {
         // Ignore remote deletion failures during uninstall cleanup.
     }
@@ -40,6 +48,7 @@ $wpdb->query("DROP TABLE IF EXISTS {$documentsTable}");
 delete_option('geweb_aisearch_model');
 delete_option('geweb_aisearch_model_status');
 delete_option('geweb_aisearch_post_types');
+delete_option('geweb_aisearch_provider');
 delete_option('geweb_aisearch_gemini_store');
 delete_option('geweb_aisearch_custom_prompt');
 delete_option('geweb_aisearch_prompt_history');

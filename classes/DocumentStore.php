@@ -10,6 +10,8 @@ class DocumentStore {
     private const OPTION_REFERENCED_CACHE = 'geweb_aisearch_referenced_documents_cache';
     private const OPTION_REFERENCED_CACHE_TIME = 'geweb_aisearch_referenced_documents_cache_time';
     private const OPTION_REFERENCED_CACHE_DEBUG = 'geweb_aisearch_referenced_documents_cache_debug';
+    private const OPTION_REFERENCED_SELECTION_TARGETS = 'geweb_aisearch_referenced_document_selection_targets';
+    private const OPTION_CONNECTION_STATUS = 'geweb_aisearch_connection_status';
     private static $documentsTable;
     private static $refsTable;
 
@@ -86,7 +88,7 @@ class DocumentStore {
                 return null;
             }
 
-            $gemini = new Gemini();
+            $gemini = ProviderFactory::make();
             $displayName = $postId . '-' . basename($filePath);
             $geminiDocName = $gemini->uploadLocalFile($filePath, $displayName, $mimeType);
 
@@ -190,10 +192,9 @@ class DocumentStore {
         self::init();
 
         $uploadsEnabled = get_option('geweb_aisearch_include_referenced_documents', '0') === '1';
-        $postTypes = get_option('geweb_aisearch_post_types', []);
-        if (!is_array($postTypes) || empty($postTypes)) {
-            return [];
-        }
+        $postTypes = $this->getPostTypesForReferencedDocumentOverview();
+        $connectionStatus = get_option(self::OPTION_CONNECTION_STATUS, []);
+        $connectionState = is_array($connectionStatus) ? (string) ($connectionStatus['status'] ?? '') : '';
 
         $uploadedByHash = [];
         foreach ($this->getAllDocuments() as $document) {
@@ -212,21 +213,20 @@ class DocumentStore {
             'managed_posts' => is_array($posts) ? count($posts) : 0,
             'posts_with_document_links' => 0,
             'accepted_documents' => 0,
+            'using_all_public_post_types' => (int) ($this->isUsingFallbackPostTypes() ? 1 : 0),
         ];
 
         $overview = [];
-        $hasSimpleFileList = false;
         foreach ($posts as $post) {
             if (!$post instanceof \WP_Post) {
                 continue;
             }
 
             $isSimpleFileListPage = $this->isSimpleFileListPage($post);
-            if ($isSimpleFileListPage) {
-                $hasSimpleFileList = true;
-            }
-
             $references = HTML2MD::getReferencedAttachmentEntriesForPost($post->ID);
+            if ($isSimpleFileListPage) {
+                $references = $this->expandSimpleFileListReferences($references);
+            }
             if (!empty($references)) {
                 $debug['posts_with_document_links']++;
             }
@@ -253,39 +253,53 @@ class DocumentStore {
                         $status = 'Uploaded';
                         $color = '#46b450';
                         $lastUploaded = isset($uploaded['last_uploaded']) ? (int) $uploaded['last_uploaded'] : 0;
+                    } elseif ($uploadsEnabled && $connectionState === 'failed') {
+                        $status = 'Detected, not uploaded';
+                        $color = '#d63638';
                     } elseif (!$uploadsEnabled) {
                         $status = 'Uploads disabled';
                         $color = '#646970';
                     }
 
                     $overview[$hash] = [
+                        'file_hash' => $hash,
                         'display_name' => basename($filePath),
+                        'nice_name' => $this->resolveOverviewDisplayName($reference, $filePath),
                         'status' => $status,
                         'status_color' => $color,
                         'mime_type' => $this->resolveMimeType($filePath),
                         'last_uploaded' => $lastUploaded,
                         'file_url' => $fileUrl,
+                        'file_path' => $filePath,
+                        'document_id' => is_array($uploaded) && isset($uploaded['id']) ? (int) $uploaded['id'] : 0,
+                        'gemini_doc_name' => is_array($uploaded) && isset($uploaded['gemini_doc_name']) ? (string) $uploaded['gemini_doc_name'] : '',
                         'reference_count' => 0,
                         'external_reference_count' => 0,
                         'managed_by_simple_file_list' => false,
                         'posts' => [],
                     ];
+                } elseif (empty($overview[$hash]['nice_name']) || $overview[$hash]['nice_name'] === basename($filePath)) {
+                    $overview[$hash]['nice_name'] = $this->resolveOverviewDisplayName($reference, $filePath);
                 }
 
-                $overview[$hash]['posts'][$post->ID] = [
-                    'id' => $post->ID,
-                    'title' => get_the_title($post->ID),
-                    'edit_url' => (string) get_edit_post_link($post->ID),
-                ];
                 if ($isSimpleFileListPage) {
                     $overview[$hash]['managed_by_simple_file_list'] = true;
                 } else {
+                    $overview[$hash]['posts'][$post->ID] = [
+                        'id' => $post->ID,
+                        'title' => get_the_title($post->ID),
+                        'edit_url' => (string) get_edit_post_link($post->ID),
+                    ];
                     $overview[$hash]['external_reference_count'] = (int) $overview[$hash]['external_reference_count'] + 1;
                 }
             }
         }
 
-        $items = array_values(array_map(static function (array $item): array {
+        $this->mergeSimpleFileListOptionEntries($overview, $uploadedByHash, $uploadsEnabled, $connectionState);
+
+        $selectionTargets = $this->getReferencedDocumentSelectionTargets();
+
+        $items = array_values(array_map(function (array $item) use ($selectionTargets): array {
             $item['posts'] = array_values($item['posts']);
             $item['reference_count'] = count($item['posts']);
             if (!empty($item['managed_by_simple_file_list'])) {
@@ -302,6 +316,15 @@ class DocumentStore {
                     $item['status_color'] = '#46b450';
                 }
             }
+
+            $fileHash = (string) ($item['file_hash'] ?? '');
+            $defaultTarget = $this->getDefaultReferencedDocumentTarget($item);
+            $includeTarget = array_key_exists($fileHash, $selectionTargets)
+                ? (bool) $selectionTargets[$fileHash]
+                : $defaultTarget;
+
+            $item['include_in_store_target'] = $includeTarget;
+            $item['default_include_in_store_target'] = $defaultTarget;
             return $item;
         }, $overview));
 
@@ -311,23 +334,22 @@ class DocumentStore {
             }
 
             $items[] = [
+                'file_hash' => (string) $hash,
                 'display_name' => isset($document['display_name']) ? (string) $document['display_name'] : 'Unknown document',
+                'nice_name' => isset($document['display_name']) ? (string) $document['display_name'] : '',
                 'status' => 'Uploaded, not referenced',
                 'status_color' => '#d63638',
                 'mime_type' => '',
                 'last_uploaded' => isset($document['last_uploaded']) ? (int) $document['last_uploaded'] : 0,
                 'file_url' => '',
+                'file_path' => '',
+                'document_id' => isset($document['id']) ? (int) $document['id'] : 0,
+                'gemini_doc_name' => isset($document['gemini_doc_name']) ? (string) $document['gemini_doc_name'] : '',
                 'reference_count' => 0,
                 'external_reference_count' => 0,
                 'managed_by_simple_file_list' => false,
                 'posts' => [],
             ];
-        }
-
-        if ($hasSimpleFileList) {
-            $items = array_values(array_filter($items, static function (array $item): bool {
-                return !empty($item['managed_by_simple_file_list']) || (isset($item['status']) && (string) $item['status'] === 'Uploaded, not referenced');
-            }));
         }
 
         usort($items, static function (array $left, array $right): int {
@@ -337,6 +359,30 @@ class DocumentStore {
         update_option(self::OPTION_REFERENCED_CACHE_DEBUG, $debug, false);
 
         return $items;
+    }
+
+    /**
+     * Resolve which post types should be scanned for referenced documents.
+     *
+     * @return array<int,string>
+     */
+    private function getPostTypesForReferencedDocumentOverview(): array {
+        $postTypes = get_option('geweb_aisearch_post_types', []);
+        if (is_array($postTypes) && !empty($postTypes)) {
+            return array_values(array_filter(array_map('sanitize_key', $postTypes), static function ($postType): bool {
+                return is_string($postType) && $postType !== '';
+            }));
+        }
+
+        return array_values(get_post_types(['public' => true], 'names'));
+    }
+
+    /**
+     * @return bool
+     */
+    private function isUsingFallbackPostTypes(): bool {
+        $postTypes = get_option('geweb_aisearch_post_types', []);
+        return !is_array($postTypes) || empty($postTypes);
     }
 
     /**
@@ -351,6 +397,641 @@ class DocumentStore {
         }
 
         return has_shortcode((string) $post->post_content, 'eeSFL');
+    }
+
+    /**
+     * Expand Simple File List references to include additional files in the same list folder.
+     *
+     * @param array<int,array<string,string>> $references
+     * @return array<int,array<string,string>>
+     */
+    private function expandSimpleFileListReferences(array $references): array {
+        $expanded = [];
+        $directories = [];
+
+        foreach ($references as $reference) {
+            if (!is_array($reference)) {
+                continue;
+            }
+
+            $filePath = isset($reference['file_path']) ? (string) $reference['file_path'] : '';
+            $fileUrl = isset($reference['file_url']) ? (string) $reference['file_url'] : '';
+            if ($filePath === '' || $fileUrl === '' || !is_readable($filePath)) {
+                continue;
+            }
+
+            $expanded[$filePath] = $reference;
+            $directory = wp_normalize_path((string) dirname($filePath));
+            if ($directory !== '') {
+                $directories[$directory] = [
+                    'dir_url' => untrailingslashit((string) dirname($fileUrl)),
+                ];
+            }
+        }
+
+        $niceNameMap = $this->getSimpleFileListNiceNameMap(array_keys($directories));
+
+        foreach ($expanded as $filePath => $reference) {
+            if (isset($niceNameMap[$filePath]) && $niceNameMap[$filePath] !== '') {
+                $expanded[$filePath]['display_name'] = $niceNameMap[$filePath];
+            }
+        }
+
+        foreach ($directories as $directory => $data) {
+            foreach ($this->getSupportedFilesInDirectory($directory) as $filePath) {
+                $baseName = basename($filePath);
+                $dirUrl = isset($data['dir_url']) ? (string) $data['dir_url'] : '';
+                $fileUrl = $dirUrl !== '' ? $dirUrl . '/' . rawurlencode($baseName) : '';
+                if ($fileUrl === '') {
+                    continue;
+                }
+
+                $niceName = $niceNameMap[$filePath] ?? $this->prettifyFileName($baseName);
+                if (isset($expanded[$filePath])) {
+                    if ($niceName !== '') {
+                        $expanded[$filePath]['display_name'] = $niceName;
+                    }
+                    continue;
+                }
+
+                $expanded[$filePath] = [
+                    'file_path' => $filePath,
+                    'file_url' => $fileUrl,
+                    'display_name' => $niceName,
+                ];
+            }
+        }
+
+        return array_values($expanded);
+    }
+
+    /**
+     * Merge Simple File List database entries so SFL-only files appear even without website references.
+     *
+     * @param array<string,array<string,mixed>> $overview
+     * @param array<string,array<string,mixed>> $uploadedByHash
+     * @param bool $uploadsEnabled
+     * @param string $connectionState
+     * @return void
+     */
+    private function mergeSimpleFileListOptionEntries(array &$overview, array $uploadedByHash, bool $uploadsEnabled, string $connectionState): void {
+        foreach ($this->getSimpleFileListEntries() as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $filePath = isset($entry['file_path']) ? (string) $entry['file_path'] : '';
+            $fileUrl = isset($entry['file_url']) ? (string) $entry['file_url'] : '';
+            if ($filePath === '' || $fileUrl === '' || !is_readable($filePath)) {
+                continue;
+            }
+
+            $hash = hash_file('sha256', $filePath);
+            if (!$hash) {
+                continue;
+            }
+
+            $displayName = isset($entry['display_name']) ? trim((string) $entry['display_name']) : basename($filePath);
+            if (isset($overview[$hash])) {
+                $overview[$hash]['managed_by_simple_file_list'] = true;
+                if ($displayName !== '' && (empty($overview[$hash]['nice_name']) || $overview[$hash]['nice_name'] === basename($filePath))) {
+                    $overview[$hash]['nice_name'] = $displayName;
+                }
+                continue;
+            }
+
+            $uploaded = $uploadedByHash[$hash] ?? null;
+            $status = 'Detected, not uploaded';
+            $color = '#996800';
+            $lastUploaded = 0;
+
+            if (is_array($uploaded)) {
+                $status = 'Uploaded';
+                $color = '#46b450';
+                $lastUploaded = isset($uploaded['last_uploaded']) ? (int) $uploaded['last_uploaded'] : 0;
+            } elseif ($uploadsEnabled && $connectionState === 'failed') {
+                $status = 'Detected, not uploaded';
+                $color = '#d63638';
+            } elseif (!$uploadsEnabled) {
+                $status = 'Uploads disabled';
+                $color = '#646970';
+            }
+
+            $overview[$hash] = [
+                'file_hash' => $hash,
+                'display_name' => basename($filePath),
+                'nice_name' => $displayName,
+                'status' => $status,
+                'status_color' => $color,
+                'mime_type' => $this->resolveMimeType($filePath),
+                'last_uploaded' => $lastUploaded,
+                'file_url' => $fileUrl,
+                'file_path' => $filePath,
+                'document_id' => is_array($uploaded) && isset($uploaded['id']) ? (int) $uploaded['id'] : 0,
+                'gemini_doc_name' => is_array($uploaded) && isset($uploaded['gemini_doc_name']) ? (string) $uploaded['gemini_doc_name'] : '',
+                'reference_count' => 0,
+                'external_reference_count' => 0,
+                'managed_by_simple_file_list' => true,
+                'posts' => [],
+            ];
+        }
+    }
+
+    /**
+     * Read Simple File List file entries directly from eeSFL_FileList_* options.
+     *
+     * @return array<int,array<string,string>>
+     */
+    private function getSimpleFileListEntries(): array {
+        global $wpdb;
+
+        $rows = $wpdb->get_results(
+            "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE 'eeSFL\\_FileList\\_%'",
+            ARRAY_A
+        );
+        if (!is_array($rows)) {
+            error_log('geweb-ai-search: SFL entry lookup found no eeSFL_FileList_* option rows.');
+            return [];
+        }
+
+        $entries = [];
+        foreach ($rows as $row) {
+            if (!is_array($row) || !isset($row['option_value'])) {
+                continue;
+            }
+
+            $optionName = isset($row['option_name']) ? (string) $row['option_name'] : 'unknown-option';
+            $value = maybe_unserialize($row['option_value']);
+            if (!is_array($value)) {
+                error_log('geweb-ai-search: SFL option ' . $optionName . ' did not unserialize to an array.');
+                continue;
+            }
+
+            foreach ($value as $record) {
+                if (!is_array($record)) {
+                    continue;
+                }
+
+                $filePathValue = isset($record['FilePath']) ? trim((string) $record['FilePath']) : '';
+                if ($filePathValue === '') {
+                    continue;
+                }
+
+                $resolved = $this->resolveSimpleFileListRecordPath($filePathValue);
+                if ($resolved === null) {
+                    continue;
+                }
+
+                $entries[$resolved['file_path']] = [
+                    'file_path' => $resolved['file_path'],
+                    'file_url' => $resolved['file_url'],
+                    'display_name' => isset($record['FileNiceName']) && trim((string) $record['FileNiceName']) !== ''
+                        ? trim((string) $record['FileNiceName'])
+                        : $this->prettifyFileName(basename($resolved['file_path'])),
+                ];
+            }
+        }
+
+        error_log('geweb-ai-search: SFL entry lookup resolved ' . count($entries) . ' file(s).');
+
+        return array_values($entries);
+    }
+
+    /**
+     * @param string $directory
+     * @return array<int,string>
+     */
+    private function getSupportedFilesInDirectory(string $directory): array {
+        if ($directory === '' || !is_dir($directory) || !is_readable($directory)) {
+            return [];
+        }
+
+        $files = [];
+        $entries = @scandir($directory);
+        if (!is_array($entries)) {
+            return [];
+        }
+
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+
+            $filePath = wp_normalize_path(trailingslashit($directory) . $entry);
+            if (!is_file($filePath) || !is_readable($filePath)) {
+                continue;
+            }
+
+            $fileType = wp_check_filetype($entry);
+            $extension = isset($fileType['ext']) ? (string) $fileType['ext'] : '';
+            $typeGroup = $extension !== '' ? wp_ext2type($extension) : false;
+            if (in_array($typeGroup, ['image', 'audio', 'video'], true)) {
+                continue;
+            }
+
+            $files[] = $filePath;
+        }
+
+        sort($files, SORT_NATURAL | SORT_FLAG_CASE);
+
+        return $files;
+    }
+
+    /**
+     * @param array<string,mixed> $reference
+     * @param string $filePath
+     * @return string
+     */
+    private function resolveOverviewDisplayName(array $reference, string $filePath): string {
+        $displayName = isset($reference['display_name']) ? trim((string) $reference['display_name']) : '';
+        if ($displayName !== '') {
+            return $displayName;
+        }
+
+        return $this->prettifyFileName(basename($filePath));
+    }
+
+    /**
+     * @param string $fileName
+     * @return string
+     */
+    private function prettifyFileName(string $fileName): string {
+        $name = pathinfo($fileName, PATHINFO_FILENAME);
+        if ($name === '') {
+            return $fileName;
+        }
+
+        $name = str_replace(['_', '-'], ' ', $name);
+        $name = preg_replace('/\s+/', ' ', $name);
+        $name = trim((string) $name);
+
+        return $name !== '' ? $name : $fileName;
+    }
+
+    /**
+     * Best-effort lookup of Simple File List nice names from WordPress options and custom tables.
+     *
+     * @param array<int,string> $directories
+     * @return array<string,string>
+     */
+    private function getSimpleFileListNiceNameMap(array $directories): array {
+        global $wpdb;
+
+        $targets = [];
+        $uploads = wp_get_upload_dir();
+        $baseDir = wp_normalize_path((string) ($uploads['basedir'] ?? ''));
+
+        foreach ($directories as $directory) {
+            foreach ($this->getSupportedFilesInDirectory($directory) as $filePath) {
+                $normalizedPath = wp_normalize_path($filePath);
+                $targets[$normalizedPath] = [
+                    'basename' => basename($normalizedPath),
+                    'relative_path' => $baseDir !== '' && strpos($normalizedPath, $baseDir) === 0
+                        ? ltrim(substr($normalizedPath, strlen($baseDir)), '/')
+                        : basename($normalizedPath),
+                ];
+            }
+        }
+
+        if (empty($targets)) {
+            return [];
+        }
+
+        $niceNames = $this->getSimpleFileListNiceNamesFromFileListOptions($targets);
+
+        $optionRows = $wpdb->get_results(
+            "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE 'eeSFL%' OR option_name LIKE '%simple_file_list%'",
+            ARRAY_A
+        );
+        if (is_array($optionRows)) {
+            foreach ($optionRows as $row) {
+                if (!is_array($row) || !isset($row['option_value'])) {
+                    continue;
+                }
+
+                $value = maybe_unserialize($row['option_value']);
+                $this->scanSimpleFileListMetadata($value, $targets, $niceNames);
+            }
+        }
+
+        $candidateTables = array_unique(array_filter(array_merge(
+            $wpdb->get_col($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($wpdb->prefix . 'eeSFL') . '%')),
+            $wpdb->get_col($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($wpdb->prefix . 'simple_file_list') . '%')),
+            $wpdb->get_col($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($wpdb->prefix . 'eesfl') . '%'))
+        )));
+
+        foreach ($candidateTables as $tableName) {
+            $tableName = (string) $tableName;
+            if ($tableName === '') {
+                continue;
+            }
+
+            $rows = $wpdb->get_results("SELECT * FROM {$tableName}", ARRAY_A);
+            if (!is_array($rows)) {
+                continue;
+            }
+
+            foreach ($rows as $row) {
+                $this->scanSimpleFileListMetadata($row, $targets, $niceNames);
+            }
+        }
+
+        return $niceNames;
+    }
+
+    /**
+     * Read exact Simple File List file metadata from eeSFL_FileList_* options.
+     *
+     * @param array<string,array<string,string>> $targets
+     * @return array<string,string>
+     */
+    private function getSimpleFileListNiceNamesFromFileListOptions(array $targets): array {
+        global $wpdb;
+
+        $rows = $wpdb->get_results(
+            "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE 'eeSFL\\_FileList\\_%'",
+            ARRAY_A
+        );
+        if (!is_array($rows)) {
+            error_log('geweb-ai-search: SFL nice-name lookup found no eeSFL_FileList_* option rows.');
+            return [];
+        }
+
+        error_log('geweb-ai-search: SFL nice-name lookup scanning ' . count($rows) . ' eeSFL_FileList_* option row(s) for ' . count($targets) . ' target file(s).');
+        $niceNames = [];
+        foreach ($rows as $row) {
+            if (!is_array($row) || !isset($row['option_value'])) {
+                continue;
+            }
+
+            $optionName = isset($row['option_name']) ? (string) $row['option_name'] : 'unknown-option';
+            $value = maybe_unserialize($row['option_value']);
+            if (!is_array($value)) {
+                error_log('geweb-ai-search: SFL option ' . $optionName . ' did not unserialize to an array.');
+                continue;
+            }
+
+            foreach ($value as $record) {
+                if (!is_array($record)) {
+                    continue;
+                }
+
+                $filePathValue = isset($record['FilePath']) ? trim((string) $record['FilePath']) : '';
+                $niceName = isset($record['FileNiceName']) ? trim((string) $record['FileNiceName']) : '';
+                if ($filePathValue === '' || $niceName === '') {
+                    continue;
+                }
+
+                $matchedPath = $this->matchSimpleFileListRecordPath($filePathValue, $targets);
+                if ($matchedPath === null || isset($niceNames[$matchedPath])) {
+                    continue;
+                }
+
+                $niceNames[$matchedPath] = $niceName;
+                error_log('geweb-ai-search: SFL nice-name match from ' . $optionName . ' for ' . basename($matchedPath) . ' => ' . $niceName);
+            }
+        }
+
+        error_log('geweb-ai-search: SFL nice-name lookup resolved ' . count($niceNames) . ' file(s).');
+        return $niceNames;
+    }
+
+    /**
+     * Resolve a Simple File List FilePath value to a real uploads file path and URL.
+     *
+     * @param string $filePathValue
+     * @return array<string,string>|null
+     */
+    private function resolveSimpleFileListRecordPath(string $filePathValue): ?array {
+        $uploads = wp_get_upload_dir();
+        $baseDir = wp_normalize_path((string) ($uploads['basedir'] ?? ''));
+        $baseUrl = (string) ($uploads['baseurl'] ?? '');
+        if ($baseDir === '' || $baseUrl === '') {
+            return null;
+        }
+
+        $normalizedValue = wp_normalize_path(ltrim(trim($filePathValue), '/'));
+        $candidates = [];
+
+        if ($normalizedValue !== '') {
+            $directCandidate = wp_normalize_path(trailingslashit($baseDir) . $normalizedValue);
+            $candidates[] = $directCandidate;
+        }
+
+        $baseName = basename($normalizedValue);
+        if ($baseName !== '') {
+            $searched = $this->findFileInUploadsByBasename($baseName, $baseDir);
+            if ($searched !== null) {
+                $candidates[] = $searched;
+            }
+        }
+
+        foreach (array_unique($candidates) as $candidate) {
+            if ($candidate === '' || !is_file($candidate) || !is_readable($candidate)) {
+                continue;
+            }
+
+            if (strpos($candidate, $baseDir) !== 0) {
+                continue;
+            }
+
+            $relativePath = ltrim(substr($candidate, strlen($baseDir)), '/');
+            return [
+                'file_path' => $candidate,
+                'file_url' => trailingslashit($baseUrl) . str_replace('%2F', '/', rawurlencode($relativePath)),
+            ];
+        }
+
+        return null;
+    }
+
+    /**
+     * Find a file anywhere under uploads by basename.
+     *
+     * @param string $baseName
+     * @param string $baseDir
+     * @return string|null
+     */
+    private function findFileInUploadsByBasename(string $baseName, string $baseDir): ?string {
+        static $indexedFiles = null;
+
+        if ($indexedFiles === null) {
+            $indexedFiles = [];
+            if (is_dir($baseDir) && is_readable($baseDir)) {
+                try {
+                    $iterator = new \RecursiveIteratorIterator(
+                        new \RecursiveDirectoryIterator($baseDir, \FilesystemIterator::SKIP_DOTS)
+                    );
+
+                    foreach ($iterator as $fileInfo) {
+                        if (!$fileInfo instanceof \SplFileInfo || !$fileInfo->isFile()) {
+                            continue;
+                        }
+
+                        $indexedFiles[$fileInfo->getBasename()][] = wp_normalize_path($fileInfo->getPathname());
+                    }
+                } catch (\Throwable $e) {
+                    return null;
+                }
+            }
+        }
+
+        if (empty($indexedFiles[$baseName])) {
+            return null;
+        }
+
+        return (string) $indexedFiles[$baseName][0];
+    }
+
+    /**
+     * Recursively scan mixed metadata for file-name to nice-name matches.
+     *
+     * @param mixed $value
+     * @param array<string,array<string,string>> $targets
+     * @param array<string,string> $niceNames
+     * @return void
+     */
+    private function scanSimpleFileListMetadata($value, array $targets, array &$niceNames): void {
+        if (is_object($value)) {
+            $value = get_object_vars($value);
+        }
+
+        if (!is_array($value)) {
+            return;
+        }
+
+        $match = $this->extractSimpleFileListRecordMatch($value, $targets);
+        if ($match !== null) {
+            $filePath = $match['file_path'];
+            $niceName = $match['nice_name'];
+            if ($filePath !== '' && $niceName !== '' && !isset($niceNames[$filePath])) {
+                $niceNames[$filePath] = $niceName;
+            }
+        }
+
+        foreach ($value as $nested) {
+            if (is_array($nested) || is_object($nested)) {
+                $this->scanSimpleFileListMetadata($nested, $targets, $niceNames);
+            }
+        }
+    }
+
+    /**
+     * Try to match a metadata record to one of the files we discovered in Simple File List.
+     *
+     * @param array<string,mixed> $record
+     * @param array<string,array<string,string>> $targets
+     * @return array<string,string>|null
+     */
+    private function extractSimpleFileListRecordMatch(array $record, array $targets): ?array {
+        $stringFields = [];
+        foreach ($record as $key => $value) {
+            if (!is_scalar($value)) {
+                continue;
+            }
+
+            $stringValue = trim((string) $value);
+            if ($stringValue === '') {
+                continue;
+            }
+
+            $stringFields[(string) $key] = $stringValue;
+        }
+
+        if (empty($stringFields)) {
+            return null;
+        }
+
+        foreach ($targets as $filePath => $target) {
+            $basename = $target['basename'];
+            $relativePath = $target['relative_path'];
+            $matched = false;
+
+            foreach ($stringFields as $fieldValue) {
+                $normalizedField = wp_normalize_path($fieldValue);
+                if ($fieldValue === $basename
+                    || $normalizedField === wp_normalize_path($relativePath)
+                    || str_ends_with($normalizedField, '/' . $basename)
+                    || strpos($normalizedField, $basename) !== false
+                ) {
+                    $matched = true;
+                    break;
+                }
+            }
+
+            if (!$matched) {
+                continue;
+            }
+
+            foreach ($stringFields as $fieldKey => $fieldValue) {
+                if (!preg_match('/nice|display|title|label/i', $fieldKey)) {
+                    continue;
+                }
+
+                $niceName = trim($fieldValue);
+                if ($this->isUsableSimpleFileListNiceName($niceName, $basename)) {
+                    return [
+                        'file_path' => $filePath,
+                        'nice_name' => $niceName,
+                    ];
+                }
+            }
+
+            foreach ($stringFields as $fieldKey => $fieldValue) {
+                if (!preg_match('/name/i', $fieldKey) || preg_match('/file|path|url|ext|type/i', $fieldKey)) {
+                    continue;
+                }
+
+                $niceName = trim($fieldValue);
+                if ($this->isUsableSimpleFileListNiceName($niceName, $basename)) {
+                    return [
+                        'file_path' => $filePath,
+                        'nice_name' => $niceName,
+                    ];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Match a Simple File List FilePath value to one of our discovered files.
+     *
+     * @param string $filePathValue
+     * @param array<string,array<string,string>> $targets
+     * @return string|null
+     */
+    private function matchSimpleFileListRecordPath(string $filePathValue, array $targets): ?string {
+        $normalizedValue = wp_normalize_path(ltrim(trim($filePathValue), '/'));
+
+        foreach ($targets as $filePath => $target) {
+            $basename = wp_normalize_path((string) ($target['basename'] ?? basename($filePath)));
+            $relativePath = wp_normalize_path(ltrim((string) ($target['relative_path'] ?? ''), '/'));
+
+            if ($normalizedValue === $basename || $normalizedValue === $relativePath || str_ends_with($relativePath, '/' . $normalizedValue)) {
+                return $filePath;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param string $niceName
+     * @param string $basename
+     * @return bool
+     */
+    private function isUsableSimpleFileListNiceName(string $niceName, string $basename): bool {
+        if ($niceName === '' || $niceName === $basename) {
+            return false;
+        }
+
+        if (strpos($niceName, '/') !== false || strpos($niceName, '\\') !== false) {
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -404,7 +1085,7 @@ class DocumentStore {
     private function cleanupOrphanedDocuments(array $documentIds): void {
         self::init();
         global $wpdb;
-        $gemini = new Gemini();
+        $gemini = ProviderFactory::make();
 
         foreach ($documentIds as $docId) {
             $count = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM " . self::$refsTable . " WHERE document_id = %d", $docId));
@@ -457,5 +1138,337 @@ class DocumentStore {
         ]);
 
         return is_array($posts) ? $posts : [];
+    }
+
+    /**
+     * Upload a referenced document by file hash and associate it with all referencing posts.
+     *
+     * @param string $fileHash
+     * @return bool
+     */
+    public function uploadReferencedDocumentByHash(string $fileHash): bool {
+        $reference = $this->findReferenceByHash($fileHash);
+        if (!$reference || empty($reference['file_path'])) {
+            return false;
+        }
+
+        $documentId = $this->getOrCreateDocument((string) $reference['file_path'], (int) $reference['primary_post_id']);
+        if (!$documentId) {
+            return false;
+        }
+
+        if (!empty($reference['post_ids']) && is_array($reference['post_ids'])) {
+            $this->associateDocumentWithPosts($documentId, $reference['post_ids']);
+        }
+        $this->clearReferencedDocumentOverviewCache();
+
+        return true;
+    }
+
+    /**
+     * Remove a referenced document from the Gemini store and local DB by file hash.
+     *
+     * @param string $fileHash
+     * @return bool
+     */
+    public function removeReferencedDocumentByHash(string $fileHash): bool {
+        self::init();
+        global $wpdb;
+
+        $document = $wpdb->get_row(
+            $wpdb->prepare("SELECT * FROM " . self::$documentsTable . " WHERE file_hash = %s", $fileHash),
+            ARRAY_A
+        );
+
+        if (!is_array($document) || empty($document['id'])) {
+            return false;
+        }
+
+        $docId = (int) $document['id'];
+        $gemini = ProviderFactory::make();
+
+        try {
+            if (!empty($document['gemini_doc_name'])) {
+                $gemini->deleteDocument((string) $document['gemini_doc_name']);
+            }
+        } catch (\Exception $e) {
+            // Ignore remote delete failures; still remove local tracking.
+        }
+
+        $wpdb->delete(self::$refsTable, ['document_id' => $docId], ['%d']);
+        $wpdb->delete(self::$documentsTable, ['id' => $docId], ['%d']);
+        $this->clearReferencedDocumentOverviewCache();
+
+        return true;
+    }
+
+    /**
+     * Update the Simple File List nice name for a referenced document by file hash.
+     *
+     * @param string $fileHash
+     * @param string $niceName
+     * @return bool
+     */
+    public function updateReferencedDocumentNiceNameByHash(string $fileHash, string $niceName): bool {
+        global $wpdb;
+
+        $niceName = trim($niceName);
+        if ($fileHash === '' || $niceName === '') {
+            return false;
+        }
+
+        $reference = $this->findReferenceByHash($fileHash);
+        $filePath = is_array($reference) ? (string) ($reference['file_path'] ?? '') : '';
+
+        if ($filePath === '') {
+            $overview = $this->getReferencedDocumentOverview();
+            foreach ($overview as $item) {
+                if (!is_array($item) || ($item['file_hash'] ?? '') !== $fileHash) {
+                    continue;
+                }
+
+                $filePath = (string) ($item['file_path'] ?? '');
+                if (!empty($item['managed_by_simple_file_list'])) {
+                    break;
+                }
+
+                $filePath = '';
+                break;
+            }
+        }
+
+        if ($filePath === '') {
+            return false;
+        }
+
+        $rows = $wpdb->get_results(
+            "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE 'eeSFL\\_FileList\\_%'",
+            ARRAY_A
+        );
+
+        if (!is_array($rows) || empty($rows)) {
+            return false;
+        }
+
+        foreach ($rows as $row) {
+            if (!is_array($row) || !isset($row['option_name'], $row['option_value'])) {
+                continue;
+            }
+
+            $value = maybe_unserialize($row['option_value']);
+            if (!is_array($value)) {
+                continue;
+            }
+
+            $updated = false;
+            foreach ($value as $index => $record) {
+                if (!is_array($record)) {
+                    continue;
+                }
+
+                $filePathValue = isset($record['FilePath']) ? trim((string) $record['FilePath']) : '';
+                if ($filePathValue === '') {
+                    continue;
+                }
+
+                $resolved = $this->resolveSimpleFileListRecordPath($filePathValue);
+                if (!is_array($resolved) || (($resolved['file_path'] ?? '') !== $filePath)) {
+                    continue;
+                }
+
+                $value[$index]['FileNiceName'] = $niceName;
+                $updated = true;
+            }
+
+            if (!$updated) {
+                continue;
+            }
+
+            $saved = update_option((string) $row['option_name'], $value, false);
+            if ($saved || get_option((string) $row['option_name']) === $value) {
+                $this->clearReferencedDocumentOverviewCache();
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Apply staged include/remove selections for referenced documents.
+     *
+     * @param array<string,bool> $targets
+     * @return void
+     */
+    public function applyReferencedDocumentSelectionTargets(array $targets): void {
+        $this->saveReferencedDocumentSelectionTargets($targets);
+
+        $overview = $this->getReferencedDocumentOverview(true);
+        foreach ($overview as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $fileHash = (string) ($item['file_hash'] ?? '');
+            if ($fileHash === '' || !array_key_exists($fileHash, $targets)) {
+                continue;
+            }
+
+            $isUploaded = strpos((string) ($item['status'] ?? ''), 'Uploaded') === 0;
+            $shouldBeIncluded = (bool) $targets[$fileHash];
+
+            if ($shouldBeIncluded === $isUploaded) {
+                continue;
+            }
+
+            if ($shouldBeIncluded) {
+                $this->uploadReferencedDocumentByHash($fileHash);
+            } else {
+                $this->removeReferencedDocumentByHash($fileHash);
+            }
+        }
+
+        $this->clearReferencedDocumentOverviewCache();
+    }
+
+    /**
+     * @return array<string,bool>
+     */
+    public function getReferencedDocumentSelectionTargets(): array {
+        $stored = get_option(self::OPTION_REFERENCED_SELECTION_TARGETS, []);
+        if (!is_array($stored)) {
+            return [];
+        }
+
+        $targets = [];
+        foreach ($stored as $fileHash => $target) {
+            if (!is_string($fileHash) || $fileHash === '') {
+                continue;
+            }
+
+            $targets[$fileHash] = (bool) $target;
+        }
+
+        return $targets;
+    }
+
+    /**
+     * @param array<string,bool> $targets
+     * @return void
+     */
+    public function saveReferencedDocumentSelectionTargets(array $targets): void {
+        $normalized = [];
+        foreach ($targets as $fileHash => $target) {
+            if (!is_string($fileHash) || $fileHash === '') {
+                continue;
+            }
+
+            $normalized[sanitize_text_field($fileHash)] = (bool) $target;
+        }
+
+        update_option(self::OPTION_REFERENCED_SELECTION_TARGETS, $normalized, false);
+        $this->clearReferencedDocumentOverviewCache();
+    }
+
+    /**
+     * Save a single include/exclude target for a referenced document.
+     *
+     * @param string $fileHash
+     * @param bool $include
+     * @return void
+     */
+    public function saveReferencedDocumentSelectionTarget(string $fileHash, bool $include): void {
+        $targets = $this->getReferencedDocumentSelectionTargets();
+        $targets[sanitize_text_field($fileHash)] = $include;
+        update_option(self::OPTION_REFERENCED_SELECTION_TARGETS, $targets, false);
+        $this->clearReferencedDocumentOverviewCache();
+    }
+
+    /**
+     * @param array<string,mixed> $item
+     * @return bool
+     */
+    private function getDefaultReferencedDocumentTarget(array $item): bool {
+        $externalReferenceCount = isset($item['external_reference_count']) ? (int) $item['external_reference_count'] : 0;
+        return $externalReferenceCount > 0;
+    }
+
+    /**
+     * Associate a document with many posts without removing their other document links.
+     *
+     * @param int $documentId
+     * @param array<int,int> $postIds
+     * @return void
+     */
+    private function associateDocumentWithPosts(int $documentId, array $postIds): void {
+        self::init();
+        global $wpdb;
+
+        foreach ($postIds as $postId) {
+            $postId = (int) $postId;
+            if ($postId <= 0) {
+                continue;
+            }
+
+            $exists = $wpdb->get_var(
+                $wpdb->prepare(
+                    "SELECT COUNT(*) FROM " . self::$refsTable . " WHERE post_id = %d AND document_id = %d",
+                    $postId,
+                    $documentId
+                )
+            );
+
+            if ((int) $exists > 0) {
+                continue;
+            }
+
+            $wpdb->insert(
+                self::$refsTable,
+                ['post_id' => $postId, 'document_id' => $documentId],
+                ['%d', '%d']
+            );
+        }
+    }
+
+    /**
+     * Find a referenced file by hash across managed posts.
+     *
+     * @param string $fileHash
+     * @return array<string,mixed>|null
+     */
+    private function findReferenceByHash(string $fileHash): ?array {
+        foreach ($this->getReferencedDocumentOverview(true) as $item) {
+            if (!is_array($item) || (($item['file_hash'] ?? '') !== $fileHash)) {
+                continue;
+            }
+
+            $filePath = (string) ($item['file_path'] ?? '');
+            if ($filePath === '' || !file_exists($filePath)) {
+                return null;
+            }
+
+            $postIds = [];
+            $posts = isset($item['posts']) && is_array($item['posts']) ? $item['posts'] : [];
+            foreach ($posts as $post) {
+                if (!is_array($post)) {
+                    continue;
+                }
+
+                $postId = isset($post['id']) ? (int) $post['id'] : 0;
+                if ($postId > 0) {
+                    $postIds[] = $postId;
+                }
+            }
+
+            $postIds = array_values(array_unique($postIds));
+
+            return [
+                'file_path' => $filePath,
+                'post_ids' => $postIds,
+                'primary_post_id' => !empty($postIds) ? (int) $postIds[0] : 0,
+            ];
+        }
+
+        return null;
     }
 }

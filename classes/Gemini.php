@@ -13,7 +13,7 @@ class ConfigurationException extends \Exception {}
  *
  * Handles all interactions with Google Gemini API
  */
-class Gemini {
+class Gemini implements AIProviderInterface {
     /**
      * API endpoints
      */
@@ -88,6 +88,20 @@ class Gemini {
     }
 
     /**
+     * @return string
+     */
+    public function getProviderKey(): string {
+        return ProviderFactory::PROVIDER_GEMINI;
+    }
+
+    /**
+     * @return string
+     */
+    public function getProviderLabel(): string {
+        return 'Google Gemini';
+    }
+
+    /**
      * Create new File Search Store
      *
      * @param string $name Store display name
@@ -136,6 +150,28 @@ class Gemini {
 
         $this->deleteStoreByName($storeName);
         delete_option(self::OPTION_STORE);
+        $this->clearStoresCache();
+    }
+
+    /**
+     * Delete a specific File Search Store by resource name.
+     *
+     * @param string $storeName
+     * @return void
+     * @throws \Exception
+     */
+    public function deleteStoreByResourceName(string $storeName): void {
+        $storeName = trim($storeName);
+        if ($storeName === '') {
+            return;
+        }
+
+        $this->deleteStoreByName($storeName);
+
+        if ($storeName === $this->getStoreData()) {
+            delete_option(self::OPTION_STORE);
+        }
+
         $this->clearStoresCache();
     }
 
@@ -393,6 +429,7 @@ class Gemini {
                 'status' => $status,
                 'status_color' => $statusColor,
                 'document_count' => $this->countStoreDocuments($name),
+                'is_active' => $name === $activeStore,
             ];
         }
 
@@ -451,7 +488,7 @@ class Gemini {
         $pageToken = '';
 
         do {
-            $url = self::API_BASE . '/' . ltrim($storeName, '/') . '/documents?pageSize=100';
+            $url = self::API_BASE . '/' . ltrim($storeName, '/') . '/documents?pageSize=20';
             if ($pageToken !== '') {
                 $url .= '&pageToken=' . rawurlencode($pageToken);
             }
@@ -532,13 +569,13 @@ class Gemini {
             throw new ConfigurationException('Configuration error');
         }
 
+        $url = $this->appendApiKeyToUrl($url);
         $args = [
             'method'  => $method,
             'timeout' => 120,
             'headers' => [
                 'Content-Type'  => 'application/json',
                 'Accept'        => 'application/json',
-                'x-goog-api-key' => $this->apiKey,
             ],
         ];
 
@@ -565,6 +602,17 @@ class Gemini {
         }
 
         return $result;
+    }
+
+    /**
+     * Append the API key to a Gemini API URL.
+     *
+     * @param string $url
+     * @return string
+     */
+    private function appendApiKeyToUrl(string $url): string {
+        $separator = strpos($url, '?') === false ? '?' : '&';
+        return $url . $separator . 'key=' . rawurlencode($this->apiKey);
     }
 
     /**
@@ -658,8 +706,9 @@ class Gemini {
      *
      * @return array Model names
      */
-    public function getModels(): array {
+    public function getModels(bool $forceRefresh = false): array {
         $models = $this->getDefaultModels();
+        $filteredCachedModels = [];
 
         if (empty($this->apiKey)) {
             $this->recordConnectionStatus('missing', 'No API key saved.');
@@ -668,7 +717,15 @@ class Gemini {
 
         $cachedModels = get_transient(self::TRANSIENT_MODELS);
         if (is_array($cachedModels) && !empty($cachedModels)) {
-            return apply_filters('geweb_aisearch_gemini_models', $cachedModels);
+            $filteredCachedModels = array_values(array_filter($cachedModels, function ($model): bool {
+                return is_string($model) && $this->supportsFileSearch($model);
+            }));
+            if (!empty($filteredCachedModels)) {
+                set_transient(self::TRANSIENT_MODELS, $filteredCachedModels, 12 * HOUR_IN_SECONDS);
+                if (!$forceRefresh) {
+                    return apply_filters('geweb_aisearch_gemini_models', $filteredCachedModels);
+                }
+            }
         }
 
         try {
@@ -679,7 +736,11 @@ class Gemini {
                 return apply_filters('geweb_aisearch_gemini_models', $remoteModels);
             }
         } catch (\Exception $e) {
-            $this->recordConnectionStatus('failed', $e->getMessage());
+            $this->recordConnectionStatus('failed', $this->sanitizeConnectionErrorMessage($e->getMessage()));
+        }
+
+        if (!empty($filteredCachedModels)) {
+            return apply_filters('geweb_aisearch_gemini_models', $filteredCachedModels);
         }
 
         return apply_filters('geweb_aisearch_gemini_models', $models);
@@ -695,7 +756,8 @@ class Gemini {
             self::DEFAULT_MODEL,
             'gemini-2.5-pro',
             'gemini-3-flash-preview',
-            'gemini-3.1-pro-preview'
+            'gemini-3-pro-preview',
+            'gemini-2.5-flash-lite',
         ];
     }
 
@@ -811,6 +873,10 @@ class Gemini {
      * @return void
      */
     private function recordConnectionStatus(string $status, string $message = ''): void {
+        if ($status === 'failed') {
+            $message = $this->sanitizeConnectionErrorMessage($message);
+        }
+
         update_option(self::OPTION_CONNECTION_STATUS, [
             'status' => $status,
             'timestamp' => current_time('timestamp'),
@@ -827,18 +893,78 @@ class Gemini {
     private function sanitizeConnectionErrorMessage(string $message): string {
         $message = trim($message);
         if ($message === '') {
-            return 'Could not validate the API key.';
+            return 'Could not validate the API key. This plugin expects a Google AI Studio Gemini API key.';
         }
 
         if (stripos($message, 'API_KEY_INVALID') !== false || stripos($message, 'API key not valid') !== false) {
-            return 'The API key is invalid.';
+            return 'The API key is invalid. Enter a valid Google AI Studio Gemini API key.';
+        }
+
+        if (
+            stripos($message, 'PERMISSION_DENIED') !== false ||
+            stripos($message, 'permission denied') !== false ||
+            stripos($message, 'forbidden') !== false
+        ) {
+            return 'The API key does not have permission to use the Gemini API or the selected resource.';
+        }
+
+        if (
+            stripos($message, 'RESOURCE_EXHAUSTED') !== false ||
+            stripos($message, 'quota') !== false ||
+            stripos($message, 'rate limit') !== false ||
+            stripos($message, 'too many requests') !== false
+        ) {
+            return 'The Gemini API quota or rate limit has been reached for this project.';
+        }
+
+        if (
+            stripos($message, 'SERVICE_DISABLED') !== false ||
+            stripos($message, 'api has not been used') !== false ||
+            stripos($message, 'is not enabled') !== false
+        ) {
+            return 'The Gemini API is not enabled for this Google project.';
+        }
+
+        if (
+            stripos($message, 'API key expired') !== false ||
+            stripos($message, 'API_KEY_SERVICE_BLOCKED') !== false ||
+            stripos($message, 'API_KEY_HTTP_REFERRER_BLOCKED') !== false ||
+            stripos($message, 'API_KEY_IP_ADDRESS_BLOCKED') !== false
+        ) {
+            return 'This API key is blocked by its Google API key restrictions.';
+        }
+
+        if (
+            stripos($message, 'UNAVAILABLE') !== false ||
+            stripos($message, 'timed out') !== false ||
+            stripos($message, 'could not resolve host') !== false ||
+            stripos($message, 'network') !== false
+        ) {
+            return 'The Gemini API could not be reached right now. Please try again.';
         }
 
         if (preg_match('/HTTP code\s+(\d{3})/', $message, $matches)) {
-            return 'Gemini API request failed (HTTP ' . $matches[1] . ').';
+            $httpCode = (int) $matches[1];
+            if ($httpCode === 400) {
+                return 'The Gemini API rejected the request (HTTP 400). Check the API key and request settings.';
+            }
+            if ($httpCode === 401) {
+                return 'Authentication failed (HTTP 401). The API key is missing, invalid, or not accepted.';
+            }
+            if ($httpCode === 403) {
+                return 'Access denied (HTTP 403). The API key may lack permission or be blocked by restrictions.';
+            }
+            if ($httpCode === 429) {
+                return 'The Gemini API rate limit or quota has been exceeded (HTTP 429).';
+            }
+            if ($httpCode >= 500) {
+                return 'The Gemini API returned a server error (HTTP ' . $httpCode . '). Please try again.';
+            }
+
+            return 'Gemini API request failed (HTTP ' . $httpCode . ').';
         }
 
-        return preg_replace('/\s+/', ' ', $message) ?: 'Could not validate the API key.';
+        return preg_replace('/\s+/', ' ', $message) ?: 'Could not validate the API key. This plugin expects a Google AI Studio Gemini API key.';
     }
 
     /**
@@ -892,6 +1018,10 @@ class Gemini {
                 continue;
             }
 
+            if (!$this->supportsFileSearch($shortName)) {
+                continue;
+            }
+
             $models[] = $shortName;
         }
 
@@ -899,6 +1029,50 @@ class Gemini {
         sort($models);
 
         return $models;
+    }
+
+    /**
+     * Determine whether a model supports Gemini File Search.
+     *
+     * Based on Google's File Search docs:
+     * gemini-3-pro-preview, gemini-3-flash-preview,
+     * gemini-2.5-pro, gemini-2.5-flash (+ preview versions),
+     * gemini-2.5-flash-lite (+ preview versions).
+     *
+     * @param string $model
+     * @return bool
+     */
+    private function supportsFileSearch(string $model): bool {
+        $blockedFragments = [
+            'tts',
+            'speech',
+            'audio',
+            'embedding',
+            'image-generation',
+            'vision-preview-generation',
+        ];
+
+        foreach ($blockedFragments as $fragment) {
+            if (strpos($model, $fragment) !== false) {
+                return false;
+            }
+        }
+
+        $allowedPrefixes = [
+            'gemini-3-pro-preview',
+            'gemini-3-flash-preview',
+            'gemini-2.5-pro',
+            'gemini-2.5-flash',
+            'gemini-2.5-flash-lite',
+        ];
+
+        foreach ($allowedPrefixes as $prefix) {
+            if (strpos($model, $prefix) === 0) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

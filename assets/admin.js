@@ -1,14 +1,22 @@
 jQuery(document).ready(function($) {
 		var $settingsForm = $('form[action*="admin-post.php"]').has('input[name="action"][value="geweb_save"]').first();
 		var initialFormState = $settingsForm.length ? $settingsForm.serialize() : '';
+		var suppressBeforeUnloadWarning = false;
 
 		function markFormSaved() {
 				if (!$settingsForm.length) return;
 				initialFormState = $settingsForm.serialize();
+				updateSaveButtonState();
 		}
 
 		function hasUnsavedChanges() {
 				return $settingsForm.length && initialFormState !== $settingsForm.serialize();
+		}
+
+		function updateSaveButtonState() {
+				var $saveButton = $('#geweb-save-settings');
+				if (!$saveButton.length) return;
+				$saveButton.prop('disabled', !hasUnsavedChanges());
 		}
 
 		function escapeHtml(text) {
@@ -113,11 +121,18 @@ jQuery(document).ready(function($) {
 				if (!$diff.length || !$currentPrompt.length) return;
 
 				if (!selectedPrompt) {
-						$diff.html('Click on a prompt version to preview the full text and diff.');
+						$diff.html('Select a saved prompt version to compare it with the current AI Prompt.');
 						return;
 				}
 
 				$diff.html(buildPromptDiff($currentPrompt.val(), selectedPrompt));
+		}
+
+		function selectPromptHistoryItem($item) {
+				if (!$item || !$item.length) return;
+				$promptHistoryList.find('.geweb-ai-prompt-history-item').removeClass('selected').css('border-color', '#dcdcde');
+				$item.addClass('selected').css('border-color', '#2271b1');
+				updatePromptHistoryPreview(decodeBase64Value($item.data('prompt')));
 		}
 
 		function showCellFeedback($cell, message, isError) {
@@ -134,10 +149,83 @@ jQuery(document).ready(function($) {
 				$cell.replaceWith(html);
 		}
 
+		function refreshModelSelectorInBackground() {
+				var $select = $('#geweb_ai_search_model');
+				var $status = $('#geweb-ai-model-refresh-status');
+				if (!$select.length) return;
+
+				if ($status.length) {
+						$status.text('Refreshing available Gemini models...').css({display: 'block', color: '#646970'});
+				}
+
+				$.ajax({
+						url: getAdminAjaxUrl(),
+						type: 'POST',
+						dataType: 'json',
+						data: {
+								action: 'geweb_refresh_models',
+								nonce: gewebAisearchAdmin.adminActionNonce
+						}
+				}).done(function(response) {
+						if (!response || !response.success || !response.data || !$.isArray(response.data.models) || !response.data.models.length) {
+								if ($status.length) {
+										$status.text('Could not refresh models. Showing cached or bundled list.').css('color', '#996800');
+								}
+								return;
+						}
+
+						var selectedValue = String($select.val() || '');
+						var remoteSelected = String(response.data.selected_model || selectedValue || '');
+						$select.empty();
+
+						$.each(response.data.models, function(_, model) {
+								var value = String(model || '');
+								if (!value) return;
+								$select.append(new Option(value, value, false, value === remoteSelected));
+						});
+
+						if (remoteSelected && $select.find('option[value="' + remoteSelected.replace(/"/g, '\\"') + '"]').length === 0) {
+								$select.prepend(new Option(remoteSelected, remoteSelected, true, true));
+						} else if (remoteSelected) {
+								$select.val(remoteSelected);
+						}
+
+						if ($status.length) {
+								$status.text('Model list refreshed from Gemini.').css('color', '#46b450');
+								window.setTimeout(function() {
+										$status.fadeOut(200, function() {
+												$status.text('').css('display', 'none');
+										});
+								}, 2000);
+						}
+				}).fail(function() {
+						if ($status.length) {
+								$status.text('Could not refresh models. Showing cached or bundled list.').css('color', '#996800');
+						}
+				});
+		}
+
 		$('#geweb-ai-restore-default-prompt').on('click', function(event) {
 				event.preventDefault();
 				var defaultPrompt = $('#geweb_ai_search_default_prompt').val() || decodeBase64Value($(this).attr('data-default-prompt'));
 				setPromptValue(defaultPrompt);
+				$('#geweb_ai_search_custom_prompt_name').val('');
+				updateSaveButtonState();
+		});
+
+		$('.nav-tab-wrapper').on('click', '[data-geweb-tab]', function(e) {
+				e.preventDefault();
+				var tab = $(this).attr('data-geweb-tab');
+				$('.nav-tab-wrapper [data-geweb-tab]').removeClass('nav-tab-active');
+				$(this).addClass('nav-tab-active');
+				$('.geweb-settings-tab-panel').hide();
+				$('.geweb-settings-tab-panel[data-geweb-tab-panel="' + tab + '"]').show();
+				if (window.history && window.history.replaceState) {
+						var url = new URL(window.location.href);
+						url.searchParams.set('page', 'geweb-ai-search');
+						url.searchParams.set('geweb_tab', tab);
+						window.history.replaceState({}, '', url.toString());
+				}
 		});
 
 		var $promptHistoryList = $('#geweb-ai-prompt-history-list');
@@ -146,11 +234,7 @@ jQuery(document).ready(function($) {
 				if ($(e.target).is('input, button, .dashicons')) {
 						return;
 				}
-				var $item = $(this);
-				$promptHistoryList.find('.geweb-ai-prompt-history-item').removeClass('selected').css('border-color', '#dcdcde');
-				$item.addClass('selected').css('border-color', '#2271b1');
-				var selectedPrompt = decodeBase64Value($item.data('prompt'));
-				updatePromptHistoryPreview(selectedPrompt);
+				selectPromptHistoryItem($(this));
 		});
 
 		$promptHistoryList.on('click', '.geweb-ai-use-history-prompt', function(e) {
@@ -162,6 +246,44 @@ jQuery(document).ready(function($) {
 
 				setPromptValue(value);
 				updatePromptHistoryPreview(value);
+		});
+
+		$promptHistoryList.on('click', '.geweb-ai-rename-history-prompt', function(e) {
+				e.preventDefault();
+				e.stopPropagation();
+				var $item = $(this).closest('.geweb-ai-prompt-history-item');
+				if (String($item.data('is-default') || '') === '1' || String($item.data('can-rename') || '') !== '1') {
+						return;
+				}
+				var $button = $(this);
+				var $label = $item.find('.geweb-ai-prompt-history-name-label');
+				var $input = $item.find('.geweb-ai-prompt-history-name-input');
+				var editing = $input.is(':visible');
+
+				if (editing) {
+						$label.text($input.val() || '').show();
+						$input.hide();
+						$button.text('Rename');
+						return;
+				}
+
+				$label.hide();
+				$input.show().focus().select();
+				$button.text('Done');
+		});
+
+		$promptHistoryList.on('keydown', '.geweb-ai-prompt-history-name-input', function(e) {
+				if (e.key !== 'Enter') return;
+				e.preventDefault();
+				$(this).closest('.geweb-ai-prompt-history-item').find('.geweb-ai-rename-history-prompt').trigger('click');
+		});
+
+		$promptHistoryList.on('blur', '.geweb-ai-prompt-history-name-input', function() {
+				var $item = $(this).closest('.geweb-ai-prompt-history-item');
+				var $button = $item.find('.geweb-ai-rename-history-prompt');
+				if ($(this).is(':visible')) {
+						$button.trigger('click');
+				}
 		});
 
 		$promptHistoryList.on('click', '.geweb-ai-delete-history-prompt', function(e) {
@@ -254,11 +376,39 @@ jQuery(document).ready(function($) {
 				updatePromptHistoryPreview(selectedPrompt);
 		});
 		updatePromptHistoryPreview(null);
+		if ($promptHistoryList.length) {
+				var currentPromptValue = normalizePromptText($('#geweb_ai_search_custom_prompt').val());
+				var $initialItem = $();
+				$promptHistoryList.find('.geweb-ai-prompt-history-item').each(function() {
+						var promptValue = normalizePromptText(decodeBase64Value($(this).data('prompt')));
+						if (promptValue !== currentPromptValue) {
+								$initialItem = $(this);
+								return false;
+						}
+				});
+				if (!$initialItem.length) {
+						$initialItem = $promptHistoryList.find('.geweb-ai-prompt-history-item').first();
+				}
+				selectPromptHistoryItem($initialItem);
+		}
+		refreshModelSelectorInBackground();
 
 		$(window).on('beforeunload', function() {
-				if (!hasUnsavedChanges()) return;
+				if (suppressBeforeUnloadWarning || !hasUnsavedChanges()) return;
 
 				return 'You have unsaved changes. Are you sure you want to leave this page?';
+		});
+
+		$(document).on('mousedown pointerdown click', '.geweb-referenced-documents-table-form a, .geweb-gemini-stores-table-form a, .geweb-referenced-documents-table-form .button, .geweb-gemini-stores-table-form .button, .geweb-referenced-documents-table-form .button-link, .geweb-gemini-stores-table-form .button-link, #geweb-refresh-referenced-documents, #geweb-refresh-gemini-stores', function() {
+				suppressBeforeUnloadWarning = true;
+		});
+
+		$(document).on('focus mousedown pointerdown change', '.geweb-referenced-documents-table-form select, .geweb-gemini-stores-table-form select', function() {
+				suppressBeforeUnloadWarning = true;
+		});
+
+		$(document).on('submit', '.geweb-referenced-documents-table-form, .geweb-gemini-stores-table-form', function() {
+				suppressBeforeUnloadWarning = true;
 		});
 
 		$('#geweb_ai_search_preserve_data_on_uninstall').on('change', function() {
@@ -267,11 +417,62 @@ jQuery(document).ready(function($) {
 				alert('Plugin data can be preserved on uninstall, but the stored API key and encryption key will always be removed.');
 		});
 
+		$('#geweb-toggle-api-key-visibility').on('click', function() {
+				var $button = $(this);
+				var $field = $('#geweb_api_key');
+				if (!$field.length) return;
+
+				var showing = $field.attr('type') === 'text';
+				$field.attr('type', showing ? 'password' : 'text');
+				$button.attr('aria-pressed', showing ? 'false' : 'true');
+				$button.attr('aria-label', showing ? 'Show API key' : 'Hide API key');
+				$button.attr('title', showing ? 'Show API key' : 'Hide API key');
+				$button.find('.dashicons')
+						.removeClass('dashicons-visibility dashicons-hidden')
+						.addClass(showing ? 'dashicons-visibility' : 'dashicons-hidden');
+		});
+
+		function updateApiKeyVisibilityToggle() {
+				var $field = $('#geweb_api_key');
+				var $button = $('#geweb-toggle-api-key-visibility');
+				var $warning = $('#geweb-api-key-replacement-warning');
+				if (!$field.length || !$button.length) return;
+
+				var hasValue = String($field.val() || '').length > 0;
+				var hasValidSavedKey = String($field.data('current-key-valid') || '') === '1';
+				$button.toggle(hasValue);
+				if ($warning.length) {
+						$warning.toggle(hasValue && hasValidSavedKey);
+				}
+
+				if (!hasValue) {
+						$field.attr('type', 'password');
+						$button.attr('aria-pressed', 'false');
+						$button.attr('aria-label', 'Show API key');
+						$button.attr('title', 'Show API key');
+						$button.find('.dashicons')
+								.removeClass('dashicons-hidden')
+								.addClass('dashicons-visibility');
+				}
+		}
+
+		$('#geweb_api_key').on('input change', function() {
+				updateApiKeyVisibilityToggle();
+		});
+
+		updateApiKeyVisibilityToggle();
+		window.setTimeout(updateApiKeyVisibilityToggle, 150);
+		window.setTimeout(updateApiKeyVisibilityToggle, 600);
+
 		if ($settingsForm.length) {
+				$settingsForm.on('input change', function() {
+						updateSaveButtonState();
+				});
 				$settingsForm.on('submit', function() {
 						markFormSaved();
 				});
 		}
+		updateSaveButtonState();
 
 		var isProcessing = false;
 		var totalSuccess = 0;
@@ -426,8 +627,12 @@ jQuery(document).ready(function($) {
 
 				isRefreshingReferencedDocuments = true;
 				$button.prop('disabled', true).text('Refreshing...');
-				$status.text('Loading referenced documents...');
-				$container.html('<p>Loading referenced documents...</p>');
+				if ($container.attr('data-needs-refresh') === '1') {
+						$status.text('Loading referenced documents...');
+						$container.html('<p>Loading referenced documents...</p>');
+				} else {
+						$status.text('Refreshing referenced documents... showing cached data until the update completes.');
+				}
 
 				$.ajax({
 						url: getAdminAjaxUrl(),
@@ -464,20 +669,247 @@ jQuery(document).ready(function($) {
 				refreshReferencedDocuments();
 		});
 
+		$(document).on('click', '.geweb-referenced-document-upload-now', function() {
+				var $button = $(this);
+				var fileHash = String($button.data('file-hash') || '');
+				var $cell = $button.closest('.geweb-ai-index-cell');
+				var $status = $('#geweb-referenced-documents-status');
+				if (!fileHash) return;
+
+				$button.prop('disabled', true).text('Uploading...');
+				showCellFeedback($cell, 'Uploading in the background...', false);
+				if ($status.length) {
+						$status.text('Uploading document...');
+				}
+
+				$.ajax({
+						url: getAdminAjaxUrl(),
+						type: 'POST',
+						dataType: 'json',
+						data: {
+								action: 'geweb_update_referenced_document',
+								document_action: 'upload',
+								file_hash: fileHash,
+								nonce: gewebAisearchAdmin.adminActionNonce
+						}
+				}).done(function(response) {
+						if (!response || !response.success || !response.data) {
+								var message = response && response.data && response.data.message
+										? response.data.message
+										: 'The document upload could not be completed.';
+								showCellFeedback($cell, message, true);
+								$button.prop('disabled', false).text('Upload');
+								if ($status.length) {
+										$status.text(message);
+								}
+								return;
+						}
+
+						var $row = $button.closest('tr');
+						if ($row.length) {
+								if (response.data.status_html) {
+										$row.find('td.column-status').html(response.data.status_html);
+								}
+								if (response.data.actions_html) {
+										$row.find('td.column-actions').html(response.data.actions_html);
+								}
+						}
+
+						if ($status.length) {
+								$status.text(response.data.message || 'Document uploaded.');
+						}
+				}).fail(function(xhr) {
+						var message = xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message
+								? xhr.responseJSON.data.message
+								: 'The document upload could not be completed.';
+						showCellFeedback($cell, message, true);
+						$button.prop('disabled', false).text('Upload');
+						if ($status.length) {
+								$status.text(message);
+						}
+				});
+		});
+
+		$(document).on('change', '.geweb-referenced-document-toggle-exclude', function() {
+				var $checkbox = $(this);
+				var $cell = $checkbox.closest('.geweb-ai-index-cell');
+				var fileHash = String($checkbox.data('file-hash') || '');
+				var exclude = $checkbox.is(':checked') ? 1 : 0;
+				var $status = $('#geweb-referenced-documents-status');
+				if (!fileHash) return;
+
+				$checkbox.prop('disabled', true);
+				showCellFeedback($cell, exclude ? 'Excluding in the background...' : 'Including for upload...', false);
+
+				$.ajax({
+						url: getAdminAjaxUrl(),
+						type: 'POST',
+						dataType: 'json',
+						data: {
+								action: 'geweb_toggle_referenced_document_exclude',
+								file_hash: fileHash,
+								exclude: exclude,
+								nonce: gewebAisearchAdmin.adminActionNonce
+						}
+				}).done(function(response) {
+						if (!response || !response.success || !response.data) {
+								var message = response && response.data && response.data.message
+										? response.data.message
+										: 'Could not update exclusion.';
+								showCellFeedback($cell, message, true);
+								$checkbox.prop('disabled', false).prop('checked', !exclude);
+								if ($status.length) {
+										$status.text(message);
+								}
+								return;
+						}
+
+						var $row = $checkbox.closest('tr');
+						if ($row.length) {
+								if (response.data.status_html) {
+										$row.find('td.column-status').html(response.data.status_html);
+								}
+								if (response.data.actions_html) {
+										$row.find('td.column-actions').html(response.data.actions_html);
+								}
+						}
+
+						if ($status.length) {
+								$status.text(response.data.message || (exclude ? 'Excluded from indexing.' : 'Included for indexing.'));
+						}
+				}).fail(function(xhr) {
+						var message = xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message
+								? xhr.responseJSON.data.message
+								: 'Could not update exclusion.';
+						showCellFeedback($cell, message, true);
+						$checkbox.prop('disabled', false).prop('checked', !exclude);
+						if ($status.length) {
+								$status.text(message);
+						}
+				});
+		});
+
+		$(document).on('click', '.geweb-edit-nice-name-trigger', function(e) {
+				e.preventDefault();
+				var $cell = $(this).closest('.geweb-nice-name-cell');
+				if (!$cell.length) return;
+
+				$cell.find('.geweb-edit-nice-name-form').show();
+				$(this).hide();
+				var $input = $cell.find('.geweb-edit-nice-name-input');
+				$input.trigger('focus').trigger('select');
+		});
+
+		$(document).on('click', '.geweb-cancel-nice-name', function(e) {
+				e.preventDefault();
+				var $cell = $(this).closest('.geweb-nice-name-cell');
+				if (!$cell.length) return;
+
+				$cell.find('.geweb-edit-nice-name-input').val(String($cell.data('current-nice-name') || ''));
+				$cell.find('.geweb-ai-index-feedback').hide().text('');
+				$cell.find('.geweb-edit-nice-name-form').hide();
+				$cell.find('.geweb-edit-nice-name-trigger').show();
+		});
+
+		$(document).on('keydown', '.geweb-edit-nice-name-input', function(e) {
+				if (e.key === 'Enter') {
+						e.preventDefault();
+						$(this).closest('.geweb-nice-name-cell').find('.geweb-save-nice-name').trigger('click');
+				}
+
+				if (e.key === 'Escape') {
+						e.preventDefault();
+						$(this).closest('.geweb-nice-name-cell').find('.geweb-cancel-nice-name').trigger('click');
+				}
+		});
+
+		$(document).on('click', '.geweb-save-nice-name', function(e) {
+				e.preventDefault();
+				var $button = $(this);
+				var $cell = $button.closest('.geweb-nice-name-cell');
+				var fileHash = String($cell.data('file-hash') || '');
+				var $input = $cell.find('.geweb-edit-nice-name-input');
+				var niceName = $.trim(String($input.val() || ''));
+				var $feedback = $cell.find('.geweb-ai-index-feedback');
+				var $status = $('#geweb-referenced-documents-status');
+				var $niceNameCell = $button.closest('tr').find('td.column-nice_name');
+
+				if (!fileHash) return;
+				if (!niceName) {
+						$feedback.text('Enter a nice name.').css('color', '#d63638').show();
+						$input.trigger('focus');
+						return;
+				}
+
+				$button.prop('disabled', true).text('Saving...');
+				$feedback.text('Saving nice name...').css('color', '#2271b1').show();
+				if ($status.length) {
+						$status.text('Saving nice name...');
+				}
+
+				$.ajax({
+						url: getAdminAjaxUrl(),
+						type: 'POST',
+						dataType: 'json',
+						data: {
+								action: 'geweb_update_referenced_document_nice_name',
+								file_hash: fileHash,
+								nice_name: niceName,
+								nonce: gewebAisearchAdmin.adminActionNonce
+						}
+				}).done(function(response) {
+						if (!response || !response.success || !response.data) {
+								var message = response && response.data && response.data.message
+										? response.data.message
+										: 'The nice name could not be updated.';
+								$feedback.text(message).css('color', '#d63638').show();
+								$button.prop('disabled', false).text('Save');
+								if ($status.length) {
+										$status.text(message);
+								}
+								return;
+						}
+
+						if ($niceNameCell.length && response.data.nice_name_html) {
+								$niceNameCell.html(response.data.nice_name_html);
+						}
+
+						var suffix = typeof response.data.count === 'number'
+								? ' (' + response.data.count + ' documents)'
+								: '';
+						if ($status.length) {
+								$status.text((response.data.message || 'Nice name updated.') + ' Last refreshed: ' + (response.data.refreshed_at || 'just now') + suffix);
+						}
+				}).fail(function(xhr) {
+						var message = xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message
+								? xhr.responseJSON.data.message
+								: 'The nice name could not be updated.';
+						$feedback.text(message).css('color', '#d63638').show();
+						$button.prop('disabled', false).text('Save');
+						if ($status.length) {
+								$status.text(message);
+						}
+				});
+		});
+
 		if ($('#geweb-referenced-documents-container').attr('data-needs-refresh') === '1') {
 				$('#geweb-refresh-referenced-documents').prop('disabled', true).text('Refreshing...');
 				refreshReferencedDocuments();
 		}
 
+		applyPendingReferencedDocumentTargets();
+
 		function refreshGeminiStores() {
 				var $container = $('#geweb-gemini-stores-container');
 				var $button = $('#geweb-refresh-gemini-stores');
 				var $status = $('#geweb-gemini-stores-status');
+				var $error = $('#geweb-gemini-stores-error');
 				if (!$container.length || !$button.length || isRefreshingGeminiStores) return;
 
 				isRefreshingGeminiStores = true;
 				$button.prop('disabled', true).text('Refreshing...');
 				$status.text('Loading Gemini stores...');
+				$error.hide().text('');
 				$container.html('<p>Loading Gemini stores...</p>');
 
 				$.ajax({
@@ -502,12 +934,15 @@ jQuery(document).ready(function($) {
 								: '';
 						$status.text('Last refreshed: ' + (response.data.refreshed_at || 'just now') + suffix);
 						if (response.data.error) {
-								$container.prepend('<p class="description" style="color:#d63638;">' + $('<div>').text(response.data.error).html() + '</p>');
+								$error.text(response.data.error).show();
+						} else {
+								$error.hide().text('');
 						}
 						isRefreshingGeminiStores = false;
 						$button.prop('disabled', false).text('Refresh List');
 				}).fail(function() {
 						$status.text('Could not refresh Gemini stores.');
+						$error.hide().text('');
 						$container.html('<p>Could not load Gemini stores.</p>');
 						isRefreshingGeminiStores = false;
 						$button.prop('disabled', false).text('Refresh List');
@@ -516,6 +951,74 @@ jQuery(document).ready(function($) {
 
 		$('#geweb-refresh-gemini-stores').on('click', function() {
 				refreshGeminiStores();
+		});
+
+		$(document).on('click', '.geweb-delete-gemini-store', function(e) {
+				e.preventDefault();
+				e.stopPropagation();
+
+				var $button = $(this);
+				var storeName = $button.data('store-name');
+				var confirmMessage = $button.data('confirm-message') || 'Delete this Gemini store?';
+				var $container = $('#geweb-gemini-stores-container');
+				var $status = $('#geweb-gemini-stores-status');
+				var $error = $('#geweb-gemini-stores-error');
+				var $row = $button.closest('tr');
+				if (!storeName || !$container.length || $button.prop('disabled')) return;
+				if (!window.confirm(confirmMessage)) return;
+
+				$button.prop('disabled', true).text('Deleting...');
+				$row.css('opacity', '0.5');
+				$status.text('Deleting Gemini store...');
+				$error.hide().text('');
+
+				$.ajax({
+						url: getAdminAjaxUrl(),
+						type: 'POST',
+						dataType: 'json',
+						data: {
+								action: 'geweb_delete_gemini_store',
+								store_name: storeName,
+								nonce: gewebAisearchAdmin.adminActionNonce
+						}
+				}).done(function(response) {
+						if (!response || !response.success || !response.data || !response.data.html) {
+								var message = response && response.data && response.data.message
+										? response.data.message
+										: 'Could not delete the Gemini store.';
+								$status.text(message);
+								$error.text(message).show();
+								$button.prop('disabled', false).text('Delete');
+								$row.css('opacity', '1');
+								return;
+						}
+
+						$container.html(response.data.html).attr('data-needs-refresh', '0');
+						var suffix = typeof response.data.count === 'number'
+								? ' (' + response.data.count + ' stores)'
+								: '';
+						$status.text((response.data.message || 'Gemini store deleted.') + ' Last refreshed: ' + (response.data.refreshed_at || 'just now') + suffix);
+						if (response.data.error) {
+								$error.text(response.data.error).show();
+						} else {
+								$error.hide().text('');
+						}
+
+						if (response.data.deleted_store_name && $container.find('.geweb-delete-gemini-store[data-store-name="' + response.data.deleted_store_name.replace(/"/g, '\\"') + '"]').length) {
+								$status.text('Delete requested. Refreshing the Gemini stores list again...');
+								window.setTimeout(function() {
+										refreshGeminiStores();
+								}, 1500);
+						}
+				}).fail(function(xhr) {
+						var message = xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message
+								? xhr.responseJSON.data.message
+								: 'Could not delete the Gemini store.';
+						$status.text(message);
+						$error.text(message).show();
+						$button.prop('disabled', false).text('Delete');
+						$row.css('opacity', '1');
+				});
 		});
 
 		if ($('#geweb-gemini-stores-container').attr('data-needs-refresh') === '1') {
