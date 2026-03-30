@@ -63,6 +63,16 @@ class Gemini implements AIProviderInterface {
      */
     private const DEFAULT_MODEL = 'gemini-2.5-flash';
     private const TRANSIENT_MODELS = 'geweb_aisearch_gemini_models';
+    private const MODEL_PRICING_USD_PER_MILLION = [
+        'gemini-2.5-flash' => [
+            'input' => 0.30,
+            'output' => 2.50,
+        ],
+        'gemini-2.5-pro' => [
+            'input' => 1.25,
+            'output' => 10.00,
+        ],
+    ];
 
     /**
      * @var string Gemini API key
@@ -232,6 +242,22 @@ class Gemini implements AIProviderInterface {
     }
 
     /**
+     * Get all documents for a specific Gemini File Search Store.
+     *
+     * @param string $storeName
+     * @return array<int,array<string,string>>
+     * @throws \Exception
+     */
+    public function getStoreDocuments(string $storeName): array {
+        $storeName = trim($storeName);
+        if ($storeName === '') {
+            return [];
+        }
+
+        return $this->listStoreDocuments($storeName);
+    }
+
+    /**
      * Upload document to Gemini File Search Store
      *
      * @param string $content Markdown document content
@@ -329,6 +355,8 @@ class Gemini implements AIProviderInterface {
             throw new \Exception('Invalid upload response');
         }
 
+        $this->clearStoresCache();
+
         return $result['response']['documentName'];
     }
 
@@ -357,6 +385,19 @@ class Gemini implements AIProviderInterface {
         if (is_wp_error($response)) {
             throw new \Exception(esc_html('Delete failed: ' . $response->get_error_message()));
         }
+
+        $httpCode = wp_remote_retrieve_response_code($response);
+        // Treat "already removed" as success to keep delete idempotent.
+        if ($httpCode === 404) {
+            $this->clearStoresCache();
+            return;
+        }
+
+        if ($httpCode < 200 || $httpCode >= 300) {
+            throw new \Exception(esc_html('Delete failed with HTTP code ' . $httpCode));
+        }
+
+        $this->clearStoresCache();
     }
 
     /**
@@ -422,13 +463,15 @@ class Gemini implements AIProviderInterface {
 
             $status = $name === $activeStore ? 'Active in plugin' : 'Likely orphaned';
             $statusColor = $name === $activeStore ? '#46b450' : '#996800';
+            $storeDocuments = $name === $activeStore ? $this->listStoreDocuments($name) : [];
 
             $items[] = [
                 'name' => $name,
                 'display_name' => $displayName,
                 'status' => $status,
                 'status_color' => $statusColor,
-                'document_count' => $this->countStoreDocuments($name),
+                'document_count' => $name === $activeStore ? count($storeDocuments) : $this->countStoreDocuments($name),
+                'documents' => $storeDocuments,
                 'is_active' => $name === $activeStore,
             ];
         }
@@ -506,13 +549,73 @@ class Gemini implements AIProviderInterface {
     }
 
     /**
+     * List all documents in a specific Gemini File Search Store.
+     *
+     * @param string $storeName
+     * @return array<int,array<string,string>>
+     * @throws \Exception
+     */
+    private function listStoreDocuments(string $storeName): array {
+        $items = [];
+        $pageToken = '';
+
+        do {
+            $url = self::API_BASE . '/' . ltrim($storeName, '/') . '/documents?pageSize=20';
+            if ($pageToken !== '') {
+                $url .= '&pageToken=' . rawurlencode($pageToken);
+            }
+
+            $result = $this->makeRequest($url, null, 'GET');
+            $documents = $result['documents'] ?? [];
+            if (is_array($documents)) {
+                foreach ($documents as $document) {
+                    if (!is_array($document)) {
+                        continue;
+                    }
+
+                    $name = isset($document['name']) ? (string) $document['name'] : '';
+                    if ($name === '') {
+                        continue;
+                    }
+
+                    $displayName = '';
+                    if (!empty($document['displayName'])) {
+                        $displayName = (string) $document['displayName'];
+                    } elseif (!empty($document['display_name'])) {
+                        $displayName = (string) $document['display_name'];
+                    }
+
+                    $mimeType = '';
+                    if (!empty($document['mimeType'])) {
+                        $mimeType = (string) $document['mimeType'];
+                    } elseif (!empty($document['mime_type'])) {
+                        $mimeType = (string) $document['mime_type'];
+                    }
+
+                    $items[] = [
+                        'name' => $name,
+                        'display_name' => $displayName,
+                        'mime_type' => $mimeType,
+                    ];
+                }
+            }
+
+            $pageToken = isset($result['nextPageToken']) ? (string) $result['nextPageToken'] : '';
+        } while ($pageToken !== '');
+
+        error_log('geweb-ai-search: Gemini store ' . $storeName . ' returned ' . count($items) . ' document(s) from listStoreDocuments().');
+
+        return $items;
+    }
+
+    /**
      * Search in documents using Gemini File Search
      *
      * @param array $messages Array of messages in format [['role' => 'user', 'content' => '...'], ...]
      * @return array Response ['answer' => '...', 'sources' => [...]] or ['answer' => '...']
      * @throws \Exception On API or network error
      */
-    public function search(array $messages): array {
+    public function search(array $messages, ?string $model = null): array {
         $storeName = $this->getStoreData();
         if (empty($this->apiKey) || empty($storeName)) {
             throw new ConfigurationException('Configuration error');
@@ -522,12 +625,14 @@ class Gemini implements AIProviderInterface {
             throw new \Exception('Messages array is empty');
         }
 
+        $requestModel = is_string($model) && $model !== '' ? $model : $this->model;
+
         // Build request body
-        $body = $this->buildSearchBody($messages, $storeName);
+        $body = $this->buildSearchBody($messages, $storeName, $requestModel);
 
         try {
             // Make API request
-            $url = self::API_BASE . '/models/' . $this->model . ':generateContent';
+            $url = self::API_BASE . '/models/' . $requestModel . ':generateContent';
             $result = $this->makeRequest($url, $body, 'POST');
 
             // Parse response
@@ -536,21 +641,29 @@ class Gemini implements AIProviderInterface {
             }
 
             $responseText = $result['candidates'][0]['content']['parts'][0]['text'];
+            $meta = $this->buildResponseMeta($result, $requestModel);
 
-            $this->recordModelStatus($this->model, 'ok');
+            $this->recordModelStatus($requestModel, 'ok');
 
             // Gemini 3+ returns JSON, Gemini 2.5 returns plain text
-            if ($this->isGemini2Model($this->model)) {
-                return ['answer' => apply_filters('the_content', $responseText)];
+            if ($this->isGemini2Model($requestModel)) {
+                return [
+                    'answer' => apply_filters('the_content', $responseText),
+                    'meta' => $meta,
+                ];
             }
             $decoded = json_decode($responseText, true);
             if (json_last_error() !== JSON_ERROR_NONE) {
-                return ['answer' => apply_filters('the_content', $responseText)];
+                return [
+                    'answer' => apply_filters('the_content', $responseText),
+                    'meta' => $meta,
+                ];
             }
             $decoded['answer'] = apply_filters('the_content', $decoded['answer']);
+            $decoded['meta'] = $meta;
             return $decoded;
         } catch (\Exception $e) {
-            $this->recordModelStatus($this->model, 'failed', $e->getMessage());
+            $this->recordModelStatus($requestModel, 'failed', $e->getMessage());
             throw $e;
         }
     }
@@ -622,7 +735,7 @@ class Gemini implements AIProviderInterface {
      * @param string $storeName File Search Store name
      * @return array Request body
      */
-    private function buildSearchBody(array $messages, string $storeName): array {
+    private function buildSearchBody(array $messages, string $storeName, string $model): array {
         // Get system instruction with filter support
         $systemInstruction = $this->getSystemInstruction();
 
@@ -651,7 +764,7 @@ class Gemini implements AIProviderInterface {
         ];
 
         // Add JSON schema for Gemini 3+ models
-        if (!$this->isGemini2Model($this->model)) {
+        if (!$this->isGemini2Model($model)) {
             $body['generationConfig'] = [
                 'temperature' => 0.3,
                 'responseMimeType' => 'application/json',
@@ -687,6 +800,82 @@ class Gemini implements AIProviderInterface {
         }
 
         return $body;
+    }
+
+    /**
+     * @param array<string,mixed> $result
+     * @return array<string,mixed>
+     */
+    private function buildResponseMeta(array $result, string $model): array {
+        $usage = $this->extractUsageMetadata($result);
+        $meta = [
+            'provider' => $this->getProviderLabel(),
+            'model' => $model,
+        ];
+
+        if (!empty($usage)) {
+            $meta['usage'] = $usage;
+        }
+
+        $estimatedCost = $this->estimateTextGenerationCost($usage, $model);
+        if ($estimatedCost !== null) {
+            $meta['estimated_cost_usd'] = $estimatedCost;
+        }
+
+        return $meta;
+    }
+
+    /**
+     * @param array<string,mixed> $result
+     * @return array<string,int>
+     */
+    private function extractUsageMetadata(array $result): array {
+        $usage = isset($result['usageMetadata']) && is_array($result['usageMetadata'])
+            ? $result['usageMetadata']
+            : [];
+
+        if (empty($usage)) {
+            return [];
+        }
+
+        $mapped = [
+            'input_tokens' => (int) ($usage['promptTokenCount'] ?? 0),
+            'output_tokens' => (int) ($usage['candidatesTokenCount'] ?? 0),
+            'total_tokens' => (int) ($usage['totalTokenCount'] ?? 0),
+            'thought_tokens' => (int) ($usage['thoughtsTokenCount'] ?? 0),
+            'tool_tokens' => (int) ($usage['toolUsePromptTokenCount'] ?? 0),
+            'cached_tokens' => (int) ($usage['cachedContentTokenCount'] ?? 0),
+        ];
+
+        return array_filter($mapped, static function (int $value): bool {
+            return $value > 0;
+        });
+    }
+
+    /**
+     * @param array<string,int> $usage
+     * @return float|null
+     */
+    private function estimateTextGenerationCost(array $usage, string $model): ?float {
+        if (empty($usage)) {
+            return null;
+        }
+
+        $pricing = self::MODEL_PRICING_USD_PER_MILLION[$model] ?? null;
+        if (!is_array($pricing)) {
+            return null;
+        }
+
+        $inputTokens = (int) ($usage['input_tokens'] ?? 0);
+        $outputTokens = (int) ($usage['output_tokens'] ?? 0);
+        if ($inputTokens <= 0 && $outputTokens <= 0) {
+            return null;
+        }
+
+        $inputRate = (float) ($pricing['input'] ?? 0);
+        $outputRate = (float) ($pricing['output'] ?? 0);
+
+        return (($inputTokens / 1000000) * $inputRate) + (($outputTokens / 1000000) * $outputRate);
     }
 
     /**

@@ -64,7 +64,7 @@ class Encryption {
         }
         return base64_decode($key);
     }
-    
+
     /**
      * Save encrypted API key to options
      *

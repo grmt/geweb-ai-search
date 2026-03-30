@@ -67,17 +67,20 @@ class DocumentStore {
         global $wpdb;
 
         if (!file_exists($filePath)) {
+            error_log('geweb-ai-search: referenced document upload skipped because file does not exist: ' . $filePath);
             return null;
         }
 
         $fileHash = hash_file('sha256', $filePath);
         if (!$fileHash) {
+            error_log('geweb-ai-search: referenced document upload skipped because file hash could not be computed: ' . $filePath);
             return null;
         }
 
         // Check if document already exists
         $existingId = $wpdb->get_var($wpdb->prepare("SELECT id FROM " . self::$documentsTable . " WHERE file_hash = %s", $fileHash));
         if ($existingId) {
+            error_log('geweb-ai-search: referenced document already tracked locally: ' . basename($filePath) . ' (document_id=' . (int) $existingId . ')');
             return (int) $existingId;
         }
 
@@ -85,12 +88,15 @@ class DocumentStore {
         try {
             $mimeType = $this->resolveMimeType($filePath);
             if ($mimeType === '') {
+                error_log('geweb-ai-search: referenced document upload skipped because MIME type could not be resolved: ' . $filePath);
                 return null;
             }
 
             $gemini = ProviderFactory::make();
             $displayName = $postId . '-' . basename($filePath);
+            error_log('geweb-ai-search: uploading referenced document to Gemini: ' . $displayName . ' (' . $mimeType . ')');
             $geminiDocName = $gemini->uploadLocalFile($filePath, $displayName, $mimeType);
+            error_log('geweb-ai-search: uploaded referenced document to Gemini as ' . $geminiDocName);
 
             $result = $wpdb->insert(
                 self::$documentsTable,
@@ -103,8 +109,36 @@ class DocumentStore {
                 ['%s', '%s', '%s', '%d']
             );
 
+            if (!$result) {
+                $existing = $wpdb->get_row(
+                    $wpdb->prepare("SELECT id, gemini_doc_name FROM " . self::$documentsTable . " WHERE file_hash = %s", $fileHash),
+                    ARRAY_A
+                );
+
+                if (is_array($existing) && !empty($existing['id'])) {
+                    if (
+                        !empty($geminiDocName) &&
+                        !empty($existing['gemini_doc_name']) &&
+                        (string) $existing['gemini_doc_name'] !== $geminiDocName
+                    ) {
+                        try {
+                            $gemini->deleteDocument($geminiDocName);
+                            error_log('geweb-ai-search: removed duplicate Gemini upload after local file_hash race for ' . $displayName);
+                        } catch (\Exception $cleanupException) {
+                            error_log('geweb-ai-search: could not remove duplicate Gemini upload after local file_hash race for ' . $displayName . ': ' . $cleanupException->getMessage());
+                        }
+                    }
+
+                    error_log('geweb-ai-search: reusing existing referenced document tracking row for ' . $displayName . ' (document_id=' . (int) $existing['id'] . ')');
+                    return (int) $existing['id'];
+                }
+
+                error_log('geweb-ai-search: failed to insert referenced document tracking row for ' . $displayName);
+            }
+
             return $result ? (int) $wpdb->insert_id : null;
         } catch (\Exception $e) {
+            error_log('geweb-ai-search: referenced document upload failed for ' . basename($filePath) . ': ' . $e->getMessage());
             return null;
         }
     }
@@ -1117,6 +1151,129 @@ class DocumentStore {
     }
 
     /**
+     * Remove local referenced-document tracking entries that no longer exist
+     * in the active Gemini store.
+     *
+     * @param array<int,string> $remoteDocumentNames
+     * @return int Number of removed local document rows.
+     */
+    public function reconcileTrackedDocumentsWithRemote(array $remoteDocumentNames): int {
+        self::init();
+        global $wpdb;
+
+        $remoteLookup = [];
+        foreach ($remoteDocumentNames as $name) {
+            if (!is_string($name) || trim($name) === '') {
+                continue;
+            }
+            $remoteLookup[trim($name)] = true;
+        }
+
+        $removedCount = 0;
+        foreach ($this->getAllDocuments() as $document) {
+            if (!is_array($document) || empty($document['id'])) {
+                continue;
+            }
+
+            $documentName = isset($document['gemini_doc_name']) ? trim((string) $document['gemini_doc_name']) : '';
+            if ($documentName !== '' && isset($remoteLookup[$documentName])) {
+                continue;
+            }
+
+            $docId = (int) $document['id'];
+            if ($docId <= 0) {
+                continue;
+            }
+
+            $wpdb->delete(self::$refsTable, ['document_id' => $docId], ['%d']);
+            $deleted = $wpdb->delete(self::$documentsTable, ['id' => $docId], ['%d']);
+            if ($deleted) {
+                $removedCount++;
+            }
+        }
+
+        if ($removedCount > 0) {
+            $this->clearReferencedDocumentOverviewCache();
+        }
+
+        return $removedCount;
+    }
+
+    /**
+     * Enforce selection targets against remote reality for tracked documents.
+     *
+     * If a tracked file is marked as excluded but still exists in the active
+     * Gemini store, attempt to remove it from the store immediately.
+     *
+     * @param array<int,string> $remoteDocumentNames
+     * @return int Number of targets corrected to "included" after failed removals.
+     */
+    public function reconcileSelectionTargetsWithRemote(array $remoteDocumentNames): int {
+        $remoteLookup = [];
+        foreach ($remoteDocumentNames as $name) {
+            if (!is_string($name) || trim($name) === '') {
+                continue;
+            }
+            $remoteLookup[trim($name)] = true;
+        }
+
+        if (empty($remoteLookup)) {
+            return 0;
+        }
+
+        $targets = $this->getReferencedDocumentSelectionTargets();
+        $corrected = 0;
+
+        foreach ($this->getAllDocuments() as $document) {
+            if (!is_array($document)) {
+                continue;
+            }
+
+            $documentName = isset($document['gemini_doc_name']) ? trim((string) $document['gemini_doc_name']) : '';
+            $fileHash = isset($document['file_hash']) ? trim((string) $document['file_hash']) : '';
+            if ($documentName === '' || $fileHash === '') {
+                continue;
+            }
+
+            if (!isset($remoteLookup[$documentName])) {
+                continue;
+            }
+
+            if (isset($targets[$fileHash]) && $targets[$fileHash] === false) {
+                $removed = $this->removeReferencedDocumentByHash($fileHash);
+                if (!$removed) {
+                    // Remote removal failed; keep local status truthful.
+                    $targets[$fileHash] = true;
+                    $corrected++;
+                }
+            }
+        }
+
+        if ($corrected > 0) {
+            $this->saveReferencedDocumentSelectionTargets($targets);
+        }
+
+        return $corrected;
+    }
+
+    /**
+     * Clear all locally tracked referenced documents and associations.
+     *
+     * This is used when the active Gemini store changes, because document
+     * names from the previous store are no longer valid in the new one.
+     *
+     * @return void
+     */
+    public function clearAllTrackedDocuments(): void {
+        self::init();
+        global $wpdb;
+
+        $wpdb->query("DELETE FROM " . self::$refsTable);
+        $wpdb->query("DELETE FROM " . self::$documentsTable);
+        $this->clearReferencedDocumentOverviewCache();
+    }
+
+    /**
      * Get all posts that reference a specific document.
      *
      * @param int $documentId
@@ -1149,11 +1306,14 @@ class DocumentStore {
     public function uploadReferencedDocumentByHash(string $fileHash): bool {
         $reference = $this->findReferenceByHash($fileHash);
         if (!$reference || empty($reference['file_path'])) {
+            error_log('geweb-ai-search: uploadReferencedDocumentByHash could not resolve file hash ' . $fileHash);
             return false;
         }
 
+        error_log('geweb-ai-search: uploadReferencedDocumentByHash starting for ' . (string) $reference['file_path']);
         $documentId = $this->getOrCreateDocument((string) $reference['file_path'], (int) $reference['primary_post_id']);
         if (!$documentId) {
+            error_log('geweb-ai-search: uploadReferencedDocumentByHash failed for ' . (string) $reference['file_path']);
             return false;
         }
 
@@ -1161,6 +1321,7 @@ class DocumentStore {
             $this->associateDocumentWithPosts($documentId, $reference['post_ids']);
         }
         $this->clearReferencedDocumentOverviewCache();
+        error_log('geweb-ai-search: uploadReferencedDocumentByHash succeeded for ' . (string) $reference['file_path'] . ' (document_id=' . $documentId . ')');
 
         return true;
     }
@@ -1187,12 +1348,13 @@ class DocumentStore {
         $docId = (int) $document['id'];
         $gemini = ProviderFactory::make();
 
-        try {
-            if (!empty($document['gemini_doc_name'])) {
+        if (!empty($document['gemini_doc_name'])) {
+            try {
                 $gemini->deleteDocument((string) $document['gemini_doc_name']);
+            } catch (\Exception $e) {
+                // Exclusion/removal must reflect the real remote state.
+                return false;
             }
-        } catch (\Exception $e) {
-            // Ignore remote delete failures; still remove local tracking.
         }
 
         $wpdb->delete(self::$refsTable, ['document_id' => $docId], ['%d']);
@@ -1301,9 +1463,10 @@ class DocumentStore {
      * @return void
      */
     public function applyReferencedDocumentSelectionTargets(array $targets): void {
-        $this->saveReferencedDocumentSelectionTargets($targets);
-
         $overview = $this->getReferencedDocumentOverview(true);
+        $effectiveTargets = $this->getReferencedDocumentSelectionTargets();
+        $processed = [];
+
         foreach ($overview as $item) {
             if (!is_array($item)) {
                 continue;
@@ -1318,16 +1481,32 @@ class DocumentStore {
             $shouldBeIncluded = (bool) $targets[$fileHash];
 
             if ($shouldBeIncluded === $isUploaded) {
+                $effectiveTargets[$fileHash] = $shouldBeIncluded;
+                $processed[$fileHash] = true;
                 continue;
             }
 
             if ($shouldBeIncluded) {
-                $this->uploadReferencedDocumentByHash($fileHash);
+                $uploaded = $this->uploadReferencedDocumentByHash($fileHash);
+                $effectiveTargets[$fileHash] = $uploaded;
             } else {
-                $this->removeReferencedDocumentByHash($fileHash);
+                $removed = $this->removeReferencedDocumentByHash($fileHash);
+                // If removal fails, keep it included because it still exists remotely.
+                $effectiveTargets[$fileHash] = !$removed;
             }
+
+            $processed[$fileHash] = true;
         }
 
+        foreach ($targets as $fileHash => $target) {
+            if (!is_string($fileHash) || $fileHash === '' || isset($processed[$fileHash])) {
+                continue;
+            }
+
+            $effectiveTargets[$fileHash] = (bool) $target;
+        }
+
+        $this->saveReferencedDocumentSelectionTargets($effectiveTargets);
         $this->clearReferencedDocumentOverviewCache();
     }
 

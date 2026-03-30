@@ -51,22 +51,36 @@ class HTML2MD {
         if ( !empty($postTypes) ) {
             foreach ($postTypes as $postType) {
                 if ($postType === 'attachment') {
-                    add_filter('manage_upload_columns', [$this, 'addIndexedColumn']);
+                    add_filter('manage_upload_columns', [$this, 'addAdminColumns']);
                     add_action('manage_media_custom_column', [$this, 'renderIndexedColumn'], 10, 2);
+                    add_action('manage_media_custom_column', [$this, 'renderIdColumn'], 10, 2);
                     continue;
                 }
-                add_filter("manage_{$postType}_posts_columns", [$this, 'addIndexedColumn']);
+                add_filter("manage_{$postType}_posts_columns", [$this, 'addAdminColumns']);
                 add_action("manage_{$postType}_posts_custom_column", [$this, 'renderIndexedColumn'], 10, 2);
+                add_action("manage_{$postType}_posts_custom_column", [$this, 'renderIdColumn'], 10, 2);
             }
         }
     }
 
     /**
-     * Add "AI Indexed" column header
+     * Add admin columns for post ID and AI indexed status.
      */
-    public function addIndexedColumn(array $columns): array {
+    public function addAdminColumns(array $columns): array {
+        $columns['geweb_post_id'] = 'ID';
         $columns['geweb_ai_indexed'] = 'AI Indexed';
         return $columns;
+    }
+
+    /**
+     * Render "ID" column cell.
+     */
+    public function renderIdColumn(string $column, int $postId): void {
+        if ($column !== 'geweb_post_id') {
+            return;
+        }
+
+        echo esc_html((string) $postId);
     }
 
     /**
@@ -392,6 +406,72 @@ class HTML2MD {
         // Remove meta even if deletion failed
         delete_post_meta($postId, self::META_DOCUMENT_NAME);
         $this->setStatus($postId, $statusAfterDelete, '');
+    }
+
+    /**
+     * Clear plugin indexing metadata for all posts.
+     *
+     * @return void
+     */
+    public static function clearAllIndexedState(): void {
+        delete_post_meta_by_key(self::META_DOCUMENT_NAME);
+        delete_post_meta_by_key(self::META_STATUS);
+        delete_post_meta_by_key(self::META_LAST_INDEXED);
+        delete_post_meta_by_key(self::META_LAST_ERROR);
+    }
+
+    /**
+     * Ensure post-level indexed status reflects documents that still exist
+     * in the active Gemini store.
+     *
+     * @param array<int,string> $remoteDocumentNames
+     * @return int Number of posts corrected from stale indexed state.
+     */
+    public static function reconcileIndexedPostsWithRemoteDocuments(array $remoteDocumentNames): int {
+        $remoteLookup = [];
+        foreach ($remoteDocumentNames as $name) {
+            if (!is_string($name) || trim($name) === '') {
+                continue;
+            }
+            $remoteLookup[trim($name)] = true;
+        }
+
+        $postIds = get_posts([
+            'post_type' => 'any',
+            'post_status' => 'any',
+            'numberposts' => -1,
+            'fields' => 'ids',
+            'meta_query' => [
+                [
+                    'key' => self::META_DOCUMENT_NAME,
+                    'compare' => 'EXISTS',
+                ],
+            ],
+        ]);
+
+        if (!is_array($postIds) || empty($postIds)) {
+            return 0;
+        }
+
+        $corrected = 0;
+        foreach ($postIds as $postId) {
+            $postId = (int) $postId;
+            if ($postId <= 0) {
+                continue;
+            }
+
+            $documentName = trim((string) get_post_meta($postId, self::META_DOCUMENT_NAME, true));
+            if ($documentName !== '' && isset($remoteLookup[$documentName])) {
+                continue;
+            }
+
+            delete_post_meta($postId, self::META_DOCUMENT_NAME);
+            update_post_meta($postId, self::META_STATUS, 'not_indexed');
+            delete_post_meta($postId, self::META_LAST_ERROR);
+            $corrected++;
+        }
+
+        return $corrected;
     }
 
     /**

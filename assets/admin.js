@@ -328,6 +328,113 @@ jQuery(document).ready(function($) {
 				});
 		});
 
+		$(document).on('click', '.geweb-edit-conversation-trigger', function(e) {
+				e.preventDefault();
+				var $cell = $(this).closest('.geweb-conversation-summary-cell');
+				$cell.find('.geweb-conversation-summary-label, .geweb-edit-conversation-trigger').hide();
+				$cell.find('.geweb-edit-conversation-form').show();
+				$cell.find('.geweb-edit-conversation-input').trigger('focus');
+		});
+
+		$(document).on('click', '.geweb-cancel-conversation-name', function(e) {
+				e.preventDefault();
+				var $cell = $(this).closest('.geweb-conversation-summary-cell');
+				$cell.find('.geweb-edit-conversation-input').val($cell.data('current-summary') || '');
+				$cell.find('.geweb-ai-index-feedback').hide().text('');
+				$cell.find('.geweb-edit-conversation-form').hide();
+				$cell.find('.geweb-conversation-summary-label, .geweb-edit-conversation-trigger').show();
+		});
+
+		$(document).on('click', '.geweb-save-conversation-name', function(e) {
+				e.preventDefault();
+				var $button = $(this);
+				var $cell = $button.closest('.geweb-conversation-summary-cell');
+				var $input = $cell.find('.geweb-edit-conversation-input');
+				var $feedback = $cell.find('.geweb-ai-index-feedback');
+				var conversationId = $cell.data('conversation-id');
+				var summary = $.trim(String($input.val() || ''));
+
+				if (!conversationId) {
+						return;
+				}
+
+				if (!summary) {
+						$feedback.text('Conversation name cannot be empty.').css('color', '#d63638').show();
+						return;
+				}
+
+				$button.prop('disabled', true);
+				$feedback.text('Saving conversation name...').css('color', '#646970').show();
+
+				$.ajax({
+						url: getAdminAjaxUrl(),
+						type: 'POST',
+						data: {
+								action: 'geweb_rename_conversation',
+								nonce: gewebAisearchAdmin.adminActionNonce,
+								conversation_id: conversationId,
+								summary: summary
+						}
+				}).done(function(response) {
+						if (!response || !response.success || !response.data) {
+								var message = response && response.data && response.data.message ? response.data.message : 'Could not rename the conversation.';
+								$feedback.text(message).css('color', '#d63638').show();
+								return;
+						}
+
+						$cell.data('current-summary', response.data.summary);
+						$cell.find('.geweb-conversation-summary-label').text(response.data.summary).show();
+						$cell.find('.geweb-edit-conversation-form').hide();
+						$cell.find('.geweb-edit-conversation-trigger').show();
+						$feedback.text(response.data.message || 'Conversation renamed.').css('color', '#46b450').show();
+				}).fail(function() {
+						$feedback.text('Could not rename the conversation.').css('color', '#d63638').show();
+				}).always(function() {
+						$button.prop('disabled', false);
+				});
+		});
+
+		$(document).on('click', '.geweb-delete-conversation-trigger', function(e) {
+				e.preventDefault();
+				var $button = $(this);
+				var $cell = $button.closest('.geweb-conversation-summary-cell');
+				var $feedback = $cell.find('.geweb-ai-index-feedback');
+				var conversationId = $cell.data('conversation-id');
+
+				if (!conversationId) {
+						return;
+				}
+
+				if (!window.confirm('Delete this saved conversation?')) {
+						return;
+				}
+
+				$button.prop('disabled', true);
+				$feedback.text('Deleting conversation...').css('color', '#646970').show();
+
+				$.ajax({
+						url: getAdminAjaxUrl(),
+						type: 'POST',
+						data: {
+								action: 'geweb_delete_conversation',
+								nonce: gewebAisearchAdmin.adminActionNonce,
+								conversation_id: conversationId
+						}
+				}).done(function(response) {
+						if (!response || !response.success) {
+								var message = response && response.data && response.data.message ? response.data.message : 'Could not delete the conversation.';
+								$feedback.text(message).css('color', '#d63638').show();
+								return;
+						}
+
+						window.location.reload();
+				}).fail(function() {
+						$feedback.text('Could not delete the conversation.').css('color', '#d63638').show();
+				}).always(function() {
+						$button.prop('disabled', false);
+				});
+		});
+
 		$('#geweb-ai-clear-history').on('click', function() {
 				var $button = $(this);
 				var $diff = $('#geweb-ai-prompt-history-diff');
@@ -466,6 +573,9 @@ jQuery(document).ready(function($) {
 
 		if ($settingsForm.length) {
 				$settingsForm.on('input change', function() {
+						updateSaveButtonState();
+				});
+				$('#geweb_ai_search_frontend_ai_interface').on('change', function() {
 						updateSaveButtonState();
 				});
 				$settingsForm.on('submit', function() {
@@ -665,6 +775,147 @@ jQuery(document).ready(function($) {
 				});
 		}
 
+		function applyPendingReferencedDocumentTargets() {
+				// This hook used to apply staged UI state for referenced documents.
+				// Keep it as a no-op so admin initialization does not fail when the
+				// referenced documents and Gemini stores panels are loaded.
+		}
+
+		function refreshSelectedGeminiStoreDocuments(storeName, storeLabel) {
+				var $panel = $('#geweb-gemini-store-documents-panel');
+				var $container = $('#geweb-gemini-store-documents-container');
+				var $status = $('#geweb-gemini-store-documents-status');
+				var $error = $('#geweb-gemini-store-documents-error');
+				var $title = $('#geweb-gemini-store-documents-title');
+				var $button = $('#geweb-refresh-gemini-store-documents');
+				var $storesRefreshButton = $('#geweb-refresh-gemini-stores');
+				if (!$panel.length || !$container.length || !storeName) return;
+
+				$panel.attr('data-store-name', storeName);
+				$title.text(storeLabel || storeName);
+				$button.prop('disabled', true).text('Refreshing...');
+				$storesRefreshButton.prop('disabled', true);
+				$status.text('Loading uploaded items...');
+				$error.hide().text('');
+				$container.html('<p>Loading uploaded items...</p>');
+
+				$.ajax({
+						url: getAdminAjaxUrl(),
+						type: 'POST',
+						dataType: 'json',
+						data: {
+								action: 'geweb_refresh_gemini_store_documents',
+								store_name: storeName,
+								store_label: storeLabel || storeName,
+								nonce: gewebAisearchAdmin.adminActionNonce
+						}
+				}).done(function(response) {
+						if (!response || !response.success || !response.data || typeof response.data.html !== 'string') {
+								var message = response && response.data && response.data.message
+										? response.data.message
+										: 'Could not refresh uploaded items.';
+								$status.text(message);
+								$error.text(message).show();
+								$container.html('<p>Could not load uploaded items.</p>');
+								$button.prop('disabled', false).text('Refresh List');
+								$storesRefreshButton.prop('disabled', false).text('Refresh List');
+								return;
+						}
+
+						$container.html(response.data.html);
+						applyGeminiStoreDocumentsBrowserState();
+						$title.text(response.data.store_label || storeLabel || storeName);
+						$status.text((response.data.message || 'Uploaded items refreshed.') + (typeof response.data.count === 'number' ? ' (' + response.data.count + ' items)' : ''));
+						$error.hide().text('');
+						$button.prop('disabled', false).text('Refresh List');
+						$storesRefreshButton.prop('disabled', false).text('Refresh List');
+				}).fail(function(xhr) {
+						var message = xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message
+								? xhr.responseJSON.data.message
+								: 'Could not refresh uploaded items.';
+						$status.text(message);
+						$error.text(message).show();
+						$container.html('<p>Could not load uploaded items.</p>');
+						$button.prop('disabled', false).text('Refresh List');
+						$storesRefreshButton.prop('disabled', false).text('Refresh List');
+				});
+		}
+
+		function applyGeminiStoreDocumentsBrowserState() {
+				var $browser = $('.geweb-gemini-store-documents-browser');
+				if (!$browser.length) return;
+
+				$browser.each(function() {
+						var $currentBrowser = $(this);
+						var $filter = $currentBrowser.find('.geweb-gemini-store-documents-filter');
+						var $idFilter = $currentBrowser.find('.geweb-gemini-store-documents-id-filter');
+						var $slugFilter = $currentBrowser.find('.geweb-gemini-store-documents-slug-filter');
+						var $typeFilter = $currentBrowser.find('.geweb-gemini-store-documents-type-filter');
+						var $sortHeaders = $currentBrowser.find('.geweb-gemini-store-documents-sort-header');
+						var $status = $currentBrowser.find('.geweb-gemini-store-documents-filter-status');
+						var $tbody = $currentBrowser.find('tbody');
+						var $rows = $tbody.find('tr');
+						if (!$rows.length) {
+								$status.text('No uploaded items found.');
+								return;
+						}
+
+						var filterValue = $.trim(String($filter.val() || '')).toLowerCase();
+						var idFilterValue = $.trim(String($idFilter.val() || '')).toLowerCase();
+						var slugFilterValue = $.trim(String($slugFilter.val() || '')).toLowerCase();
+						var typeValue = $.trim(String($typeFilter.val() || '')).toLowerCase();
+						var sortValue = String($currentBrowser.attr('data-sort') || 'name-asc');
+						var sortParts = sortValue.split('-');
+						var sortKey = sortParts[0] || 'name';
+						var sortDirection = sortParts[1] === 'desc' ? 'desc' : 'asc';
+
+						var rows = $rows.get();
+						rows.sort(function(a, b) {
+								var $a = $(a);
+								var $b = $(b);
+								var direction = sortDirection === 'desc' ? -1 : 1;
+								var aValue = String($a.attr('data-' + sortKey) || '');
+								var bValue = String($b.attr('data-' + sortKey) || '');
+								return aValue.localeCompare(bValue, undefined, { sensitivity: 'base' }) * direction;
+						});
+						$tbody.append(rows);
+
+						$sortHeaders.each(function() {
+								var $header = $(this);
+								var headerKey = String($header.data('sort-key') || '');
+								var headerLabel = String($header.data('sort-label') || $header.text() || '');
+								var suffix = ' ↕';
+								if (headerKey === sortKey) {
+										suffix = sortDirection === 'desc' ? ' ↓' : ' ↑';
+								}
+								$header.text(headerLabel + suffix);
+						});
+
+						var visibleCount = 0;
+						$rows.each(function() {
+								var $row = $(this);
+								var haystack = [
+										String($row.attr('data-name') || ''),
+										String($row.attr('data-id') || ''),
+										String($row.attr('data-slug') || ''),
+										String($row.attr('data-type') || ''),
+										String($row.attr('data-url') || '')
+								].join(' ');
+								var matchesFilter = !filterValue || haystack.indexOf(filterValue) !== -1;
+								var matchesId = !idFilterValue || String($row.attr('data-id') || '').split(',').map(function(part) {
+										return $.trim(String(part || ''));
+								}).indexOf(idFilterValue) !== -1;
+								var matchesSlug = !slugFilterValue || String($row.attr('data-slug') || '').indexOf(slugFilterValue) !== -1;
+								var matchesType = !typeValue || String($row.attr('data-type') || '') === typeValue;
+								var visible = matchesFilter && matchesId && matchesSlug && matchesType;
+								$row.toggle(visible);
+								if (visible) visibleCount += 1;
+						});
+
+						$status.text(visibleCount + ' item' + (visibleCount === 1 ? '' : 's') + ' shown');
+				});
+		}
+
 		$('#geweb-refresh-referenced-documents').on('click', function() {
 				refreshReferencedDocuments();
 		});
@@ -717,6 +968,10 @@ jQuery(document).ready(function($) {
 
 						if ($status.length) {
 								$status.text(response.data.message || 'Document uploaded.');
+						}
+
+						if ($('#geweb-gemini-stores-container').length) {
+								refreshGeminiStores();
 						}
 				}).fail(function(xhr) {
 						var message = xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message
@@ -776,6 +1031,10 @@ jQuery(document).ready(function($) {
 
 						if ($status.length) {
 								$status.text(response.data.message || (exclude ? 'Excluded from indexing.' : 'Included for indexing.'));
+						}
+
+						if ($('#geweb-gemini-stores-container').length) {
+								refreshGeminiStores();
 						}
 				}).fail(function(xhr) {
 						var message = xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message
@@ -929,14 +1188,31 @@ jQuery(document).ready(function($) {
 						}
 
 						$container.html(response.data.html).attr('data-needs-refresh', '0');
-						var suffix = typeof response.data.count === 'number'
-								? ' (' + response.data.count + ' stores)'
-								: '';
+						var suffix = '';
+						if (typeof response.data.count === 'number') {
+								suffix = ' (' + response.data.count + ' ' + (response.data.count === 1 ? 'store' : 'stores') + ')';
+						}
 						$status.text('Last refreshed: ' + (response.data.refreshed_at || 'just now') + suffix);
 						if (response.data.error) {
 								$error.text(response.data.error).show();
 						} else {
 								$error.hide().text('');
+						}
+						$('#geweb-refresh-gemini-store-documents').prop('disabled', true).text('Refreshing...');
+						var selectedStoreName = $('#geweb-gemini-store-documents-panel').attr('data-store-name') || '';
+						var $selectedButton = selectedStoreName
+								? $('.geweb-select-gemini-store[data-store-name="' + String(selectedStoreName).replace(/"/g, '\\"') + '"]').first()
+								: $();
+						if (!$selectedButton.length) {
+								$selectedButton = $('.geweb-select-gemini-store').first();
+						}
+						if ($selectedButton.length) {
+								refreshSelectedGeminiStoreDocuments(
+										String($selectedButton.data('store-name') || ''),
+										String($selectedButton.data('store-label') || '')
+								);
+						} else {
+								$('#geweb-refresh-gemini-store-documents').prop('disabled', false).text('Refresh List');
 						}
 						isRefreshingGeminiStores = false;
 						$button.prop('disabled', false).text('Refresh List');
@@ -944,6 +1220,7 @@ jQuery(document).ready(function($) {
 						$status.text('Could not refresh Gemini stores.');
 						$error.hide().text('');
 						$container.html('<p>Could not load Gemini stores.</p>');
+						$('#geweb-refresh-gemini-store-documents').prop('disabled', false).text('Refresh List');
 						isRefreshingGeminiStores = false;
 						$button.prop('disabled', false).text('Refresh List');
 				});
@@ -951,6 +1228,47 @@ jQuery(document).ready(function($) {
 
 		$('#geweb-refresh-gemini-stores').on('click', function() {
 				refreshGeminiStores();
+		});
+
+		$(document).on('click', '.geweb-select-gemini-store', function(e) {
+				e.preventDefault();
+				var $button = $(this);
+				var storeName = String($button.data('store-name') || '');
+				var storeLabel = String($button.data('store-label') || '');
+				if (!storeName) return;
+
+				$('.geweb-select-gemini-store').css('font-weight', '400');
+				$button.css('font-weight', '600');
+				refreshSelectedGeminiStoreDocuments(storeName, storeLabel);
+		});
+
+		$('#geweb-refresh-gemini-store-documents').on('click', function() {
+				var $panel = $('#geweb-gemini-store-documents-panel');
+				var storeName = String($panel.attr('data-store-name') || '');
+				var storeLabel = $.trim($('#geweb-gemini-store-documents-title').text());
+				if (!storeName) return;
+
+				refreshSelectedGeminiStoreDocuments(storeName, storeLabel);
+		});
+
+		$(document).on('input change', '.geweb-gemini-store-documents-filter, .geweb-gemini-store-documents-id-filter, .geweb-gemini-store-documents-slug-filter, .geweb-gemini-store-documents-type-filter', function() {
+				applyGeminiStoreDocumentsBrowserState();
+		});
+
+		$(document).on('click', '.geweb-gemini-store-documents-sort-header', function(e) {
+				e.preventDefault();
+				var $button = $(this);
+				var $browser = $button.closest('.geweb-gemini-store-documents-browser');
+				var sortKey = String($button.data('sort-key') || 'name');
+				var currentSort = String($browser.attr('data-sort') || 'name-asc');
+				var nextDirection = 'asc';
+
+				if (currentSort === sortKey + '-asc') {
+						nextDirection = 'desc';
+				}
+
+				$browser.attr('data-sort', sortKey + '-' + nextDirection);
+				applyGeminiStoreDocumentsBrowserState();
 		});
 
 		$(document).on('click', '.geweb-delete-gemini-store', function(e) {
@@ -994,9 +1312,10 @@ jQuery(document).ready(function($) {
 						}
 
 						$container.html(response.data.html).attr('data-needs-refresh', '0');
-						var suffix = typeof response.data.count === 'number'
-								? ' (' + response.data.count + ' stores)'
-								: '';
+						var suffix = '';
+						if (typeof response.data.count === 'number') {
+								suffix = ' (' + response.data.count + ' ' + (response.data.count === 1 ? 'store' : 'stores') + ')';
+						}
 						$status.text((response.data.message || 'Gemini store deleted.') + ' Last refreshed: ' + (response.data.refreshed_at || 'just now') + suffix);
 						if (response.data.error) {
 								$error.text(response.data.error).show();
@@ -1025,4 +1344,6 @@ jQuery(document).ready(function($) {
 				$('#geweb-refresh-gemini-stores').prop('disabled', true).text('Refreshing...');
 				refreshGeminiStores();
 		}
+
+		applyGeminiStoreDocumentsBrowserState();
 	});

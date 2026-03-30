@@ -27,9 +27,11 @@ class ReferencedDocumentListTable extends \WP_List_Table {
      */
     public function get_columns(): array {
         return [
+            'content_ids'   => 'ID',
             'display_name'  => 'Document Name',
             'nice_name'     => 'Nice Name',
             'status'        => 'AI Indexed',
+            'tracked_as'    => 'Tracked As',
             'mime_type'     => 'Type',
             'last_uploaded' => 'Upload Date',
             'referenced_in' => 'Referenced In',
@@ -42,6 +44,7 @@ class ReferencedDocumentListTable extends \WP_List_Table {
      */
     protected function get_sortable_columns(): array {
         return [
+            'content_ids' => ['reference_count', false],
             'display_name' => ['display_name', true],
             'nice_name' => ['nice_name', false],
             'status' => ['status', false],
@@ -104,6 +107,31 @@ class ReferencedDocumentListTable extends \WP_List_Table {
      * @param array<string,mixed> $item
      * @return string
      */
+    protected function column_content_ids($item): string {
+        $posts = isset($item['posts']) && is_array($item['posts']) ? $item['posts'] : [];
+        if (empty($posts)) {
+            return '—';
+        }
+
+        $ids = [];
+        foreach ($posts as $post) {
+            if (!is_array($post)) {
+                continue;
+            }
+
+            $postId = isset($post['id']) ? (int) $post['id'] : 0;
+            if ($postId > 0) {
+                $ids[] = (string) $postId;
+            }
+        }
+
+        return empty($ids) ? '—' : esc_html(implode(', ', array_values(array_unique($ids))));
+    }
+
+    /**
+     * @param array<string,mixed> $item
+     * @return string
+     */
     protected function column_nice_name($item): string {
         $niceName = isset($item['nice_name']) ? trim((string) $item['nice_name']) : '';
         $displayName = isset($item['display_name']) ? trim((string) $item['display_name']) : '';
@@ -146,8 +174,16 @@ class ReferencedDocumentListTable extends \WP_List_Table {
     protected function column_status($item): string {
         $includeTarget = !empty($item['include_in_store_target']);
         $isUploaded = strpos((string) ($item['status'] ?? ''), 'Uploaded') === 0;
+        $isPendingUpload = $includeTarget && !$isUploaded;
+        $isPendingExclude = !$includeTarget && $isUploaded;
 
-        if (!$includeTarget) {
+        if ($isPendingUpload) {
+            $label = 'Uploading';
+            $color = '#2271b1';
+        } elseif ($isPendingExclude) {
+            $label = 'Excluding';
+            $color = '#996800';
+        } elseif (!$includeTarget) {
             $label = 'Excluded';
             $color = '#996800';
         } elseif ($isUploaded) {
@@ -159,6 +195,30 @@ class ReferencedDocumentListTable extends \WP_List_Table {
         }
 
         return '<span style="color:' . esc_attr($color) . ';">' . esc_html($label) . '</span>';
+    }
+
+    /**
+     * @param array<string,mixed> $item
+     * @return string
+     */
+    protected function column_tracked_as($item): string {
+        $documentId = isset($item['document_id']) ? (int) $item['document_id'] : 0;
+        $geminiDocName = isset($item['gemini_doc_name']) ? trim((string) $item['gemini_doc_name']) : '';
+
+        if ($documentId <= 0 && $geminiDocName === '') {
+            return '—';
+        }
+
+        $parts = [];
+        if ($documentId > 0) {
+            $parts[] = '<code>#' . esc_html((string) $documentId) . '</code>';
+        }
+
+        if ($geminiDocName !== '') {
+            $parts[] = '<code>' . esc_html($geminiDocName) . '</code>';
+        }
+
+        return implode('<br>', $parts);
     }
 
     /**
@@ -217,6 +277,11 @@ class ReferencedDocumentListTable extends \WP_List_Table {
         $isUploaded = strpos($status, 'Uploaded') === 0;
         $canManage = $isUploaded || !empty($item['file_path']);
         $includeTarget = !empty($item['include_in_store_target']);
+        $isPendingUpload = $includeTarget && !$isUploaded;
+        $isPendingExclude = !$includeTarget && $isUploaded;
+        $isTransitioning = $isPendingUpload || $isPendingExclude;
+        $disableUpload = !$includeTarget || $isTransitioning;
+        $disableExcludeToggle = $isTransitioning;
 
         if (!$canManage) {
             return '<div class="geweb-ai-index-cell geweb-referenced-document-cell" data-file-hash="' . esc_attr($fileHash) . '"><p style="margin:0;">—</p><p class="geweb-ai-index-feedback" style="display:none; margin:4px 0 0;"></p></div>';
@@ -225,16 +290,17 @@ class ReferencedDocumentListTable extends \WP_List_Table {
         return sprintf(
             '<div class="geweb-ai-index-cell geweb-referenced-document-cell" data-file-hash="%s" data-current-uploaded="%s" data-current-target="%s">' .
             '<button type="button" class="button button-small geweb-referenced-document-upload-now" data-file-hash="%s"%s>Upload</button> ' .
-            '<label style="margin-left:8px;"><input type="checkbox" class="geweb-referenced-document-toggle-exclude" data-file-hash="%s" %s> Exclude</label>' .
+            '<label style="margin-left:8px;"><input type="checkbox" class="geweb-referenced-document-toggle-exclude" data-file-hash="%s" %s%s> Exclude</label>' .
             '<p class="geweb-ai-index-feedback" style="display:none; margin:4px 0 0;"></p>' .
             '</div>',
             esc_attr($fileHash),
             $isUploaded ? '1' : '0',
             $includeTarget ? '1' : '0',
             esc_attr($fileHash),
-            $includeTarget ? '' : ' disabled',
+            $disableUpload ? ' disabled' : '',
             esc_attr($fileHash),
-            checked(!$includeTarget, true, false)
+            checked(!$includeTarget, true, false),
+            $disableExcludeToggle ? ' disabled' : ''
         );
     }
 
@@ -423,12 +489,22 @@ class ReferencedDocumentListTable extends \WP_List_Table {
         $statusColor = strtolower(trim((string) ($item['status_color'] ?? '')));
         $includeTarget = !empty($item['include_in_store_target']);
         $isUploaded = strpos((string) ($item['status'] ?? ''), 'Uploaded') === 0;
+        $isPendingUpload = $includeTarget && !$isUploaded;
+        $isPendingExclude = !$includeTarget && $isUploaded;
 
         if (strpos($status, 'uploading') !== false || strpos($status, 'pending') !== false) {
             return 'uploading';
         }
 
         if (strpos($status, 'removing') !== false || strpos($status, 'excluding') !== false) {
+            return 'excluding';
+        }
+
+        if ($isPendingUpload) {
+            return 'uploading';
+        }
+
+        if ($isPendingExclude) {
             return 'excluding';
         }
 

@@ -1,6 +1,19 @@
 body.no-scroll {
     overflow: hidden;
 }
+body.geweb-ai-page {
+    margin: 0;
+    background: #f5f5f5;
+}
+body.geweb-ai-page-open {
+    overflow: auto;
+}
+.geweb-ai-page-root {
+    min-height: 100vh;
+}
+body.geweb-ai-page #wpadminbar #wp-admin-bar-search {
+    display: none !important;
+}
 .geweb-ai-search-form {
     display: flex;
     align-items: center;
@@ -9,22 +22,88 @@ body.no-scroll {
 .geweb-ai-search-form .geweb-ai-search-input {
     min-width: 0;
 }
+.geweb-ai-page-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px !important;
+    min-width: 40px !important;
+    height: 40px !important;
+    padding: 0 !important;
+    color: transparent !important;
+    background: #000 !important;
+    border: 1px solid rgba(0, 0, 0, 0.2) !important;
+    border-radius: 8px !important;
+    box-sizing: border-box;
+    cursor: pointer;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+    font: inherit;
+    font-size: 0 !important;
+    line-height: 0 !important;
+    text-decoration: none;
+    overflow: hidden;
+    text-indent: -9999px;
+    white-space: nowrap;
+}
+.geweb-ai-page-trigger::before {
+    content: "";
+    width: 18px;
+    height: 18px;
+    background: url(../assets/img/ask-ai-icon-white.svg) center no-repeat;
+    background-size: contain;
+    display: block;
+    flex: 0 0 auto;
+}
+.geweb-ai-page-trigger:hover {
+    border-color: #000 !important;
+    box-shadow: 0 4px 15px 0 rgba(0, 0, 0, 0.15);
+}
+.geweb-ai-page-trigger:focus-visible {
+    outline: 2px solid #2271b1;
+    outline-offset: 2px;
+}
 .geweb-ai-trigger {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    white-space: nowrap;
+    width: 40px !important;
+    min-width: 40px !important;
+    height: 40px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    color: transparent !important;
+    background: #000 !important;
+    border: 1px solid rgba(0, 0, 0, 0.2) !important;
+    border-radius: 8px !important;
+    box-sizing: border-box;
+    cursor: pointer;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+    overflow: hidden;
+    font-size: 0 !important;
+    line-height: 0 !important;
+    text-indent: -9999px;
+    vertical-align: top;
+}
+.geweb-ai-trigger:hover {
+    border-color: #000 !important;
+    box-shadow: 0 4px 15px 0 rgba(0, 0, 0, 0.15);
+}
+.geweb-ai-trigger:focus-visible {
+    outline: 2px solid #2271b1;
+    outline-offset: 2px;
 }
 .geweb-ai-trigger:before {
     content: "";
-    width: 16px;
-    height: 16px;
-    background: url(../assets/img/ask-ai-icon-black.svg) center no-repeat;
+    width: 18px;
+    height: 18px;
+    background: url(../assets/img/ask-ai-icon-white.svg) center no-repeat;
     background-size: contain;
+    display: block;
+    flex: 0 0 auto;
+    text-indent: 0;
 }
 .geweb-aisearch-modal-window {
-    max-width: 800px;
+    max-width: 1200px;
     width: 100%;
     flex-direction: column;
     row-gap: 16px;
@@ -40,6 +119,25 @@ body.no-scroll {
 }
 .geweb-aisearch-modal-window[open] {
     display: flex;
+}
+.geweb-aisearch-modal-window--modal {
+    max-width: 800px;
+}
+.geweb-aisearch-modal-window--fullscreen {
+    max-width: calc(100% - 32px);
+    height: calc(100% - 32px);
+    max-height: calc(100% - 32px);
+}
+.geweb-aisearch-modal-window--page {
+    display: flex;
+    position: relative;
+    inset: auto;
+    margin: 16px auto;
+    max-width: min(1440px, calc(100% - 32px));
+    min-height: calc(100vh - 32px);
+    height: auto;
+    max-height: none;
+    z-index: 1;
 }
 .geweb-aisearch-modal-window input[type="text"],
 .geweb-aisearch-modal-window textarea {
@@ -118,6 +216,16 @@ body.no-scroll {
 .geweb-aisearch-modal-window .modal-header .close:hover {
     border-color: #000;
 }
+.geweb-aisearch-modal-window .modal-header .close--page {
+    width: auto;
+    min-width: 0;
+    padding: 0 12px;
+    background: #fff;
+    color: #1d2327;
+    font: inherit;
+    line-height: 38px;
+    text-indent: 0;
+}
 .geweb-aisearch-modal-window .modal-header .ai-assistant-title {
     display: flex;
     align-items: center;
@@ -135,52 +243,240 @@ body.no-scroll {
     background: url(../assets/img/ask-ai-icon-black.svg) center no-repeat;
     background-size: contain;
 }
-.geweb-aisearch-modal-window .results-box small {
-    display: inline-block;
-    vertical-align: top;
-    font-size: 14px;
-    line-height: 22px;
-    font-weight: 600;
-    color: #000;
-    background-color: rgba(0,0,0,.05);
-    border-radius: 4px;
-    padding: 2px 8px;
-    margin: 0 0 20px;
+.geweb-ai-workspace {
+    display: grid;
+    grid-template-columns: minmax(180px, 240px) minmax(0, 1fr) minmax(220px, 280px);
+    gap: 16px;
+    min-height: 0;
+    flex: 1 1 auto;
 }
-.geweb-aisearch-modal-window .results-box ul {
+.geweb-ai-search-results-panel {
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.92);
+    padding: 16px;
+}
+.geweb-ai-search-results-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+.geweb-ai-search-results-panel.is-collapsed .geweb-ai-search-results-content {
+    display: none;
+}
+.geweb-ai-search-results-panel.is-collapsed .geweb-ai-search-results-header {
+    margin-bottom: 0;
+}
+.geweb-ai-search-results-list {
     list-style: none;
+    margin: 0;
     padding: 0;
-    font-size: 16px;
-    line-height: 25px;
-    margin: -12px 0 0;
 }
-.geweb-aisearch-modal-window .results-box ul li {
-    border-bottom: 1px dashed rgba(47, 40, 39, 0.3);
+.geweb-ai-search-result-item + .geweb-ai-search-result-item {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(0, 0, 0, 0.08);
 }
-.geweb-aisearch-modal-window .results-box ul a {
-    display: block;
+.geweb-ai-search-result-link {
+    color: #1d2327;
+    font-weight: 700;
     text-decoration: none;
-    padding: 12px 4px;
 }
-.geweb-aisearch-modal-window .results-box ul a:hover {
+.geweb-ai-search-result-link:hover {
     text-decoration: underline;
 }
-.geweb-aisearch-modal-window .answer-box {
+.geweb-ai-search-result-excerpt {
+    margin-top: 6px;
+    color: #50575e;
+    font-size: 13px;
+    line-height: 1.5;
+}
+.geweb-ai-sidebar,
+.geweb-ai-sources-panel,
+.geweb-ai-main-panel {
+    min-height: 0;
+}
+.geweb-ai-main-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.geweb-ai-current-conversation {
+    margin-bottom: 12px;
+    padding: 12px;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-radius: 12px;
+    background: rgba(0, 0, 0, 0.02);
+}
+.geweb-ai-current-conversation-label {
+    font-size: 11px;
+    line-height: 16px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #646970;
+}
+.geweb-ai-current-conversation-summary {
+    margin-top: 6px;
+    color: #1d2327;
+    font-size: 14px;
+    line-height: 1.5;
+    word-break: break-word;
+}
+.geweb-ai-current-conversation-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+.geweb-aisearch-modal-window--modal .geweb-ai-workspace {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
+}
+.geweb-aisearch-modal-window--modal .geweb-ai-sources-panel {
+    display: none;
+}
+.geweb-aisearch-modal-window--modal .geweb-ai-conversation-overview {
+    min-height: 120px;
+    max-height: 180px;
+}
+.geweb-aisearch-modal-window--modal .geweb-ai-search-results-panel {
+    display: none;
+}
+.geweb-ai-panel-title {
+    font-size: 12px;
+    line-height: 18px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #646970;
+    margin-bottom: 10px;
+}
+.geweb-ai-panel-title--inline {
+    margin-bottom: 0;
+}
+.geweb-ai-overview-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+.geweb-ai-conversation-overview,
+.geweb-ai-sources {
     height: 100%;
+    min-height: 320px;
+    overflow-y: auto;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-radius: 12px;
+    background: rgba(0, 0, 0, 0.02);
+    padding: 12px;
+    box-sizing: border-box;
+}
+.geweb-ai-sources-help {
+    margin: 0 0 10px;
+    color: #646970;
+    font-size: 12px;
+    line-height: 1.5;
+}
+.geweb-ai-overview-item {
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: #fff;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+}
+.geweb-ai-overview-item--conversation {
+    display: block;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+}
+.geweb-ai-overview-item + .geweb-ai-overview-item {
+    margin-top: 8px;
+}
+.geweb-ai-overview-item.is-current {
+    border-color: rgba(0, 0, 0, 0.28);
+    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.06);
+}
+.geweb-ai-overview-role {
+    font-size: 11px;
+    line-height: 16px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #646970;
+    margin-bottom: 4px;
+}
+.geweb-ai-overview-preview {
+    font-size: 13px;
+    line-height: 18px;
+    color: #1d2327;
+    word-break: break-word;
+}
+.geweb-ai-source-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.geweb-ai-source-list li + li {
+    margin-top: 8px;
+}
+.geweb-ai-source-meta {
+    margin-top: 6px;
+}
+.geweb-ai-source-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.06);
+    color: #1d2327;
+    font-size: 11px;
+    line-height: 1.4;
+}
+.geweb-ai-source-list a {
+    display: block;
+    padding: 10px 12px;
+    text-decoration: none;
+    color: #1d2327;
+    background: #fff;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 10px;
+}
+.geweb-ai-source-list a:hover {
+    border-color: rgba(0, 0, 0, 0.28);
+}
+.geweb-ai-empty-panel {
+    margin: 0;
+    color: #646970;
+    font-size: 13px;
+    line-height: 20px;
+}
+.geweb-aisearch-modal-window .answer-box {
+    height: auto;
+    min-height: 320px;
     overflow-y: auto;
     font-size: 14px;
     line-height: 22px;
     color: #505050;
-    border: 1px solid rgba(0, 0, 0, 0.4);
-    border-radius: 8px;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.92);
     padding: 16px;
 	display: flex;
 	flex-direction: column;
 	gap: 12px;
+    box-sizing: border-box;
+    flex: 1 1 auto;
 }
 
 #geweb-ai-modal{
 	height: 90%;
+}
+.geweb-aisearch-modal-window--page#geweb-ai-modal {
+    height: auto;
 }
 #geweb-ai-modal::backdrop,
 #geweb-search-modal::backdrop {
@@ -188,7 +484,7 @@ body.no-scroll {
 }
 .user-message,
 .ai-message {
-	max-width: 70%;
+	max-width: 90%;
 	padding: 10px 14px;
 	border-radius: 12px;
 	margin: 0;
@@ -203,6 +499,16 @@ body.no-scroll {
 	align-self: flex-start;
 	background-color: rgba(0,0,0,.06);
 	border-bottom-left-radius: 0;
+}
+.geweb-ai-system-message {
+    align-self: center;
+    margin: 0;
+    font-size: 12px;
+    line-height: 18px;
+    color: #646970;
+    background: rgba(0, 0, 0, 0.04);
+    border-radius: 999px;
+    padding: 4px 10px;
 }
 .ai-message ul,
 .ai-message ol{
@@ -224,17 +530,37 @@ body.no-scroll {
 
 .geweb-aisearch-modal-window .question-box {
     display: flex;
+    flex-direction: column;
     align-items: flex-start;
-    column-gap: 8px;
-    border: 1px solid rgba(0, 0, 0, 0.4);
-    border-radius: 8px;
-    padding: 16px;
+    row-gap: 8px;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.92);
+    padding: 12px;
+}
+.geweb-aisearch-modal-window .geweb-ai-question-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+}
+.geweb-aisearch-modal-window .geweb-ai-model-selector-label {
+    color: #646970;
+    font-size: 12px;
+    line-height: 1.2;
+}
+.geweb-aisearch-modal-window .geweb-ai-model-selector {
+    max-width: 20rem;
 }
 .geweb-aisearch-modal-window .question-box textarea {
-	border: 1px solid rgba(0, 0, 0, 0.4);
+	border: none !important;
     min-height: 56px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100%;
 }
 .geweb-aisearch-modal-window .question-box .btn {
+    align-self: flex-end;
     width: 40px;
     height: 40px;
     background: #000 url(../assets/img/arrow-up-icon.svg) center no-repeat;
@@ -251,13 +577,20 @@ body.no-scroll {
     .geweb-aisearch-modal-window {
         max-width: calc(100% - 32px);
     }
+    .geweb-ai-workspace {
+        grid-template-columns: 1fr;
+    }
+    .geweb-ai-conversation-overview,
+    .geweb-ai-sources,
+    .geweb-aisearch-modal-window .answer-box {
+        min-height: 180px;
+    }
 }
 @media only screen and (max-width: 767px) {
     .geweb-ai-search-form {
         flex-wrap: wrap;
     }
-    .geweb-ai-search-form .geweb-ai-search-input,
-    .geweb-ai-search-form .geweb-ai-trigger {
+    .geweb-ai-search-form .geweb-ai-search-input {
         width: 100%;
     }
     .header-hold {

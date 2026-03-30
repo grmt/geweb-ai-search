@@ -3,7 +3,7 @@
 Plugin Name: Geweb AI Search
 Plugin URI: https://aisearch.mygeweb.com/
 Description: AI-powered search for WordPress using Google Gemini. Smart answers, source links, and instant autocomplete — all in one modal.
-Version: 2.1.4.1
+Version: 2.1.4.3
 Author: gavrilovweb
 Author URI: https://www.linkedin.com/in/evgengavrilov
 License: GPL2
@@ -16,7 +16,7 @@ defined('ABSPATH') || exit;
 
 // Plugin version
 if (!defined('GEWEB_AI_SEARCH_VERSION')) {
-    define('GEWEB_AI_SEARCH_VERSION', '2.1.4.1');
+    define('GEWEB_AI_SEARCH_VERSION', '2.1.4.3');
 }
 
 // Plugin directory path
@@ -51,7 +51,11 @@ spl_autoload_register(function ($class) {
 
 // Initialize plugin
 add_action('plugins_loaded', function () {
-    new \Geweb\AISearch\WP();
+    static $plugin = null;
+
+    if ($plugin === null) {
+        $plugin = new \Geweb\AISearch\WP();
+    }
 });
 
 // Plugin activation hook
@@ -73,4 +77,15 @@ register_activation_hook(__FILE__, function () {
 
     // Create custom database tables
     \Geweb\AISearch\DocumentStore::install();
+
+    if (!class_exists('\\Geweb\\AISearch\\WP')) {
+        require_once GEWEB_AI_SEARCH_PATH . 'classes/WP.php';
+    }
+
+    \Geweb\AISearch\WP::registerFrontendAiRewrite();
+    flush_rewrite_rules();
+});
+
+register_deactivation_hook(__FILE__, function () {
+    flush_rewrite_rules();
 });

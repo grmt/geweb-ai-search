@@ -20,7 +20,19 @@ class WP {
     private const OPTION_INCLUDE_REFERENCED_DOCUMENTS = 'geweb_aisearch_include_referenced_documents';
     private const OPTION_PRESERVE_DATA_ON_UNINSTALL = 'geweb_aisearch_preserve_data_on_uninstall';
     private const OPTION_CONNECTION_STATUS = 'geweb_aisearch_connection_status';
+    private const OPTION_CONVERSATIONS = 'geweb_aisearch_conversations';
+    private const OPTION_FRONTEND_AI_INTERFACE = 'geweb_aisearch_frontend_ai_interface';
+    private const OPTION_CONVERSATION_TRIM_MESSAGE_LIMIT = 'geweb_aisearch_conversation_trim_message_limit';
+    private const OPTION_CONVERSATION_TRIM_CHAR_LIMIT = 'geweb_aisearch_conversation_trim_char_limit';
+    private const OPTION_LOCAL_CONVERSATION_ARCHIVE_LIMIT = 'geweb_aisearch_local_conversation_archive_limit';
+    private const FRONTEND_AI_SLUG = 'ai-search';
     private const DEFAULT_PROMPT_HISTORY_LIMIT = 10;
+    private const DEFAULT_CONVERSATION_LIMIT = 50;
+    private const DEFAULT_FRONTEND_AI_INTERFACE = 'fullscreen';
+    private const DEFAULT_CONVERSATION_TRIM_MESSAGE_LIMIT = 12;
+    private const DEFAULT_CONVERSATION_TRIM_CHAR_LIMIT = 12000;
+    private const DEFAULT_LOCAL_CONVERSATION_ARCHIVE_LIMIT = 12;
+    private bool $frontendAiPageModalRendered = false;
 
     /**
      * Constructor - registers WordPress hooks
@@ -35,26 +47,64 @@ class WP {
 
         add_action('wp_ajax_geweb_ai_chat', [$this, 'ajaxAiChat']);
         add_action('wp_ajax_nopriv_geweb_ai_chat', [$this, 'ajaxAiChat']);
+        add_action('wp_ajax_geweb_get_frontend_conversations', [$this, 'ajaxGetFrontendConversations']);
+        add_action('wp_ajax_nopriv_geweb_get_frontend_conversations', [$this, 'ajaxGetFrontendConversations']);
+        add_action('wp_ajax_geweb_get_frontend_conversation', [$this, 'ajaxGetFrontendConversation']);
+        add_action('wp_ajax_nopriv_geweb_get_frontend_conversation', [$this, 'ajaxGetFrontendConversation']);
+        add_action('wp_ajax_geweb_frontend_rename_conversation', [$this, 'ajaxFrontendRenameConversation']);
+        add_action('wp_ajax_nopriv_geweb_frontend_rename_conversation', [$this, 'ajaxFrontendRenameConversation']);
+        add_action('wp_ajax_geweb_frontend_delete_conversation', [$this, 'ajaxFrontendDeleteConversation']);
+        add_action('wp_ajax_nopriv_geweb_frontend_delete_conversation', [$this, 'ajaxFrontendDeleteConversation']);
         add_action('wp_ajax_geweb_clear_prompt_history', [$this, 'ajaxClearPromptHistory']);
         add_action('wp_ajax_geweb_delete_prompt_history_item', [$this, 'ajaxDeletePromptHistoryItem']);
+        add_action('wp_ajax_geweb_rename_conversation', [$this, 'ajaxRenameConversation']);
+        add_action('wp_ajax_geweb_delete_conversation', [$this, 'ajaxDeleteConversation']);
         add_action('wp_ajax_geweb_refresh_referenced_documents', [$this, 'ajaxRefreshReferencedDocuments']);
         add_action('wp_ajax_geweb_update_referenced_document', [$this, 'ajaxUpdateReferencedDocument']);
         add_action('wp_ajax_geweb_toggle_referenced_document_exclude', [$this, 'ajaxToggleReferencedDocumentExclude']);
         add_action('wp_ajax_geweb_update_referenced_document_nice_name', [$this, 'ajaxUpdateReferencedDocumentNiceName']);
         add_action('wp_ajax_geweb_refresh_gemini_stores', [$this, 'ajaxRefreshGeminiStores']);
+        add_action('wp_ajax_geweb_refresh_gemini_store_documents', [$this, 'ajaxRefreshGeminiStoreDocuments']);
         add_action('wp_ajax_geweb_delete_gemini_store', [$this, 'ajaxDeleteGeminiStore']);
         add_action('wp_ajax_geweb_refresh_models', [$this, 'ajaxRefreshModels']);
 
         add_action('wp_ajax_geweb_get_nonce', [$this, 'ajaxGetNonce']);
         add_action('wp_ajax_nopriv_geweb_get_nonce', [$this, 'ajaxGetNonce']);
 
+        add_action('init', [self::class, 'registerFrontendAiRewrite']);
+        add_filter('query_vars', [$this, 'registerFrontendAiQueryVars']);
         add_action('wp_enqueue_scripts', [$this, 'enqueueScripts']);
         add_action('admin_enqueue_scripts', [$this, 'enqueueAdminScripts']);
+        add_action('template_redirect', [$this, 'maybeRenderFrontendAiPage']);
+        add_action('admin_bar_menu', [$this, 'maybeRemoveFrontendAdminBarSearch'], 999);
 
         add_action('wp_footer', [$this, 'renderModals']);
 
         // Initialize HTML2MD hooks
         new HTML2MD();
+    }
+
+    /**
+     * Register the dedicated frontend AI workspace rewrite.
+     *
+     * @return void
+     */
+    public static function registerFrontendAiRewrite(): void {
+        add_rewrite_rule(
+            '^' . preg_quote(self::FRONTEND_AI_SLUG, '/') . '/?$',
+            'index.php?geweb_ai_page=1',
+            'top'
+        );
+    }
+
+    /**
+     * @param array<int,string> $queryVars
+     * @return array<int,string>
+     */
+    public function registerFrontendAiQueryVars(array $queryVars): array {
+        $queryVars[] = 'geweb_ai_page';
+        $queryVars[] = 'geweb_ai_conversation';
+        return array_values(array_unique($queryVars));
     }
 
     /**
@@ -107,6 +157,15 @@ class WP {
             'geweb-ai-search&geweb_tab=stores',
             [$this, 'renderOptionsPage']
         );
+
+        add_submenu_page(
+            'geweb-ai-search',
+            'Conversations',
+            'Conversations',
+            'manage_options',
+            'geweb-ai-search&geweb_tab=conversations',
+            [$this, 'renderOptionsPage']
+        );
     }
 
     /**
@@ -141,6 +200,111 @@ class WP {
             <?php $table->display(); ?>
         </form>
         <?php
+    }
+
+    /**
+     * Render conversations table HTML.
+     *
+     * @return void
+     */
+    private function renderConversationsTable(): void {
+        $conversations = $this->getConversationLog();
+        $frontendAiPageUrl = $this->getFrontendAiPageUrl();
+        $latestConversation = isset($conversations[0]) && is_array($conversations[0]) ? $conversations[0] : [];
+        $latestConversationId = isset($latestConversation['id']) ? (string) $latestConversation['id'] : '';
+
+        echo '<p class="description" style="margin:0 0 12px;">';
+        echo esc_html(sprintf(_n('%d saved conversation.', '%d saved conversations.', count($conversations), 'geweb-ai-search'), count($conversations)));
+        echo '</p>';
+        echo '<p class="description" style="margin:0 0 12px;">';
+        echo esc_html(sprintf(__('The %d most recently used conversations are kept automatically; the oldest unused ones are pruned first.', 'geweb-ai-search'), self::DEFAULT_CONVERSATION_LIMIT));
+        echo '</p>';
+
+        if (count($conversations) === 0) {
+            echo '<div class="notice notice-info inline" style="margin:0 0 12px;"><p>';
+            echo esc_html__('No saved conversations yet. A conversation is added here after a successful AI response.', 'geweb-ai-search');
+            echo '</p></div>';
+            return;
+        }
+
+        if ($frontendAiPageUrl !== '' && $latestConversationId !== '') {
+            $latestConversationUrl = add_query_arg('geweb_ai_conversation', rawurlencode($latestConversationId), $frontendAiPageUrl);
+            echo '<p style="margin:0 0 12px;">';
+            echo '<a class="button button-primary" href="' . esc_url($latestConversationUrl) . '">Open Latest Conversation</a>';
+            echo '</p>';
+        }
+
+        $table = new ConversationListTable($conversations, $frontendAiPageUrl);
+        $table->prepare_items();
+        echo '<form method="get" action="' . esc_url(admin_url('admin.php')) . '" class="geweb-conversations-table-form">';
+        echo '<input type="hidden" name="page" value="geweb-ai-search">';
+        echo '<input type="hidden" name="geweb_tab" value="conversations">';
+        $table->search_box(__('Search conversations', 'geweb-ai-search'), 'geweb-conversations');
+        $table->display();
+        echo '</form>';
+    }
+
+    /**
+     * Render the selected Gemini store documents panel.
+     *
+     * @param string $storeName
+     * @param string $storeLabel
+     * @param array<int,array<string,mixed>> $documents
+     * @return void
+     */
+    private function renderGeminiStoreDocumentsPanel(string $storeName, string $storeLabel, array $documents): void {
+        ?>
+        <div id="geweb-gemini-store-documents-panel" data-store-name="<?php echo esc_attr($storeName); ?>" style="margin-top:20px; padding:16px; background:#fff; border:1px solid #dcdcde;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px;">
+                <div>
+                    <strong id="geweb-gemini-store-documents-title"><?php echo esc_html($storeLabel !== '' ? $storeLabel : $storeName); ?></strong>
+                    <div id="geweb-gemini-store-documents-subtitle" class="description" style="margin-top:4px;">
+                        Uploaded items in the selected Gemini File Search Store.
+                    </div>
+                </div>
+                <button type="button" class="button" id="geweb-refresh-gemini-store-documents" <?php disabled($storeName === ''); ?>>Refresh List</button>
+            </div>
+            <div id="geweb-gemini-store-documents-status" class="description" style="margin-bottom:12px; color:#646970;">
+                <?php echo $storeName === '' ? 'Select a store to view uploaded items.' : 'Showing uploaded items for the selected store.'; ?>
+            </div>
+            <p id="geweb-gemini-store-documents-error" class="description" style="margin:0 0 12px; color:#d63638; display:none;"></p>
+            <div id="geweb-gemini-store-documents-container">
+                <?php
+                if ($storeName === '') {
+                    echo '<p style="margin:0;">Select a store to view uploaded items.</p>';
+                } else {
+                    echo GeminiStoreListTable::renderDocumentList($documents); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+                }
+                ?>
+            </div>
+        </div>
+        <?php
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $items
+     * @return array{name:string,label:string,documents:array<int,array<string,mixed>>}
+     */
+    private function getInitialGeminiStoreSelection(array $items): array {
+        foreach ($items as $item) {
+            if (!is_array($item) || empty($item['is_active'])) {
+                continue;
+            }
+
+            return [
+                'name' => (string) ($item['name'] ?? ''),
+                'label' => (string) (($item['display_name'] ?? '') !== '' ? $item['display_name'] : ($item['name'] ?? '')),
+                'documents' => isset($item['documents']) && is_array($item['documents']) ? $item['documents'] : [],
+            ];
+        }
+
+        $first = isset($items[0]) && is_array($items[0]) ? $items[0] : [];
+
+        return [
+            'name' => (string) ($first['name'] ?? ''),
+            'label' => (string) (($first['display_name'] ?? '') !== '' ? $first['display_name'] : ($first['name'] ?? '')),
+            'documents' => isset($first['documents']) && is_array($first['documents']) ? $first['documents'] : [],
+        ];
     }
 
     /**
@@ -209,8 +373,14 @@ class WP {
 
         if ($actionName === 'upload') {
             $success = $documentStore->uploadReferencedDocumentByHash($fileHash);
+            if ($success) {
+                $documentStore->saveReferencedDocumentSelectionTarget($fileHash, true);
+            }
         } elseif ($actionName === 'remove') {
             $success = $documentStore->removeReferencedDocumentByHash($fileHash);
+            if ($success) {
+                $documentStore->saveReferencedDocumentSelectionTarget($fileHash, false);
+            }
         }
 
         if (!$success) {
@@ -267,9 +437,14 @@ class WP {
         }
 
         $documentStore = new DocumentStore();
-        $documentStore->saveReferencedDocumentSelectionTarget($fileHash, !$exclude);
         if ($exclude) {
-            $documentStore->removeReferencedDocumentByHash($fileHash);
+            $removed = $documentStore->removeReferencedDocumentByHash($fileHash);
+            if (!$removed) {
+                wp_send_json_error(['message' => 'Could not remove this source from the Gemini store. It is still included.'], 500);
+            }
+            $documentStore->saveReferencedDocumentSelectionTarget($fileHash, false);
+        } else {
+            $documentStore->saveReferencedDocumentSelectionTarget($fileHash, true);
         }
 
         $items = $documentStore->getReferencedDocumentOverview(true);
@@ -355,6 +530,47 @@ class WP {
      * @return void
      */
     public function ajaxRefreshGeminiStores(): void {
+        $startedAt = microtime(true);
+        error_log('geweb-ai-search: ajaxRefreshGeminiStores started.');
+        check_ajax_referer('geweb_ai_search_admin_actions', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            error_log('geweb-ai-search: ajaxRefreshGeminiStores denied due to insufficient permissions.');
+            wp_send_json_error(['message' => 'Insufficient permissions'], 403);
+        }
+
+        $provider = ProviderFactory::make();
+        if (!$provider instanceof Gemini) {
+            error_log('geweb-ai-search: ajaxRefreshGeminiStores aborted because current provider is not Gemini.');
+            wp_send_json_error(['message' => 'Gemini store overview is only available for the Gemini provider.'], 400);
+        }
+
+        error_log('geweb-ai-search: ajaxRefreshGeminiStores requesting fresh store overview.');
+        $items = $provider->getStoreOverview(true);
+        error_log('geweb-ai-search: ajaxRefreshGeminiStores received ' . count($items) . ' store(s).');
+        $this->syncLocalIndexedStatusWithActiveStore($items);
+        error_log('geweb-ai-search: ajaxRefreshGeminiStores finished local sync.');
+
+        ob_start();
+        $this->renderGeminiStoresTable();
+        $html = ob_get_clean();
+
+        error_log('geweb-ai-search: ajaxRefreshGeminiStores completed in ' . number_format(microtime(true) - $startedAt, 3) . 's.');
+
+        wp_send_json_success([
+            'html' => $html,
+            'refreshed_at' => wp_date(get_option('date_format') . ' ' . get_option('time_format'), time()),
+            'count' => count($items),
+            'error' => $provider->getStoreOverviewError(),
+        ]);
+    }
+
+    /**
+     * AJAX: Refresh the uploaded-items list for a selected Gemini store.
+     *
+     * @return void
+     */
+    public function ajaxRefreshGeminiStoreDocuments(): void {
         check_ajax_referer('geweb_ai_search_admin_actions', 'nonce');
 
         if (!current_user_can('manage_options')) {
@@ -366,17 +582,32 @@ class WP {
             wp_send_json_error(['message' => 'Gemini store overview is only available for the Gemini provider.'], 400);
         }
 
-        $items = $provider->getStoreOverview(true);
+        $storeName = isset($_POST['store_name']) ? sanitize_text_field(wp_unslash($_POST['store_name'])) : '';
+        if ($storeName === '') {
+            wp_send_json_error(['message' => 'Missing store name.'], 400);
+        }
 
-        ob_start();
-        $this->renderGeminiStoresTable();
-        $html = ob_get_clean();
+        $storeLabel = isset($_POST['store_label']) ? sanitize_text_field(wp_unslash($_POST['store_label'])) : $storeName;
+
+        try {
+            $documents = $provider->getStoreDocuments($storeName);
+        } catch (\Exception $e) {
+            wp_send_json_error(['message' => $e->getMessage()], 500);
+        }
+
+        try {
+            $html = GeminiStoreListTable::renderDocumentList($documents);
+        } catch (\Throwable $e) {
+            error_log('geweb-ai-search: ajaxRefreshGeminiStoreDocuments render failed for ' . $storeName . ': ' . $e->getMessage());
+            wp_send_json_error(['message' => 'Could not render the uploaded items list. Check the WordPress error log for details.'], 500);
+        }
 
         wp_send_json_success([
             'html' => $html,
-            'refreshed_at' => wp_date(get_option('date_format') . ' ' . get_option('time_format'), time()),
-            'count' => count($items),
-            'error' => $provider->getStoreOverviewError(),
+            'store_name' => $storeName,
+            'store_label' => $storeLabel,
+            'count' => count($documents),
+            'message' => 'Uploaded items refreshed.',
         ]);
     }
 
@@ -402,10 +633,16 @@ class WP {
             wp_send_json_error(['message' => 'Missing store name.'], 400);
         }
 
+        $wasActiveStore = $storeName === $provider->getStoreData();
+
         try {
             $provider->deleteStoreByResourceName($storeName);
         } catch (\Exception $e) {
             wp_send_json_error(['message' => $e->getMessage()], 500);
+        }
+
+        if ($wasActiveStore) {
+            $this->clearLocalIndexTracking();
         }
 
         $items = $provider->getStoreOverview(true);
@@ -477,7 +714,10 @@ class WP {
             $provider->clearModelsCache();
             $connectionStatus = $provider->validateConnection();
             if (($connectionStatus['status'] ?? '') === 'ok' && (empty($provider->getStoreData()) || isset($_POST['geweb_ai_search_create_store']))) {
-                $provider->createStore();
+                $storeCreated = $provider->createStore();
+                if ($storeCreated && isset($_POST['geweb_ai_search_create_store'])) {
+                    $this->clearLocalIndexTracking();
+                }
             }
         }
 
@@ -506,6 +746,37 @@ class WP {
         update_option(
             self::OPTION_PRESERVE_DATA_ON_UNINSTALL,
             !empty($_POST['geweb_ai_search_preserve_data_on_uninstall']) ? '1' : '0'
+        );
+        update_option(
+            self::OPTION_FRONTEND_AI_INTERFACE,
+            $this->normalizeFrontendAiInterface(isset($_POST['geweb_ai_search_frontend_ai_interface']) ? wp_unslash($_POST['geweb_ai_search_frontend_ai_interface']) : '')
+        );
+        update_option(
+            self::OPTION_CONVERSATION_TRIM_MESSAGE_LIMIT,
+            $this->sanitizePositiveIntOption(
+                isset($_POST['geweb_ai_search_conversation_trim_message_limit']) ? wp_unslash($_POST['geweb_ai_search_conversation_trim_message_limit']) : null,
+                self::DEFAULT_CONVERSATION_TRIM_MESSAGE_LIMIT,
+                2,
+                200
+            )
+        );
+        update_option(
+            self::OPTION_CONVERSATION_TRIM_CHAR_LIMIT,
+            $this->sanitizePositiveIntOption(
+                isset($_POST['geweb_ai_search_conversation_trim_char_limit']) ? wp_unslash($_POST['geweb_ai_search_conversation_trim_char_limit']) : null,
+                self::DEFAULT_CONVERSATION_TRIM_CHAR_LIMIT,
+                500,
+                200000
+            )
+        );
+        update_option(
+            self::OPTION_LOCAL_CONVERSATION_ARCHIVE_LIMIT,
+            $this->sanitizePositiveIntOption(
+                isset($_POST['geweb_ai_search_local_conversation_archive_limit']) ? wp_unslash($_POST['geweb_ai_search_local_conversation_archive_limit']) : null,
+                self::DEFAULT_LOCAL_CONVERSATION_ARCHIVE_LIMIT,
+                1,
+                200
+            )
         );
 
         if (isset($_POST['geweb_ai_search_referenced_document_targets'])) {
@@ -606,12 +877,16 @@ class WP {
         $postTypes = get_option('geweb_aisearch_post_types', []);
         $includeReferencedDocuments = get_option(self::OPTION_INCLUDE_REFERENCED_DOCUMENTS, '0') === '1';
         $preserveDataOnUninstall = get_option(self::OPTION_PRESERVE_DATA_ON_UNINSTALL, '0') === '1';
+        $frontendAiInterface = $this->getFrontendAiInterface();
+        $conversationTrimMessageLimit = $this->getConversationTrimMessageLimit();
+        $conversationTrimCharLimit = $this->getConversationTrimCharLimit();
+        $localConversationArchiveLimit = $this->getLocalConversationArchiveLimit();
         $allPostTypes = get_post_types(['public' => true], 'objects');
         $activeTab = isset($_GET['geweb_tab']) ? sanitize_key(wp_unslash($_GET['geweb_tab'])) : 'general';
         if ($activeTab === 'ai') {
             $activeTab = 'prompts';
         }
-        if (!in_array($activeTab, ['general', 'prompts', 'documents', 'stores'], true)) {
+        if (!in_array($activeTab, ['general', 'prompts', 'documents', 'stores', 'conversations'], true)) {
             $activeTab = 'general';
         }
         $documentStore = new DocumentStore();
@@ -633,6 +908,7 @@ class WP {
                 <a href="<?php echo esc_url($this->getTabUrl('prompts')); ?>" class="nav-tab <?php echo $activeTab === 'prompts' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="prompts">Prompts</a>
                 <a href="<?php echo esc_url($this->getTabUrl('documents')); ?>" class="nav-tab <?php echo $activeTab === 'documents' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="documents">Documents</a>
                 <a href="<?php echo esc_url($this->getTabUrl('stores')); ?>" class="nav-tab <?php echo $activeTab === 'stores' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="stores">Gemini Stores</a>
+                <a href="<?php echo esc_url($this->getTabUrl('conversations')); ?>" class="nav-tab <?php echo $activeTab === 'conversations' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="conversations">Conversations</a>
             </h2>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" accept-charset="UTF-8">
                 <input type="hidden" name="action" value="geweb_save">
@@ -741,6 +1017,60 @@ class WP {
                                     </ul>
                                 </div>
                             <?php endif; ?>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <th><label for="geweb_ai_search_frontend_ai_interface">AI Search Interface:</label></th>
+                        <td>
+                            <select name="geweb_ai_search_frontend_ai_interface" id="geweb_ai_search_frontend_ai_interface">
+                                <option value="modal" <?php selected($frontendAiInterface, 'modal'); ?>>Modal chat</option>
+                                <option value="fullscreen" <?php selected($frontendAiInterface, 'fullscreen'); ?>>Full-screen workspace</option>
+                            </select>
+                            <p class="description">Choose how the frontend AI search opens. Modal chat keeps a compact conversation window. Full-screen workspace shows conversation history on the left, the chat in the middle, and sources on the right.</p>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <th><label for="geweb_ai_search_conversation_trim_message_limit">Compaction:</label></th>
+                        <td>
+                            <p style="margin-top:0;">
+                                <label for="geweb_ai_search_conversation_trim_message_limit"><strong>Start trimming request context after this many messages</strong></label><br>
+                                <input
+                                    type="number"
+                                    id="geweb_ai_search_conversation_trim_message_limit"
+                                    name="geweb_ai_search_conversation_trim_message_limit"
+                                    min="2"
+                                    step="1"
+                                    value="<?php echo esc_attr((string) $conversationTrimMessageLimit); ?>"
+                                    class="small-text"
+                                >
+                            </p>
+                            <p style="margin-top:12px;">
+                                <label for="geweb_ai_search_conversation_trim_char_limit"><strong>Maximum request-context size in characters</strong></label><br>
+                                <input
+                                    type="number"
+                                    id="geweb_ai_search_conversation_trim_char_limit"
+                                    name="geweb_ai_search_conversation_trim_char_limit"
+                                    min="500"
+                                    step="100"
+                                    value="<?php echo esc_attr((string) $conversationTrimCharLimit); ?>"
+                                    class="small-text"
+                                >
+                            </p>
+                            <p style="margin-top:12px;">
+                                <label for="geweb_ai_search_local_conversation_archive_limit"><strong>Saved conversations to show in the chat sidebar</strong></label><br>
+                                <input
+                                    type="number"
+                                    id="geweb_ai_search_local_conversation_archive_limit"
+                                    name="geweb_ai_search_local_conversation_archive_limit"
+                                    min="1"
+                                    step="1"
+                                    value="<?php echo esc_attr((string) $localConversationArchiveLimit); ?>"
+                                    class="small-text"
+                                >
+                            </p>
+                            <p class="description">Number of saved conversations to show in the frontend chat sidebar at once. Full conversation history is stored in WordPress, while only a shorter trimmed context is sent to the AI model.</p>
                         </td>
                     </tr>
 
@@ -981,7 +1311,7 @@ class WP {
 
             <div class="geweb-settings-tab-panel" data-geweb-tab-panel="stores" <?php echo $activeTab === 'stores' ? '' : 'style="display:none;"'; ?>>
                 <p class="description" style="margin-top:0; max-width: 900px;">
-                    This table shows all Gemini File Search Stores visible to the configured API key, marks the one used by this plugin, and helps spot likely orphaned stores.
+                    This table shows all Gemini File Search Stores visible to the configured API key, marks the one used by this plugin, and helps spot likely orphaned stores. Select a store to inspect its uploaded items below.
                 </p>
                 <?php if (!$provider instanceof Gemini): ?>
                     <p>This tab is only available when the Gemini provider is active.</p>
@@ -1004,7 +1334,24 @@ class WP {
                             <p>Loading Gemini stores for the first time. This can take a moment if multiple stores need to be checked.</p>
                         <?php endif; ?>
                     </div>
+                    <?php
+                    $initialStoreSelection = $this->getInitialGeminiStoreSelection($providerHasStoreCache ? $provider->getStoreOverview() : []);
+                    $this->renderGeminiStoreDocumentsPanel(
+                        (string) ($initialStoreSelection['name'] ?? ''),
+                        (string) ($initialStoreSelection['label'] ?? ''),
+                        isset($initialStoreSelection['documents']) && is_array($initialStoreSelection['documents']) ? $initialStoreSelection['documents'] : []
+                    );
+                    ?>
                 <?php endif; ?>
+            </div>
+
+            <div class="geweb-settings-tab-panel" data-geweb-tab-panel="conversations" <?php echo $activeTab === 'conversations' ? '' : 'style="display:none;"'; ?>>
+                <p class="description" style="margin-top:0; max-width: 900px;">
+                    Saved AI conversations are grouped by browser-side conversation ID and show the latest summary, last usage time, total token usage, and an estimated Gemini text-generation cost when usage metadata is available. Entries appear after a successful AI response, not only when the dialog is closed.
+                </p>
+                <div style="margin-top:16px;">
+                    <?php $this->renderConversationsTable(); ?>
+                </div>
             </div>
         </div>
         <?php
@@ -1184,6 +1531,58 @@ class WP {
     }
 
     /**
+     * Clear local tracking after switching/deleting the active Gemini store.
+     *
+     * @return void
+     */
+    private function clearLocalIndexTracking(): void {
+        $documentStore = new DocumentStore();
+        $documentStore->clearAllTrackedDocuments();
+        HTML2MD::clearAllIndexedState();
+    }
+
+    /**
+     * Reconcile local indexed status with the active Gemini store content.
+     *
+     * @param array<int,array<string,mixed>> $storeItems
+     * @return void
+     */
+    private function syncLocalIndexedStatusWithActiveStore(array $storeItems): void {
+        $activeStoreFound = false;
+        $activeStoreDocuments = [];
+        foreach ($storeItems as $storeItem) {
+            if (!is_array($storeItem) || empty($storeItem['is_active'])) {
+                continue;
+            }
+
+            $activeStoreFound = true;
+            if (!isset($storeItem['documents']) || !is_array($storeItem['documents'])) {
+                break;
+            }
+
+            foreach ($storeItem['documents'] as $document) {
+                if (!is_array($document) || empty($document['name'])) {
+                    continue;
+                }
+
+                $activeStoreDocuments[] = (string) $document['name'];
+            }
+
+            break;
+        }
+
+        if (!$activeStoreFound) {
+            return;
+        }
+
+        HTML2MD::reconcileIndexedPostsWithRemoteDocuments($activeStoreDocuments);
+
+        $documentStore = new DocumentStore();
+        $documentStore->reconcileSelectionTargetsWithRemote($activeStoreDocuments);
+        $documentStore->reconcileTrackedDocumentsWithRemote($activeStoreDocuments);
+    }
+
+    /**
      * Trim stored prompt history to the configured limit
      *
      * @param int $limit Maximum number of entries
@@ -1307,6 +1706,8 @@ class WP {
         // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Each array element is sanitized in the foreach loop below
         $rawMessages = isset($_POST['messages']) && is_array($_POST['messages']) ? wp_unslash($_POST['messages']) : [];
         // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+        $conversationId = isset($_POST['conversation_id']) ? sanitize_key(wp_unslash($_POST['conversation_id'])) : '';
+        $requestedModel = isset($_POST['model']) ? sanitize_text_field(wp_unslash($_POST['model'])) : '';
 
         if (empty($rawMessages)) {
             wp_send_json_error(['message' => 'No messages provided']);
@@ -1334,12 +1735,513 @@ class WP {
 
         try {
             $provider = ProviderFactory::make();
-            $result = $provider->search($messages);
+            $availableModels = $provider->getModels();
+            $selectedModel = in_array($requestedModel, $availableModels, true) ? $requestedModel : $provider->getModel();
 
+            $latestUserMessage = $this->extractLatestUserMessage($messages);
+            $fullMessages = $this->buildFullConversationMessages($conversationId, $messages, $latestUserMessage);
+            $context = $this->compactConversationForRequest($fullMessages);
+
+            $result = $provider->search($context['messages'], $selectedModel);
+
+            $answerText = isset($result['answer']) ? wp_strip_all_tags((string) $result['answer']) : '';
+            if ($answerText !== '') {
+                $fullMessages[] = [
+                    'role' => 'model',
+                    'content' => isset($result['answer']) ? (string) $result['answer'] : $answerText,
+                    'sources' => isset($result['sources']) && is_array($result['sources']) ? $result['sources'] : [],
+                ];
+            }
+
+            $this->recordConversationUsage($conversationId, $fullMessages, $context['summary'], $result, $provider);
+
+            $result['context_compacted'] = !empty($context['compacted']);
             wp_send_json_success($result);
         } catch (\Exception $e) {
             wp_send_json_error(['message' => $e->getMessage()]);
         }
+    }
+
+    /**
+     * AJAX: Rename a stored AI conversation summary.
+     *
+     * @return void
+     */
+    public function ajaxRenameConversation(): void {
+        check_ajax_referer('geweb_ai_search_admin_actions', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => 'Insufficient permissions'], 403);
+        }
+
+        $conversationId = isset($_POST['conversation_id']) ? sanitize_key(wp_unslash($_POST['conversation_id'])) : '';
+        if ($conversationId === '') {
+            wp_send_json_error(['message' => 'Missing conversation ID.'], 400);
+        }
+
+        $summary = isset($_POST['summary']) ? sanitize_text_field(wp_unslash($_POST['summary'])) : '';
+        $summary = trim($summary);
+        if ($summary === '') {
+            wp_send_json_error(['message' => 'Conversation name cannot be empty.'], 400);
+        }
+
+        $conversations = $this->getConversationOption();
+        if (!isset($conversations[$conversationId]) || !is_array($conversations[$conversationId])) {
+            wp_send_json_error(['message' => 'Conversation not found.'], 404);
+        }
+
+        $conversations[$conversationId]['summary'] = $summary;
+        update_option(self::OPTION_CONVERSATIONS, $conversations, false);
+
+        wp_send_json_success([
+            'message' => 'Conversation renamed.',
+            'summary' => $summary,
+        ]);
+    }
+
+    /**
+     * AJAX: Return frontend conversation summaries for the AI workspace.
+     *
+     * @return void
+     */
+    public function ajaxGetFrontendConversations(): void {
+        check_ajax_referer('geweb_ai_search_search', 'nonce');
+
+        $conversations = array_map(function (array $entry): array {
+            return $this->exportConversationSummaryForFrontend($entry);
+        }, $this->getConversationLog());
+
+        wp_send_json_success([
+            'conversations' => $conversations,
+        ]);
+    }
+
+    /**
+     * AJAX: Return a single stored frontend conversation with messages.
+     *
+     * @return void
+     */
+    public function ajaxGetFrontendConversation(): void {
+        check_ajax_referer('geweb_ai_search_search', 'nonce');
+
+        $conversationId = isset($_POST['conversation_id']) ? sanitize_key(wp_unslash($_POST['conversation_id'])) : '';
+        if ($conversationId === '') {
+            wp_send_json_error(['message' => 'Missing conversation ID.'], 400);
+        }
+
+        $conversations = $this->getConversationOption();
+        if (!isset($conversations[$conversationId]) || !is_array($conversations[$conversationId])) {
+            wp_send_json_error(['message' => 'Conversation not found.'], 404);
+        }
+
+        wp_send_json_success([
+            'conversation' => $this->exportConversationForFrontend($conversations[$conversationId]),
+        ]);
+    }
+
+    /**
+     * AJAX: Rename a frontend conversation without requiring wp-admin access.
+     *
+     * @return void
+     */
+    public function ajaxFrontendRenameConversation(): void {
+        check_ajax_referer('geweb_ai_search_search', 'nonce');
+
+        $conversationId = isset($_POST['conversation_id']) ? sanitize_key(wp_unslash($_POST['conversation_id'])) : '';
+        $summary = isset($_POST['summary']) ? sanitize_text_field(wp_unslash($_POST['summary'])) : '';
+        $summary = trim($summary);
+
+        if ($conversationId === '') {
+            wp_send_json_error(['message' => 'Missing conversation ID.'], 400);
+        }
+
+        if ($summary === '') {
+            wp_send_json_error(['message' => 'Conversation name cannot be empty.'], 400);
+        }
+
+        $conversations = $this->getConversationOption();
+        if (!isset($conversations[$conversationId]) || !is_array($conversations[$conversationId])) {
+            wp_send_json_error(['message' => 'Conversation not found.'], 404);
+        }
+
+        $conversations[$conversationId]['summary'] = $summary;
+        update_option(self::OPTION_CONVERSATIONS, $conversations, false);
+
+        wp_send_json_success([
+            'summary' => $summary,
+        ]);
+    }
+
+    /**
+     * AJAX: Delete a stored AI conversation.
+     *
+     * @return void
+     */
+    public function ajaxDeleteConversation(): void {
+        check_ajax_referer('geweb_ai_search_admin_actions', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => 'Insufficient permissions'], 403);
+        }
+
+        $conversationId = isset($_POST['conversation_id']) ? sanitize_key(wp_unslash($_POST['conversation_id'])) : '';
+        if ($conversationId === '') {
+            wp_send_json_error(['message' => 'Missing conversation ID.'], 400);
+        }
+
+        $conversations = $this->getConversationOption();
+        if (!isset($conversations[$conversationId]) || !is_array($conversations[$conversationId])) {
+            wp_send_json_error(['message' => 'Conversation not found.'], 404);
+        }
+
+        unset($conversations[$conversationId]);
+        update_option(self::OPTION_CONVERSATIONS, $conversations, false);
+
+        wp_send_json_success([
+            'message' => 'Conversation deleted.',
+        ]);
+    }
+
+    /**
+     * AJAX: Delete a frontend conversation without requiring wp-admin access.
+     *
+     * @return void
+     */
+    public function ajaxFrontendDeleteConversation(): void {
+        check_ajax_referer('geweb_ai_search_search', 'nonce');
+
+        $conversationId = isset($_POST['conversation_id']) ? sanitize_key(wp_unslash($_POST['conversation_id'])) : '';
+        if ($conversationId === '') {
+            wp_send_json_error(['message' => 'Missing conversation ID.'], 400);
+        }
+
+        $conversations = $this->getConversationOption();
+        if (!isset($conversations[$conversationId]) || !is_array($conversations[$conversationId])) {
+            wp_send_json_error(['message' => 'Conversation not found.'], 404);
+        }
+
+        unset($conversations[$conversationId]);
+        update_option(self::OPTION_CONVERSATIONS, $conversations, false);
+
+        wp_send_json_success([
+            'deleted' => true,
+        ]);
+    }
+
+    /**
+     * @return array<string,array<string,mixed>>
+     */
+    private function getConversationOption(): array {
+        $conversations = get_option(self::OPTION_CONVERSATIONS, []);
+        return is_array($conversations) ? $conversations : [];
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    private function getConversationLog(): array {
+        return array_values($this->getConversationOption());
+    }
+
+    /**
+     * @param string $conversationId
+     * @param array<int,array<string,mixed>> $messages
+     * @param string $contextSummary
+     * @param array<string,mixed> $result
+     * @param AIProviderInterface $provider
+     * @return void
+     */
+    private function recordConversationUsage(string $conversationId, array $messages, string $contextSummary, array $result, AIProviderInterface $provider): void {
+        $conversationId = $conversationId !== '' ? $conversationId : 'geweb-ai-' . wp_generate_password(12, false, false);
+        $conversations = $this->getConversationOption();
+        $now = time();
+        $meta = isset($result['meta']) && is_array($result['meta']) ? $result['meta'] : [];
+        $usage = isset($meta['usage']) && is_array($meta['usage']) ? $meta['usage'] : [];
+
+        $existing = isset($conversations[$conversationId]) && is_array($conversations[$conversationId])
+            ? $conversations[$conversationId]
+            : [
+                'id' => $conversationId,
+                'summary' => $this->buildConversationSummary($messages),
+                'started_at' => $now,
+                'last_used_at' => $now,
+                'provider' => $provider->getProviderLabel(),
+                'model' => method_exists($provider, 'getModel') ? $provider->getModel() : '',
+                'request_count' => 0,
+                'input_tokens' => 0,
+                'output_tokens' => 0,
+                'total_tokens' => 0,
+                'estimated_cost_usd' => 0.0,
+                'messages' => [],
+                'context_summary' => '',
+            ];
+
+        if (trim((string) ($existing['summary'] ?? '')) === '') {
+            $existing['summary'] = $this->buildConversationSummary($messages);
+        }
+
+        $existing['last_used_at'] = $now;
+        $existing['provider'] = isset($meta['provider']) ? (string) $meta['provider'] : $provider->getProviderLabel();
+        $existing['model'] = isset($meta['model']) ? (string) $meta['model'] : (method_exists($provider, 'getModel') ? $provider->getModel() : '');
+        $existing['request_count'] = (int) ($existing['request_count'] ?? 0) + 1;
+        $existing['input_tokens'] = (int) ($existing['input_tokens'] ?? 0) + (int) ($usage['input_tokens'] ?? 0);
+        $existing['output_tokens'] = (int) ($existing['output_tokens'] ?? 0) + (int) ($usage['output_tokens'] ?? 0);
+        $existing['total_tokens'] = (int) ($existing['total_tokens'] ?? 0) + (int) ($usage['total_tokens'] ?? 0);
+        $existing['estimated_cost_usd'] = (float) ($existing['estimated_cost_usd'] ?? 0) + (float) ($meta['estimated_cost_usd'] ?? 0);
+        $existing['messages'] = $this->normalizeConversationMessages($messages);
+        $existing['context_summary'] = $contextSummary;
+
+        $conversations[$conversationId] = $existing;
+
+        uasort($conversations, static function (array $a, array $b): int {
+            return ((int) ($b['last_used_at'] ?? 0)) <=> ((int) ($a['last_used_at'] ?? 0));
+        });
+
+        update_option(self::OPTION_CONVERSATIONS, array_slice($conversations, 0, self::DEFAULT_CONVERSATION_LIMIT, true), false);
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $messages
+     * @return array{role:string,content:string}|null
+     */
+    private function extractLatestUserMessage(array $messages): ?array {
+        for ($index = count($messages) - 1; $index >= 0; $index -= 1) {
+            $message = $messages[$index] ?? null;
+            if (!is_array($message)) {
+                continue;
+            }
+
+            $role = isset($message['role']) ? (string) $message['role'] : '';
+            $content = trim((string) ($message['content'] ?? ''));
+            if ($role !== 'user' || $content === '') {
+                continue;
+            }
+
+            return [
+                'role' => 'user',
+                'content' => $content,
+            ];
+        }
+
+        return null;
+    }
+
+    /**
+     * @param string $conversationId
+     * @param array<int,array<string,mixed>> $incomingMessages
+     * @param array{role:string,content:string}|null $latestUserMessage
+     * @return array<int,array{role:string,content:string}>
+     */
+    private function buildFullConversationMessages(string $conversationId, array $incomingMessages, ?array $latestUserMessage): array {
+        $conversations = $this->getConversationOption();
+        $existing = $conversationId !== '' && isset($conversations[$conversationId]) && is_array($conversations[$conversationId])
+            ? $conversations[$conversationId]
+            : [];
+        $storedMessages = $this->normalizeConversationMessages(isset($existing['messages']) && is_array($existing['messages']) ? $existing['messages'] : []);
+
+        if (empty($storedMessages)) {
+            return !empty($incomingMessages) ? $this->normalizeConversationMessages($incomingMessages) : [];
+        }
+
+        if ($latestUserMessage === null) {
+            return $storedMessages;
+        }
+
+        $lastStored = end($storedMessages);
+        if (!is_array($lastStored) || ($lastStored['role'] ?? '') !== 'user' || ($lastStored['content'] ?? '') !== $latestUserMessage['content']) {
+            $storedMessages[] = $latestUserMessage;
+        }
+
+        return $storedMessages;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $messages
+     * @return array<int,array<string,mixed>>
+     */
+    private function normalizeConversationMessages(array $messages): array {
+        $normalized = [];
+        foreach ($messages as $message) {
+            if (!is_array($message)) {
+                continue;
+            }
+
+            $role = isset($message['role']) ? (string) $message['role'] : 'user';
+            $content = trim((string) ($message['content'] ?? ''));
+            if ($content === '') {
+                continue;
+            }
+
+            $sources = isset($message['sources']) && is_array($message['sources'])
+                ? array_values(array_filter($message['sources'], 'is_array'))
+                : [];
+
+            $normalized[] = [
+                'role' => $role === 'model' ? 'model' : 'user',
+                'content' => $role === 'model' ? wp_kses_post($content) : sanitize_textarea_field($content),
+                'sources' => $sources,
+            ];
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $messages
+     * @return array{messages:array<int,array<string,mixed>>,summary:string,compacted:bool}
+     */
+    private function compactConversationForRequest(array $messages): array {
+        $messages = $this->normalizeConversationMessages($messages);
+        if (empty($messages)) {
+            return [
+                'messages' => [],
+                'summary' => '',
+                'compacted' => false,
+            ];
+        }
+
+        $maxMessages = $this->getConversationTrimMessageLimit();
+        $maxChars = $this->getConversationTrimCharLimit();
+        if (count($messages) <= $maxMessages && $this->getConversationMessageLength($messages) <= $maxChars) {
+            return [
+                'messages' => $messages,
+                'summary' => '',
+                'compacted' => false,
+            ];
+        }
+
+        $recentCount = max(2, $maxMessages - 1);
+        $recentMessages = array_slice($messages, -$recentCount);
+        $olderMessages = array_slice($messages, 0, max(0, count($messages) - $recentCount));
+        $summary = $this->buildConversationContextSummary($olderMessages);
+
+        $compactedMessages = $recentMessages;
+        if ($summary !== '') {
+            array_unshift($compactedMessages, [
+                'role' => 'user',
+                'content' => $summary,
+            ]);
+        }
+
+        while ($this->getConversationMessageLength($compactedMessages) > $maxChars && count($compactedMessages) > 3) {
+            $removalIndex = $summary !== '' ? 1 : 0;
+            if (!isset($compactedMessages[$removalIndex])) {
+                break;
+            }
+            array_splice($compactedMessages, $removalIndex, 1);
+        }
+
+        return [
+            'messages' => array_values($compactedMessages),
+            'summary' => $summary,
+            'compacted' => true,
+        ];
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $messages
+     * @return int
+     */
+    private function getConversationMessageLength(array $messages): int {
+        $total = 0;
+        foreach ($messages as $message) {
+            $total += strlen(wp_strip_all_tags((string) ($message['content'] ?? '')));
+        }
+
+        return $total;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $messages
+     * @return string
+     */
+    private function buildConversationContextSummary(array $messages): string {
+        if (empty($messages)) {
+            return '';
+        }
+
+        $lines = ['Earlier conversation summary:'];
+        $maxLines = 8;
+        foreach ($messages as $message) {
+            if (!isset($message['content']) || trim($message['content']) === '') {
+                continue;
+            }
+
+            $prefix = ($message['role'] ?? '') === 'model'
+                ? 'Assistant answered: '
+                : 'User asked: ';
+            $content = wp_strip_all_tags((string) ($message['content'] ?? ''));
+            $content = preg_replace('/\s+/', ' ', $content);
+            $content = is_string($content) ? trim($content) : (string) ($message['content'] ?? '');
+
+            if (function_exists('mb_strimwidth')) {
+                $content = mb_strimwidth($content, 0, 220, '...');
+            } elseif (strlen($content) > 220) {
+                $content = substr($content, 0, 217) . '...';
+            }
+
+            $lines[] = '- ' . $prefix . $content;
+            if (count($lines) >= ($maxLines + 1)) {
+                break;
+            }
+        }
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * @param array<string,mixed> $conversation
+     * @return array<string,mixed>
+     */
+    private function exportConversationSummaryForFrontend(array $conversation): array {
+        return [
+            'id' => (string) ($conversation['id'] ?? ''),
+            'summary' => trim((string) ($conversation['summary'] ?? '')) !== '' ? (string) $conversation['summary'] : 'Untitled conversation',
+            'savedAt' => (int) (($conversation['last_used_at'] ?? $conversation['started_at'] ?? time()) * 1000),
+            'compacted' => trim((string) ($conversation['context_summary'] ?? '')) !== '',
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $conversation
+     * @return array<string,mixed>
+     */
+    private function exportConversationForFrontend(array $conversation): array {
+        $export = $this->exportConversationSummaryForFrontend($conversation);
+        $export['messages'] = $this->normalizeConversationMessages(
+            isset($conversation['messages']) && is_array($conversation['messages']) ? $conversation['messages'] : []
+        );
+
+        return $export;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $messages
+     * @return string
+     */
+    private function buildConversationSummary(array $messages): string {
+        foreach ($messages as $message) {
+            if (!is_array($message)) {
+                continue;
+            }
+
+            $role = isset($message['role']) ? (string) $message['role'] : '';
+            $content = trim((string) ($message['content'] ?? ''));
+            if ($role !== 'user' || $content === '') {
+                continue;
+            }
+
+            $normalized = preg_replace('/\s+/', ' ', $content);
+            $normalized = is_string($normalized) ? trim($normalized) : $content;
+
+            if (function_exists('mb_strimwidth')) {
+                return mb_strimwidth($normalized, 0, 120, '...');
+            }
+
+            return strlen($normalized) > 120 ? substr($normalized, 0, 117) . '...' : $normalized;
+        }
+
+        return 'Untitled conversation';
     }
 
     /**
@@ -1359,6 +2261,14 @@ class WP {
      * @return void
      */
     public function enqueueScripts(): void {
+        $provider = ProviderFactory::make();
+        $models = $provider->getModels();
+        $selectedModel = $provider->getModel();
+        if ($selectedModel !== '' && !in_array($selectedModel, $models, true) && method_exists($provider, 'getDefaultModel')) {
+            array_unshift($models, $selectedModel);
+            $models = array_values(array_unique($models));
+        }
+
         wp_enqueue_script(
             'geweb-ai-search',
             GEWEB_AI_SEARCH_URL . 'assets/script.js',
@@ -1375,7 +2285,39 @@ class WP {
         );
 
         wp_localize_script('geweb-ai-search', 'geweb_aisearch', [
-            'ajax_url' => admin_url('admin-ajax.php')
+            'ajax_url' => admin_url('admin-ajax.php'),
+            'models' => array_values($models),
+            'selected_model' => $selectedModel,
+            'frontend_ai_interface' => $this->getFrontendAiInterface(),
+            'frontend_ai_page_url' => $this->getFrontendAiPageUrl(),
+            'frontend_ai_exit_url' => $this->getFrontendAiExitUrl(),
+            'is_frontend_ai_page' => $this->isFrontendAiPageRequest(),
+            'frontend_ai_conversation_id' => $this->getRequestedFrontendConversationId(),
+            'frontend_ai_initial_query' => $this->getRequestedFrontendQuery(),
+            'conversation_trim_message_limit' => $this->getConversationTrimMessageLimit(),
+            'conversation_trim_char_limit' => $this->getConversationTrimCharLimit(),
+            'local_conversation_archive_limit' => $this->getLocalConversationArchiveLimit(),
+            'i18n' => [
+                'openAiSearch' => __('Open AI Search', 'geweb-ai-search'),
+                'askAi' => __('Ask AI', 'geweb-ai-search'),
+                'thinking' => __('Thinking...', 'geweb-ai-search'),
+                'couldNotStart' => __('Could not start the AI search. Please try again.', 'geweb-ai-search'),
+                'connectionError' => __('Connection error. Please try again.', 'geweb-ai-search'),
+                'answerError' => __('Error: Unable to get response', 'geweb-ai-search'),
+                'earlierTrimmed' => __('Earlier messages were trimmed to keep the conversation context compact.', 'geweb-ai-search'),
+                'noChatsYet' => __('No chats yet.', 'geweb-ai-search'),
+                'savedChat' => __('Saved chat', 'geweb-ai-search'),
+                'untitledConversation' => __('Untitled conversation', 'geweb-ai-search'),
+                'noSourcesYet' => __('No source links yet.', 'geweb-ai-search'),
+                'renameConversation' => __('Rename conversation', 'geweb-ai-search'),
+                'removeConversationConfirm' => __('Remove this conversation from the current search context?', 'geweb-ai-search'),
+                'mentionedInAnswer' => __('Mentioned in answer', 'geweb-ai-search'),
+                'newChat' => __('New chat', 'geweb-ai-search'),
+                'linksToPages' => __('Links to pages and documents used in the answer.', 'geweb-ai-search'),
+                'showResults' => __('Show results', 'geweb-ai-search'),
+                'hideResults' => __('Hide results', 'geweb-ai-search'),
+                'modelLabel' => __('Model', 'geweb-ai-search'),
+            ],
         ]);
     }
 
@@ -1401,24 +2343,318 @@ class WP {
     }
 
     /**
+     * Remove the logged-in admin-bar search control on the dedicated frontend AI page.
+     *
+     * @param \WP_Admin_Bar $adminBar
+     * @return void
+     */
+    public function maybeRemoveFrontendAdminBarSearch(\WP_Admin_Bar $adminBar): void {
+        if (is_admin()) {
+            return;
+        }
+
+        $adminBar->remove_node('search');
+    }
+
+    /**
      * Render modal windows in footer
      *
      * @return void
      */
     public function renderModals(): void {
+        if ($this->isFrontendAiPageRequest() && $this->frontendAiPageModalRendered) {
+            return;
+        }
+
+        if ($this->isFrontendAiPageRequest()) {
+            $this->frontendAiPageModalRendered = true;
+        }
+
+        $tagName = $this->isFrontendAiPageRequest() ? 'section' : 'dialog';
         ?>
-        <dialog id="geweb-ai-modal" class="geweb-aisearch-modal-window">
+        <<?php echo esc_html($tagName); ?> id="geweb-ai-modal" class="geweb-aisearch-modal-window geweb-aisearch-modal-window--<?php echo esc_attr($this->getFrontendAiInterface()); ?><?php echo $this->isFrontendAiPageRequest() ? ' geweb-aisearch-modal-window--page' : ''; ?>"<?php echo $this->isFrontendAiPageRequest() ? ' data-geweb-page-view="1"' : ''; ?>>
             <div class="modal-header">
                 <strong class="ai-assistant-title"><?php echo esc_html(apply_filters('geweb_aisearch_ai_modal_title', 'AI Assistant')); ?></strong>
-                <div class="close"></div>
+                <?php if (!$this->isFrontendAiPageRequest()): ?>
+                    <div class="close"></div>
+                <?php endif; ?>
             </div>
-            <div class="answer-box"></div>
-            <div class="question-box">
-                <textarea id="geweb-ai-query-display" placeholder="<?php echo esc_attr(apply_filters('geweb_aisearch_ai_textarea_placeholder', 'Ask AI a question...')); ?>"></textarea>
-                <button id="geweb-ask-ai-submit" class="btn" type="submit" disabled></button>
+            <?php if ($this->isFrontendAiPageRequest()): ?>
+                <?php $this->renderFrontendAiSearchResultsPanel(); ?>
+            <?php endif; ?>
+            <div class="geweb-ai-workspace">
+                <aside class="geweb-ai-sidebar">
+                    <div class="geweb-ai-overview-header">
+                        <div class="geweb-ai-panel-title geweb-ai-panel-title--inline"><?php echo esc_html__('Conversation', 'geweb-ai-search'); ?></div>
+                        <button type="button" class="button button-small geweb-ai-new-conversation"><?php echo esc_html__('New chat', 'geweb-ai-search'); ?></button>
+                    </div>
+                    <div class="geweb-ai-current-conversation">
+                        <div class="geweb-ai-current-conversation-label"><?php echo esc_html__('Current conversation', 'geweb-ai-search'); ?></div>
+                        <div id="geweb-ai-current-conversation-summary" class="geweb-ai-current-conversation-summary"><?php echo esc_html__('Untitled conversation', 'geweb-ai-search'); ?></div>
+                        <div class="geweb-ai-current-conversation-actions">
+                            <button type="button" class="button button-small" id="geweb-ai-rename-conversation"><?php echo esc_html__('Rename', 'geweb-ai-search'); ?></button>
+                            <button type="button" class="button button-small" id="geweb-ai-delete-conversation"><?php echo esc_html__('Remove', 'geweb-ai-search'); ?></button>
+                        </div>
+                    </div>
+                    <div id="geweb-ai-conversation-overview" class="geweb-ai-conversation-overview"></div>
+                </aside>
+                <div class="geweb-ai-main-panel">
+                    <div class="answer-box"></div>
+                    <div class="question-box">
+                        <?php if (!empty($models)): ?>
+                            <div class="geweb-ai-question-toolbar">
+                                <label for="geweb-ai-model-selector" class="geweb-ai-model-selector-label"><?php echo esc_html__('Model', 'geweb-ai-search'); ?></label>
+                                <select id="geweb-ai-model-selector" class="geweb-ai-model-selector">
+                                    <?php foreach ($models as $model): ?>
+                                        <option value="<?php echo esc_attr($model); ?>" <?php selected($selectedModel, $model); ?>><?php echo esc_html($model); ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                        <?php endif; ?>
+                        <textarea id="geweb-ai-query-display" placeholder="<?php echo esc_attr(apply_filters('geweb_aisearch_ai_textarea_placeholder', 'Ask AI a question...')); ?>"></textarea>
+                        <button id="geweb-ask-ai-submit" class="btn" type="submit" disabled></button>
+                    </div>
+                </div>
+                <aside class="geweb-ai-sources-panel">
+                    <div class="geweb-ai-panel-title"><?php echo esc_html__('Sources', 'geweb-ai-search'); ?></div>
+                    <p class="geweb-ai-sources-help"><?php echo esc_html__('Links to pages and documents used in the answer.', 'geweb-ai-search'); ?></p>
+                    <div id="geweb-ai-sources" class="geweb-ai-sources"></div>
+                </aside>
             </div>
-        </dialog>
+        </<?php echo esc_html($tagName); ?>>
         <?php
+    }
+
+    /**
+     * Render a simple normal-search-results panel above the AI chat workspace.
+     *
+     * @return void
+     */
+    private function renderFrontendAiSearchResultsPanel(): void {
+        $query = $this->getRequestedFrontendQuery();
+        ?>
+        <section class="geweb-ai-search-results-panel">
+            <div class="geweb-ai-search-results-header">
+                <div class="geweb-ai-panel-title geweb-ai-panel-title--inline"><?php echo esc_html__('Search Results', 'geweb-ai-search'); ?></div>
+                <button type="button" class="button button-small geweb-ai-search-results-toggle" aria-expanded="true"><?php echo esc_html__('Hide results', 'geweb-ai-search'); ?></button>
+            </div>
+            <div class="geweb-ai-search-results-content">
+                <?php if ($query === ''): ?>
+                    <p class="geweb-ai-empty-panel"><?php echo esc_html__('Enter a search query to see the normal WordPress search results here.', 'geweb-ai-search'); ?></p>
+                <?php else: ?>
+                    <?php
+                    $postTypes = get_option('geweb_aisearch_post_types', ['post']);
+                    if (!is_array($postTypes) || empty($postTypes)) {
+                        $postTypes = ['post'];
+                    }
+
+                    $searchQuery = new \WP_Query([
+                        'post_type' => $postTypes,
+                        'post_status' => 'publish',
+                        's' => $query,
+                        'posts_per_page' => 8,
+                    ]);
+                    ?>
+                    <?php if ($searchQuery->have_posts()): ?>
+                        <ul class="geweb-ai-search-results-list">
+                            <?php while ($searchQuery->have_posts()): $searchQuery->the_post(); ?>
+                                <li class="geweb-ai-search-result-item">
+                                    <a href="<?php the_permalink(); ?>" class="geweb-ai-search-result-link"><?php the_title(); ?></a>
+                                    <div class="geweb-ai-search-result-excerpt"><?php echo esc_html(wp_trim_words(wp_strip_all_tags((string) get_the_excerpt()), 28)); ?></div>
+                                </li>
+                            <?php endwhile; ?>
+                        </ul>
+                    <?php else: ?>
+                        <p class="geweb-ai-empty-panel"><?php echo esc_html__('No normal WordPress search results were found for this query.', 'geweb-ai-search'); ?></p>
+                    <?php endif; ?>
+                    <?php wp_reset_postdata(); ?>
+                <?php endif; ?>
+            </div>
+        </section>
+        <?php
+    }
+
+    /**
+     * Render the dedicated fullscreen AI page instead of the normal theme search template.
+     *
+     * @return void
+     */
+    public function maybeRenderFrontendAiPage(): void {
+        if (!$this->isFrontendAiPageRequest()) {
+            return;
+        }
+
+        status_header(200);
+        nocache_headers();
+        ?><!doctype html>
+        <html <?php language_attributes(); ?>>
+        <head>
+            <meta charset="<?php bloginfo('charset'); ?>">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title><?php echo esc_html(get_bloginfo('name') . ' - AI Search'); ?></title>
+            <?php wp_head(); ?>
+        </head>
+        <body <?php body_class(['geweb-ai-page', 'geweb-ai-page-open']); ?>>
+            <?php wp_body_open(); ?>
+            <main id="geweb-ai-page-root" class="geweb-ai-page-root">
+                <?php $this->renderModals(); ?>
+            </main>
+            <?php wp_footer(); ?>
+        </body>
+        </html><?php
+        exit;
+    }
+
+    /**
+     * @return string
+     */
+    private function getFrontendAiPageUrl(): string {
+        $args = [
+            'geweb_ai_chat' => '1',
+        ];
+
+        $query = $this->getRequestedFrontendQuery();
+        if ($query !== '') {
+            $args['s'] = $query;
+        }
+
+        $prettyUrl = home_url('/' . self::FRONTEND_AI_SLUG . '/');
+        $fallbackUrl = add_query_arg($args, home_url('/'));
+        $permalinkStructure = (string) get_option('permalink_structure', '');
+
+        if ($permalinkStructure === '') {
+            return $fallbackUrl;
+        }
+
+        return add_query_arg(array_diff_key($args, ['geweb_ai_chat' => true]), $prettyUrl);
+    }
+
+    /**
+     * @return string
+     */
+    private function getFrontendAiExitUrl(): string {
+        $query = $this->getRequestedFrontendQuery();
+        if ($query !== '') {
+            return add_query_arg('s', $query, home_url('/'));
+        }
+
+        return home_url('/');
+    }
+
+    /**
+     * @return bool
+     */
+    private function isFrontendAiPageRequest(): bool {
+        if ($this->getFrontendAiInterface() !== 'fullscreen') {
+            return false;
+        }
+
+        $rewriteValue = get_query_var('geweb_ai_page', '');
+        if ((string) $rewriteValue === '1') {
+            return true;
+        }
+
+        $value = isset($_GET['geweb_ai_chat']) ? sanitize_text_field(wp_unslash($_GET['geweb_ai_chat'])) : '';
+        return $value === '1';
+    }
+
+    /**
+     * @return string
+     */
+    private function getRequestedFrontendConversationId(): string {
+        $rewriteValue = get_query_var('geweb_ai_conversation', '');
+        if (is_string($rewriteValue) && $rewriteValue !== '') {
+            return sanitize_key($rewriteValue);
+        }
+
+        return isset($_GET['geweb_ai_conversation']) ? sanitize_key(wp_unslash($_GET['geweb_ai_conversation'])) : '';
+    }
+
+    /**
+     * @return string
+     */
+    private function getRequestedFrontendQuery(): string {
+        return isset($_GET['s']) ? sanitize_text_field(wp_unslash($_GET['s'])) : '';
+    }
+
+    /**
+     * @return string
+     */
+    private function getFrontendAiInterface(): string {
+        return $this->normalizeFrontendAiInterface((string) get_option(self::OPTION_FRONTEND_AI_INTERFACE, self::DEFAULT_FRONTEND_AI_INTERFACE));
+    }
+
+    /**
+     * @return int
+     */
+    private function getConversationTrimMessageLimit(): int {
+        return $this->sanitizePositiveIntOption(
+            get_option(self::OPTION_CONVERSATION_TRIM_MESSAGE_LIMIT, self::DEFAULT_CONVERSATION_TRIM_MESSAGE_LIMIT),
+            self::DEFAULT_CONVERSATION_TRIM_MESSAGE_LIMIT,
+            2,
+            200
+        );
+    }
+
+    /**
+     * @return int
+     */
+    private function getConversationTrimCharLimit(): int {
+        return $this->sanitizePositiveIntOption(
+            get_option(self::OPTION_CONVERSATION_TRIM_CHAR_LIMIT, self::DEFAULT_CONVERSATION_TRIM_CHAR_LIMIT),
+            self::DEFAULT_CONVERSATION_TRIM_CHAR_LIMIT,
+            500,
+            200000
+        );
+    }
+
+    /**
+     * @return int
+     */
+    private function getLocalConversationArchiveLimit(): int {
+        return $this->sanitizePositiveIntOption(
+            get_option(self::OPTION_LOCAL_CONVERSATION_ARCHIVE_LIMIT, self::DEFAULT_LOCAL_CONVERSATION_ARCHIVE_LIMIT),
+            self::DEFAULT_LOCAL_CONVERSATION_ARCHIVE_LIMIT,
+            1,
+            200
+        );
+    }
+
+    /**
+     * @param mixed $value
+     * @param int $default
+     * @param int $min
+     * @param int $max
+     * @return int
+     */
+    private function sanitizePositiveIntOption($value, int $default, int $min, int $max): int {
+        if ($value === null || $value === '') {
+            return $default;
+        }
+
+        $normalized = intval($value);
+        if ($normalized < $min) {
+            return $min;
+        }
+
+        if ($normalized > $max) {
+            return $max;
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @param mixed $value
+     * @return string
+     */
+    private function normalizeFrontendAiInterface($value): string {
+        $normalized = sanitize_key((string) $value);
+        if ($normalized === 'split') {
+            return 'fullscreen';
+        }
+
+        return in_array($normalized, ['modal', 'fullscreen'], true) ? $normalized : self::DEFAULT_FRONTEND_AI_INTERFACE;
     }
 }
 ?>
