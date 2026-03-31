@@ -20,7 +20,24 @@ function decodeBase64Value(encodedValue) {
 		}
 
 		try {
-				return globalThis.atob(encodedValue);
+				const binaryValue = globalThis.atob(encodedValue);
+				const binaryLength = binaryValue.length;
+				const bytes = new Uint8Array(binaryLength);
+
+				for (let index = 0; index < binaryLength; index++) {
+						bytes[index] = binaryValue.charCodeAt(index);
+				}
+
+				if (typeof globalThis.TextDecoder === 'function') {
+						return new globalThis.TextDecoder('utf-8').decode(bytes);
+				}
+
+				let decodedValue = '';
+				for (let index = 0; index < binaryLength; index++) {
+						decodedValue += String.fromCharCode(bytes[index]);
+				}
+
+				return decodedValue;
 		} catch (_error) {
 				return '';
 		}
