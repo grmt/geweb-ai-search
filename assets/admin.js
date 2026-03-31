@@ -1,7 +1,51 @@
+function escapeHtml(text) {
+		return String(text)
+				.replaceAll('&', '&amp;')
+				.replaceAll('<', '&lt;')
+				.replaceAll('>', '&gt;')
+				.replaceAll(' ', '&nbsp;');
+}
+
+function lineNumberHtml(number) {
+		return '<span style="display:inline-block; width:3em; margin-right:12px; color:#8c8f94; user-select:none;">' + number + '</span>';
+}
+
+function getAdminAjaxUrl() {
+		return globalThis.gewebAisearchAdmin?.ajaxUrl || globalThis.ajaxurl || '';
+}
+
+function decodeBase64Value(encodedValue) {
+		if (typeof encodedValue !== 'string' || encodedValue === '') {
+				return '';
+		}
+
+		try {
+				return globalThis.atob(encodedValue);
+		} catch (_error) {
+				return '';
+		}
+}
+
+function normalizePromptText(text) {
+		return String(text || '')
+				.replace(/\r\n?/g, '\n')
+				.split('\n')
+				.map(function(line) {
+						return line.replace(/[ \t]+$/g, '');
+				})
+				.join('\n');
+}
+
+function dispatchPromptEvent(element, eventName) {
+		if (!element) return;
+
+		element.dispatchEvent(new Event(eventName, { bubbles: true }));
+}
+
 jQuery(document).ready(function($) {
-		var $settingsForm = $('form[action*="admin-post.php"]').has('input[name="action"][value="geweb_save"]').first();
-		var initialFormState = $settingsForm.length ? $settingsForm.serialize() : '';
-		var suppressBeforeUnloadWarning = false;
+		const $settingsForm = $('form[action*="admin-post.php"]').has('input[name="action"][value="geweb_save"]').first();
+		let initialFormState = $settingsForm.length ? $settingsForm.serialize() : '';
+		let suppressBeforeUnloadWarning = false;
 
 		function markFormSaved() {
 				if (!$settingsForm.length) return;
@@ -14,68 +58,30 @@ jQuery(document).ready(function($) {
 		}
 
 		function updateSaveButtonState() {
-				var $saveButton = $('#geweb-save-settings');
+				const $saveButton = $('#geweb-save-settings');
 				if (!$saveButton.length) return;
 				$saveButton.prop('disabled', !hasUnsavedChanges());
 		}
 
-		function escapeHtml(text) {
-				return String(text)
-						.replace(/&/g, '&amp;')
-						.replace(/</g, '&lt;')
-						.replace(/>/g, '&gt;')
-						.replace(/ /g, '&nbsp;');
-		}
-
-		function lineNumberHtml(number) {
-				return '<span style="display:inline-block; width:3em; margin-right:12px; color:#8c8f94; user-select:none;">' + number + '</span>';
-		}
-
-		function getAdminAjaxUrl() {
-				return gewebAisearchAdmin && gewebAisearchAdmin.ajaxUrl ? gewebAisearchAdmin.ajaxUrl : (typeof ajaxurl !== 'undefined' ? ajaxurl : '');
-		}
-
-		function decodeBase64Value(encodedValue) {
-				if (typeof encodedValue !== 'string' || encodedValue === '') {
-						return '';
+		function getPromptTargetElements(scope, model) {
+				if (scope === 'model' && model) {
+						const escapedModel = model.replaceAll('"', '\\"');
+						return {
+								$prompt: $('[data-geweb-model-prompt="' + escapedModel + '"]').first(),
+								$name: $('[data-geweb-model-prompt-name="' + escapedModel + '"]').first()
+						};
 				}
 
-				try {
-						return window.atob(encodedValue);
-				} catch (error) {
-						return '';
-				}
+				return {
+						$prompt: $('#geweb_ai_search_custom_prompt'),
+						$name: $('#geweb_ai_search_custom_prompt_name')
+				};
 		}
 
-		function normalizePromptText(text) {
-				return String(text || '')
-						.replace(/\r\n?/g, '\n')
-						.split('\n')
-						.map(function(line) {
-								return line.replace(/[ \t]+$/g, '');
-						})
-						.join('\n');
-		}
-
-		function dispatchPromptEvent(element, eventName) {
-				if (!element) return;
-
-				try {
-						element.dispatchEvent(new Event(eventName, { bubbles: true }));
-						return;
-				} catch (error) {
-				}
-
-				if (document.createEvent) {
-						var event = document.createEvent('Event');
-						event.initEvent(eventName, true, true);
-						element.dispatchEvent(event);
-				}
-		}
-
-		function setPromptValue(value) {
-				var $prompt = $('#geweb_ai_search_custom_prompt');
-				var promptElement = $prompt.get(0);
+		function setPromptValue(value, scope, model) {
+				const target = getPromptTargetElements(scope, model);
+				const $prompt = target.$prompt;
+				const promptElement = $prompt.get(0);
 				if (!promptElement) return;
 
 				promptElement.value = value;
@@ -84,29 +90,42 @@ jQuery(document).ready(function($) {
 				dispatchPromptEvent(promptElement, 'change');
 				promptElement.focus();
 		}
-		function buildPromptDiff(currentPrompt, historyPrompt) {
-				var currentLines = normalizePromptText(currentPrompt).split('\n');
-				var historyLines = normalizePromptText(historyPrompt).split('\n');
-				var maxLines = Math.max(currentLines.length, historyLines.length);
-				var html = [];
 
-				for (var i = 0; i < maxLines; i++) {
-						var currentLine = currentLines[i];
-						var historyLine = historyLines[i];
-						var lineNumber = i + 1;
+		function setPromptNameValue(value, scope, model) {
+				const target = getPromptTargetElements(scope, model);
+				if (!target.$name.length) return;
+				target.$name.val(value || '');
+		}
+
+		function setPromptModeValue(mode, model) {
+				if (!model) return;
+				const normalized = mode === 'override' ? 'override' : 'append';
+				const escapedModel = model.replaceAll('"', '\\"');
+				$('[data-geweb-model-prompt-mode="' + escapedModel + '"][value="' + normalized + '"]').prop('checked', true);
+		}
+		function buildPromptDiff(currentPrompt, historyPrompt) {
+				const currentLines = normalizePromptText(currentPrompt).split('\n');
+				const historyLines = normalizePromptText(historyPrompt).split('\n');
+				const maxLines = Math.max(currentLines.length, historyLines.length);
+				const html = [];
+
+				for (let i = 0; i < maxLines; i++) {
+						const currentLine = currentLines[i];
+						const historyLine = historyLines[i];
+						const lineNumber = i + 1;
 
 						if (currentLine === historyLine) {
-								if (typeof historyLine !== 'undefined') {
+								if (historyLine !== undefined) {
 										html.push('<div>' + lineNumberHtml(lineNumber) + escapeHtml(historyLine) + '</div>');
 								}
 								continue;
 						}
 
-						if (typeof currentLine !== 'undefined') {
+						if (currentLine !== undefined) {
 								html.push('<div style="background:#fbeaea; color:#8a1f11;">' + lineNumberHtml(lineNumber) + escapeHtml('- ' + currentLine) + '</div>');
 						}
 
-						if (typeof historyLine !== 'undefined') {
+						if (historyLine !== undefined) {
 								html.push('<div style="background:#edf7ed; color:#166534;">' + lineNumberHtml(lineNumber) + escapeHtml('+ ' + historyLine) + '</div>');
 						}
 				}
@@ -114,14 +133,15 @@ jQuery(document).ready(function($) {
 				return html.length ? html.join('') : '<div>No differences from the current AI Prompt.</div>';
 		}
 
-		function updatePromptHistoryPreview(selectedPrompt) {
-				var $diff = $('#geweb-ai-prompt-history-diff');
-				var $currentPrompt = $('#geweb_ai_search_custom_prompt');
+		function updatePromptHistoryPreview(selectedPrompt, scope, model) {
+				const $diff = $('#geweb-ai-prompt-history-diff');
+				const target = getPromptTargetElements(scope, model);
+				const $currentPrompt = target.$prompt;
 
 				if (!$diff.length || !$currentPrompt.length) return;
 
 				if (!selectedPrompt) {
-						$diff.html('Select a saved prompt version to compare it with the current AI Prompt.');
+						$diff.html('Select a saved prompt version to compare it with the current prompt field.');
 						return;
 				}
 
@@ -132,26 +152,30 @@ jQuery(document).ready(function($) {
 				if (!$item || !$item.length) return;
 				$promptHistoryList.find('.geweb-ai-prompt-history-item').removeClass('selected').css('border-color', '#dcdcde');
 				$item.addClass('selected').css('border-color', '#2271b1');
-				updatePromptHistoryPreview(decodeBase64Value($item.data('prompt')));
+				updatePromptHistoryPreview(
+						decodeBase64Value($item.data('prompt')),
+						String($item.data('scope') || 'global'),
+						String($item.data('model') || '')
+				);
 		}
 
 		function showCellFeedback($cell, message, isError) {
-				var $feedback = $cell.find('.geweb-ai-index-feedback');
+				const $feedback = $cell.find('.geweb-ai-index-feedback');
 				if (!$feedback.length) return;
 
 				$feedback.text(message).css('color', isError ? '#d63638' : '#2271b1').show();
 		}
 
 		function replaceCellHtml($button, html) {
-				var $cell = $button.closest('.geweb-ai-index-cell');
+				const $cell = $button.closest('.geweb-ai-index-cell');
 				if (!$cell.length || !html) return;
 
 				$cell.replaceWith(html);
 		}
 
 		function refreshModelSelectorInBackground() {
-				var $select = $('#geweb_ai_search_model');
-				var $status = $('#geweb-ai-model-refresh-status');
+				const $select = $('#geweb_ai_search_model');
+				const $status = $('#geweb-ai-model-refresh-status');
 				if (!$select.length) return;
 
 				if ($status.length) {
@@ -174,17 +198,17 @@ jQuery(document).ready(function($) {
 								return;
 						}
 
-						var selectedValue = String($select.val() || '');
-						var remoteSelected = String(response.data.selected_model || selectedValue || '');
+						const selectedValue = String($select.val() || '');
+						const remoteSelected = String(response.data.selected_model || selectedValue || '');
 						$select.empty();
 
 						$.each(response.data.models, function(_, model) {
-								var value = String(model || '');
+								const value = String(model || '');
 								if (!value) return;
 								$select.append(new Option(value, value, false, value === remoteSelected));
 						});
 
-						if (remoteSelected && $select.find('option[value="' + remoteSelected.replace(/"/g, '\\"') + '"]').length === 0) {
+						if (remoteSelected && $select.find('option[value="' + remoteSelected.replaceAll('"', '\\"') + '"]').length === 0) {
 								$select.prepend(new Option(remoteSelected, remoteSelected, true, true));
 						} else if (remoteSelected) {
 								$select.val(remoteSelected);
@@ -192,7 +216,7 @@ jQuery(document).ready(function($) {
 
 						if ($status.length) {
 								$status.text('Model list refreshed from Gemini.').css('color', '#46b450');
-								window.setTimeout(function() {
+								globalThis.setTimeout(function() {
 										$status.fadeOut(200, function() {
 												$status.text('').css('display', 'none');
 										});
@@ -207,28 +231,40 @@ jQuery(document).ready(function($) {
 
 		$('#geweb-ai-restore-default-prompt').on('click', function(event) {
 				event.preventDefault();
-				var defaultPrompt = $('#geweb_ai_search_default_prompt').val() || decodeBase64Value($(this).attr('data-default-prompt'));
-				setPromptValue(defaultPrompt);
+				const defaultPrompt = $('#geweb_ai_search_default_prompt').val() || decodeBase64Value($(this).attr('data-default-prompt'));
+				setPromptValue(defaultPrompt, 'global', '');
 				$('#geweb_ai_search_custom_prompt_name').val('');
 				updateSaveButtonState();
 		});
 
+		$('#geweb_ai_search_prompt_model_jump').on('change', function() {
+				const model = String($(this).val() || '');
+				if (!model) return;
+
+				const $target = $('[data-geweb-model-prompt-details="' + model.replaceAll('"', '\\"') + '"]').first();
+				if (!$target.length) return;
+
+				$target.prop('open', true);
+				const top = Math.max(0, $target.offset().top - 80);
+				$('html, body').animate({ scrollTop: top }, 180);
+		});
+
 		$('.nav-tab-wrapper').on('click', '[data-geweb-tab]', function(e) {
 				e.preventDefault();
-				var tab = $(this).attr('data-geweb-tab');
+				const tab = $(this).attr('data-geweb-tab');
 				$('.nav-tab-wrapper [data-geweb-tab]').removeClass('nav-tab-active');
 				$(this).addClass('nav-tab-active');
 				$('.geweb-settings-tab-panel').hide();
 				$('.geweb-settings-tab-panel[data-geweb-tab-panel="' + tab + '"]').show();
-				if (window.history && window.history.replaceState) {
-						var url = new URL(window.location.href);
+				if (globalThis.history?.replaceState) {
+						const url = new URL(globalThis.location.href);
 						url.searchParams.set('page', 'geweb-ai-search');
 						url.searchParams.set('geweb_tab', tab);
-						window.history.replaceState({}, '', url.toString());
+						globalThis.history.replaceState({}, '', url.toString());
 				}
 		});
 
-		var $promptHistoryList = $('#geweb-ai-prompt-history-list');
+		const $promptHistoryList = $('#geweb-ai-prompt-history-list');
 
 		$promptHistoryList.on('click', '.geweb-ai-prompt-history-item', function(e) {
 				if ($(e.target).is('input, button, .dashicons')) {
@@ -240,25 +276,33 @@ jQuery(document).ready(function($) {
 		$promptHistoryList.on('click', '.geweb-ai-use-history-prompt', function(e) {
 				e.preventDefault();
 				e.stopPropagation();
-				var $item = $(this).closest('.geweb-ai-prompt-history-item');
-				var value = decodeBase64Value($item.data('prompt'));
+				const $item = $(this).closest('.geweb-ai-prompt-history-item');
+				const value = decodeBase64Value($item.data('prompt'));
 				if (!value) return;
+				const scope = String($item.data('scope') || 'global');
+				const model = String($item.data('model') || '');
+				const mode = String($item.data('mode') || 'base');
+				const name = $.trim(String($item.find('.geweb-ai-prompt-history-name-label').text() || ''));
 
-				setPromptValue(value);
-				updatePromptHistoryPreview(value);
+				setPromptValue(value, scope, model);
+				setPromptNameValue(name, scope, model);
+				if (scope === 'model') {
+						setPromptModeValue(mode, model);
+				}
+				updatePromptHistoryPreview(value, scope, model);
 		});
 
 		$promptHistoryList.on('click', '.geweb-ai-rename-history-prompt', function(e) {
 				e.preventDefault();
 				e.stopPropagation();
-				var $item = $(this).closest('.geweb-ai-prompt-history-item');
+				const $item = $(this).closest('.geweb-ai-prompt-history-item');
 				if (String($item.data('is-default') || '') === '1' || String($item.data('can-rename') || '') !== '1') {
 						return;
 				}
-				var $button = $(this);
-				var $label = $item.find('.geweb-ai-prompt-history-name-label');
-				var $input = $item.find('.geweb-ai-prompt-history-name-input');
-				var editing = $input.is(':visible');
+				const $button = $(this);
+				const $label = $item.find('.geweb-ai-prompt-history-name-label');
+				const $input = $item.find('.geweb-ai-prompt-history-name-input');
+				const editing = $input.is(':visible');
 
 				if (editing) {
 						$label.text($input.val() || '').show();
@@ -279,8 +323,8 @@ jQuery(document).ready(function($) {
 		});
 
 		$promptHistoryList.on('blur', '.geweb-ai-prompt-history-name-input', function() {
-				var $item = $(this).closest('.geweb-ai-prompt-history-item');
-				var $button = $item.find('.geweb-ai-rename-history-prompt');
+				const $item = $(this).closest('.geweb-ai-prompt-history-item');
+				const $button = $item.find('.geweb-ai-rename-history-prompt');
 				if ($(this).is(':visible')) {
 						$button.trigger('click');
 				}
@@ -289,11 +333,11 @@ jQuery(document).ready(function($) {
 		$promptHistoryList.on('click', '.geweb-ai-delete-history-prompt', function(e) {
 				e.preventDefault();
 				e.stopPropagation();
-				var $button = $(this);
-				var $item = $button.closest('.geweb-ai-prompt-history-item');
-				var timestamp = $item.data('timestamp');
+				const $button = $(this);
+				const $item = $button.closest('.geweb-ai-prompt-history-item');
+				const entryId = $item.data('entry-id');
 
-				if (!timestamp || !confirm('Are you sure you want to delete this prompt version?')) {
+				if (!entryId || !confirm('Are you sure you want to delete this prompt version?')) {
 						return;
 				}
 
@@ -306,18 +350,18 @@ jQuery(document).ready(function($) {
 						data: {
 								action: 'geweb_delete_prompt_history_item',
 								nonce: gewebAisearchAdmin.adminActionNonce,
-								timestamp: timestamp
+								entry_id: entryId
 						}
 				}).done(function(response) {
 						if (!response || !response.success) {
-								var message = response && response.data && response.data.message ? response.data.message : 'Could not delete prompt version.';
+								const message = response && response.data && response.data.message ? response.data.message : 'Could not delete prompt version.';
 								alert(message);
 								$button.prop('disabled', false);
 								return;
 						}
 						$item.remove();
 						if ($promptHistoryList.children().length === 0) {
-								var $p = $('<p class="description">No previous prompts saved yet.</p>');
+								const $p = $('<p class="description">No previous prompts saved yet.</p>');
 								$('#geweb-ai-prompt-history-list').replaceWith($p);
 								$('#geweb-ai-clear-history').remove();
 								$('#geweb-ai-prompt-history-diff').parent().remove();
@@ -330,7 +374,7 @@ jQuery(document).ready(function($) {
 
 		$(document).on('click', '.geweb-edit-conversation-trigger', function(e) {
 				e.preventDefault();
-				var $cell = $(this).closest('.geweb-conversation-summary-cell');
+				const $cell = $(this).closest('.geweb-conversation-summary-cell');
 				$cell.find('.geweb-conversation-summary-label, .geweb-edit-conversation-trigger').hide();
 				$cell.find('.geweb-edit-conversation-form').show();
 				$cell.find('.geweb-edit-conversation-input').trigger('focus');
@@ -338,7 +382,7 @@ jQuery(document).ready(function($) {
 
 		$(document).on('click', '.geweb-cancel-conversation-name', function(e) {
 				e.preventDefault();
-				var $cell = $(this).closest('.geweb-conversation-summary-cell');
+				const $cell = $(this).closest('.geweb-conversation-summary-cell');
 				$cell.find('.geweb-edit-conversation-input').val($cell.data('current-summary') || '');
 				$cell.find('.geweb-ai-index-feedback').hide().text('');
 				$cell.find('.geweb-edit-conversation-form').hide();
@@ -347,12 +391,12 @@ jQuery(document).ready(function($) {
 
 		$(document).on('click', '.geweb-save-conversation-name', function(e) {
 				e.preventDefault();
-				var $button = $(this);
-				var $cell = $button.closest('.geweb-conversation-summary-cell');
-				var $input = $cell.find('.geweb-edit-conversation-input');
-				var $feedback = $cell.find('.geweb-ai-index-feedback');
-				var conversationId = $cell.data('conversation-id');
-				var summary = $.trim(String($input.val() || ''));
+				const $button = $(this);
+				const $cell = $button.closest('.geweb-conversation-summary-cell');
+				const $input = $cell.find('.geweb-edit-conversation-input');
+				const $feedback = $cell.find('.geweb-ai-index-feedback');
+				const conversationId = $cell.data('conversation-id');
+				const summary = $.trim(String($input.val() || ''));
 
 				if (!conversationId) {
 						return;
@@ -377,7 +421,7 @@ jQuery(document).ready(function($) {
 						}
 				}).done(function(response) {
 						if (!response || !response.success || !response.data) {
-								var message = response && response.data && response.data.message ? response.data.message : 'Could not rename the conversation.';
+								const message = response && response.data && response.data.message ? response.data.message : 'Could not rename the conversation.';
 								$feedback.text(message).css('color', '#d63638').show();
 								return;
 						}
@@ -396,16 +440,16 @@ jQuery(document).ready(function($) {
 
 		$(document).on('click', '.geweb-delete-conversation-trigger', function(e) {
 				e.preventDefault();
-				var $button = $(this);
-				var $cell = $button.closest('.geweb-conversation-summary-cell');
-				var $feedback = $cell.find('.geweb-ai-index-feedback');
-				var conversationId = $cell.data('conversation-id');
+				const $button = $(this);
+				const $cell = $button.closest('.geweb-conversation-summary-cell');
+				const $feedback = $cell.find('.geweb-ai-index-feedback');
+				const conversationId = $cell.data('conversation-id');
 
 				if (!conversationId) {
 						return;
 				}
 
-				if (!window.confirm('Delete this saved conversation?')) {
+				if (!globalThis.confirm('Delete this saved conversation?')) {
 						return;
 				}
 
@@ -422,12 +466,12 @@ jQuery(document).ready(function($) {
 						}
 				}).done(function(response) {
 						if (!response || !response.success) {
-								var message = response && response.data && response.data.message ? response.data.message : 'Could not delete the conversation.';
+								const message = response && response.data && response.data.message ? response.data.message : 'Could not delete the conversation.';
 								$feedback.text(message).css('color', '#d63638').show();
 								return;
 						}
 
-						window.location.reload();
+						globalThis.location.reload();
 				}).fail(function() {
 						$feedback.text('Could not delete the conversation.').css('color', '#d63638').show();
 				}).always(function() {
@@ -436,8 +480,8 @@ jQuery(document).ready(function($) {
 		});
 
 		$('#geweb-ai-clear-history').on('click', function() {
-				var $button = $(this);
-				var $diff = $('#geweb-ai-prompt-history-diff');
+				const $button = $(this);
+				const $diff = $('#geweb-ai-prompt-history-diff');
 
 				if (!$button.length) return;
 
@@ -453,7 +497,7 @@ jQuery(document).ready(function($) {
 						}
 				}).done(function(response) {
 						if (!response || !response.success) {
-								var message = response && response.data && response.data.message ? response.data.message : 'Could not clear prompt history.';
+								const message = response && response.data && response.data.message ? response.data.message : 'Could not clear prompt history.';
 								if ($diff.length) {
 										$diff.text(message);
 								} else {
@@ -463,7 +507,7 @@ jQuery(document).ready(function($) {
 								return;
 						}
 
-						var $p = $('<p class="description">No previous prompts saved yet.</p>');
+						const $p = $('<p class="description">No previous prompts saved yet.</p>');
 						$('#geweb-ai-prompt-history-list').replaceWith($p);
 						$('#geweb-ai-clear-history').remove();
 						$('#geweb-ai-prompt-history-diff').parent().remove();
@@ -477,19 +521,26 @@ jQuery(document).ready(function($) {
 				});
 		});
 
-		$('#geweb_ai_search_custom_prompt').on('input', function() {
-				var $selectedItem = $promptHistoryList.find('.geweb-ai-prompt-history-item.selected');
-				var selectedPrompt = $selectedItem.length ? decodeBase64Value($selectedItem.data('prompt')) : null;
-				updatePromptHistoryPreview(selectedPrompt);
+		$('#geweb_ai_search_custom_prompt, [data-geweb-model-prompt]').on('input', function() {
+				const $selectedItem = $promptHistoryList.find('.geweb-ai-prompt-history-item.selected');
+				const selectedPrompt = $selectedItem.length ? decodeBase64Value($selectedItem.data('prompt')) : null;
+				updatePromptHistoryPreview(
+						selectedPrompt,
+						$selectedItem.length ? String($selectedItem.data('scope') || 'global') : 'global',
+						$selectedItem.length ? String($selectedItem.data('model') || '') : ''
+				);
 		});
 		updatePromptHistoryPreview(null);
 		if ($promptHistoryList.length) {
-				var currentPromptValue = normalizePromptText($('#geweb_ai_search_custom_prompt').val());
-				var $initialItem = $();
+				let $initialItem = $();
 				$promptHistoryList.find('.geweb-ai-prompt-history-item').each(function() {
-						var promptValue = normalizePromptText(decodeBase64Value($(this).data('prompt')));
+						const $item = $(this);
+						const promptValue = normalizePromptText(decodeBase64Value($item.data('prompt')));
+						const scope = String($item.data('scope') || 'global');
+						const model = String($item.data('model') || '');
+						const currentPromptValue = normalizePromptText(getPromptTargetElements(scope, model).$prompt.val());
 						if (promptValue !== currentPromptValue) {
-								$initialItem = $(this);
+								$initialItem = $item;
 								return false;
 						}
 				});
@@ -525,11 +576,11 @@ jQuery(document).ready(function($) {
 		});
 
 		$('#geweb-toggle-api-key-visibility').on('click', function() {
-				var $button = $(this);
-				var $field = $('#geweb_api_key');
+				const $button = $(this);
+				const $field = $('#geweb_api_key');
 				if (!$field.length) return;
 
-				var showing = $field.attr('type') === 'text';
+				const showing = $field.attr('type') === 'text';
 				$field.attr('type', showing ? 'password' : 'text');
 				$button.attr('aria-pressed', showing ? 'false' : 'true');
 				$button.attr('aria-label', showing ? 'Show API key' : 'Hide API key');
@@ -540,13 +591,13 @@ jQuery(document).ready(function($) {
 		});
 
 		function updateApiKeyVisibilityToggle() {
-				var $field = $('#geweb_api_key');
-				var $button = $('#geweb-toggle-api-key-visibility');
-				var $warning = $('#geweb-api-key-replacement-warning');
+				const $field = $('#geweb_api_key');
+				const $button = $('#geweb-toggle-api-key-visibility');
+				const $warning = $('#geweb-api-key-replacement-warning');
 				if (!$field.length || !$button.length) return;
 
-				var hasValue = String($field.val() || '').length > 0;
-				var hasValidSavedKey = String($field.data('current-key-valid') || '') === '1';
+				const hasValue = String($field.val() || '').length > 0;
+				const hasValidSavedKey = String($field.data('current-key-valid') || '') === '1';
 				$button.toggle(hasValue);
 				if ($warning.length) {
 						$warning.toggle(hasValue && hasValidSavedKey);
@@ -568,8 +619,8 @@ jQuery(document).ready(function($) {
 		});
 
 		updateApiKeyVisibilityToggle();
-		window.setTimeout(updateApiKeyVisibilityToggle, 150);
-		window.setTimeout(updateApiKeyVisibilityToggle, 600);
+		globalThis.setTimeout(updateApiKeyVisibilityToggle, 150);
+		globalThis.setTimeout(updateApiKeyVisibilityToggle, 600);
 
 		if ($settingsForm.length) {
 				$settingsForm.on('input change', function() {
@@ -584,9 +635,9 @@ jQuery(document).ready(function($) {
 		}
 		updateSaveButtonState();
 
-		var isProcessing = false;
-		var totalSuccess = 0;
-		var totalErrors = 0;
+		let isProcessing = false;
+		let totalSuccess = 0;
+		let totalErrors = 0;
 
 		function processPage(page) {
 				$.ajax({
@@ -600,12 +651,12 @@ jQuery(document).ready(function($) {
 						},
 						success: function(response) {
 								if (response.success) {
-										var data = response.data;
+										const data = response.data;
 										totalSuccess += data.success;
 										totalErrors += data.errors;
 
-										var percentage = Math.round((data.processed / data.total) * 100);
-										var statusText = 'Processing: ' + data.processed + '/' + data.total + ' (' + percentage + '%)';
+										const percentage = Math.round((data.processed / data.total) * 100);
+										const statusText = 'Processing: ' + data.processed + '/' + data.total + ' (' + percentage + '%)';
 
 										$('#geweb-generate-status').html('<p>' + statusText + '</p>');
 
@@ -614,7 +665,7 @@ jQuery(document).ready(function($) {
 												processPage(data.next_page);
 										} else {
 												// Finished
-												var finalMessage = 'Completed! ' + totalSuccess + ' documents uploaded';
+												let finalMessage = 'Completed! ' + totalSuccess + ' documents uploaded';
 												if (totalErrors > 0) {
 														finalMessage += ', ' + totalErrors + ' errors (failed items were automatically excluded)';
 												}
@@ -643,8 +694,8 @@ jQuery(document).ready(function($) {
 				totalSuccess = 0;
 				totalErrors = 0;
 
-				var $btn = $(this);
-				var $status = $('#geweb-generate-status');
+				const $btn = $(this);
+				const $status = $('#geweb-generate-status');
 
 				$btn.prop('disabled', true);
 				$status.html('<p>Starting...</p>');
@@ -653,9 +704,9 @@ jQuery(document).ready(function($) {
 		});
 
 		$(document).on('click', '.geweb-ai-reupload', function() {
-				var $button = $(this);
-				var $cell = $button.closest('.geweb-ai-index-cell');
-				var postId = $cell.data('post-id');
+				const $button = $(this);
+				const $cell = $button.closest('.geweb-ai-index-cell');
+				const postId = $cell.data('post-id');
 				if (!postId) return;
 
 				$button.prop('disabled', true).text('Uploading...');
@@ -689,10 +740,10 @@ jQuery(document).ready(function($) {
 		});
 
 		$(document).on('change', '.geweb-ai-toggle-exclude', function() {
-				var $checkbox = $(this);
-				var $cell = $checkbox.closest('.geweb-ai-index-cell');
-				var postId = $cell.data('post-id');
-				var exclude = $checkbox.is(':checked') ? 1 : 0;
+				const $checkbox = $(this);
+				const $cell = $checkbox.closest('.geweb-ai-index-cell');
+				const postId = $cell.data('post-id');
+				const exclude = $checkbox.is(':checked') ? 1 : 0;
 				if (!postId) return;
 
 				$checkbox.prop('disabled', true);
@@ -726,13 +777,13 @@ jQuery(document).ready(function($) {
 				});
 		});
 
-		var isRefreshingReferencedDocuments = false;
-		var isRefreshingGeminiStores = false;
+		let isRefreshingReferencedDocuments = false;
+		let isRefreshingGeminiStores = false;
 
 		function refreshReferencedDocuments() {
-				var $container = $('#geweb-referenced-documents-container');
-				var $button = $('#geweb-refresh-referenced-documents');
-				var $status = $('#geweb-referenced-documents-status');
+				const $container = $('#geweb-referenced-documents-container');
+				const $button = $('#geweb-refresh-referenced-documents');
+				const $status = $('#geweb-referenced-documents-status');
 				if (!$container.length || !$button.length || isRefreshingReferencedDocuments) return;
 
 				isRefreshingReferencedDocuments = true;
@@ -761,7 +812,7 @@ jQuery(document).ready(function($) {
 						}
 
 						$container.html(response.data.html).attr('data-needs-refresh', '0');
-						var suffix = typeof response.data.count === 'number'
+						const suffix = typeof response.data.count === 'number'
 								? ' (' + response.data.count + ' documents)'
 								: '';
 						$status.text('Last refreshed: ' + (response.data.refreshed_at || 'just now') + suffix);
@@ -782,13 +833,13 @@ jQuery(document).ready(function($) {
 		}
 
 		function refreshSelectedGeminiStoreDocuments(storeName, storeLabel) {
-				var $panel = $('#geweb-gemini-store-documents-panel');
-				var $container = $('#geweb-gemini-store-documents-container');
-				var $status = $('#geweb-gemini-store-documents-status');
-				var $error = $('#geweb-gemini-store-documents-error');
-				var $title = $('#geweb-gemini-store-documents-title');
-				var $button = $('#geweb-refresh-gemini-store-documents');
-				var $storesRefreshButton = $('#geweb-refresh-gemini-stores');
+				const $panel = $('#geweb-gemini-store-documents-panel');
+				const $container = $('#geweb-gemini-store-documents-container');
+				const $status = $('#geweb-gemini-store-documents-status');
+				const $error = $('#geweb-gemini-store-documents-error');
+				const $title = $('#geweb-gemini-store-documents-title');
+				const $button = $('#geweb-refresh-gemini-store-documents');
+				const $storesRefreshButton = $('#geweb-refresh-gemini-stores');
 				if (!$panel.length || !$container.length || !storeName) return;
 
 				$panel.attr('data-store-name', storeName);
@@ -811,7 +862,7 @@ jQuery(document).ready(function($) {
 						}
 				}).done(function(response) {
 						if (!response || !response.success || !response.data || typeof response.data.html !== 'string') {
-								var message = response && response.data && response.data.message
+								const message = response && response.data && response.data.message
 										? response.data.message
 										: 'Could not refresh uploaded items.';
 								$status.text(message);
@@ -830,7 +881,7 @@ jQuery(document).ready(function($) {
 						$button.prop('disabled', false).text('Refresh List');
 						$storesRefreshButton.prop('disabled', false).text('Refresh List');
 				}).fail(function(xhr) {
-						var message = xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message
+						const message = xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message
 								? xhr.responseJSON.data.message
 								: 'Could not refresh uploaded items.';
 						$status.text(message);

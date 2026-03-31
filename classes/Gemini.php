@@ -30,6 +30,9 @@ class Gemini implements AIProviderInterface {
      */
     private const OPTION_MODEL = 'geweb_aisearch_model';
     private const OPTION_MODEL_STATUS = 'geweb_aisearch_model_status';
+    private const OPTION_MODEL_PROMPTS = 'geweb_aisearch_model_prompts';
+    private const OPTION_MODEL_PROMPT_NAMES = 'geweb_aisearch_model_prompt_names';
+    private const OPTION_MODEL_PROMPT_MODES = 'geweb_aisearch_model_prompt_modes';
     private const OPTION_CONNECTION_STATUS = 'geweb_aisearch_connection_status';
     private const OPTION_STORES_CACHE = 'geweb_aisearch_gemini_stores_cache';
     private const OPTION_STORES_CACHE_TIME = 'geweb_aisearch_gemini_stores_cache_time';
@@ -57,6 +60,14 @@ class Gemini implements AIProviderInterface {
         "- Do not use markdown in response, change it to html\n" .
         "- URL is taken from the document's frontmatter (---\\nurl: ...\\n---)\n" .
         "- Title is taken from H1 in the document\n\n";
+    private const DEFAULT_SYSTEM_INSTRUCTION_GEMINI2_APPENDIX = "Formatting requirements for Gemini 2.x models:\n" .
+        "- Do not add a separate Sources, Bronnen, References, or Links section at the end of the answer\n" .
+        "- Keep the answer body clean and readable without repeating the source list\n" .
+        "- If source evidence is needed, keep it concise and rely on grounding metadata rather than a manual source appendix\n\n";
+    private const DEFAULT_SYSTEM_INSTRUCTION_STRUCTURED_APPENDIX = "Formatting requirements for structured-output models:\n" .
+        "- Do not add a separate Sources, Bronnen, References, or Links section at the end of the answer\n" .
+        "- Put source URLs and titles only in the structured sources field, not in the answer body\n" .
+        "- Keep the answer body focused on the explanation itself\n\n";
 
     /**
      * Default model name
@@ -569,34 +580,12 @@ class Gemini implements AIProviderInterface {
             $documents = $result['documents'] ?? [];
             if (is_array($documents)) {
                 foreach ($documents as $document) {
-                    if (!is_array($document)) {
+                    $normalizedDocument = $this->normalizeStoreDocumentListItem($document);
+                    if (empty($normalizedDocument)) {
                         continue;
                     }
 
-                    $name = isset($document['name']) ? (string) $document['name'] : '';
-                    if ($name === '') {
-                        continue;
-                    }
-
-                    $displayName = '';
-                    if (!empty($document['displayName'])) {
-                        $displayName = (string) $document['displayName'];
-                    } elseif (!empty($document['display_name'])) {
-                        $displayName = (string) $document['display_name'];
-                    }
-
-                    $mimeType = '';
-                    if (!empty($document['mimeType'])) {
-                        $mimeType = (string) $document['mimeType'];
-                    } elseif (!empty($document['mime_type'])) {
-                        $mimeType = (string) $document['mime_type'];
-                    }
-
-                    $items[] = [
-                        'name' => $name,
-                        'display_name' => $displayName,
-                        'mime_type' => $mimeType,
-                    ];
+                    $items[] = $normalizedDocument;
                 }
             }
 
@@ -609,13 +598,49 @@ class Gemini implements AIProviderInterface {
     }
 
     /**
+     * @param mixed $document
+     * @return array<string,string>
+     */
+    private function normalizeStoreDocumentListItem($document): array {
+        if (!is_array($document)) {
+            return [];
+        }
+
+        $name = isset($document['name']) ? (string) $document['name'] : '';
+        if ($name === '') {
+            return [];
+        }
+
+        return [
+            'name' => $name,
+            'display_name' => $this->pickFirstDocumentFieldValue($document, ['displayName', 'display_name']),
+            'mime_type' => $this->pickFirstDocumentFieldValue($document, ['mimeType', 'mime_type']),
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $document
+     * @param array<int,string> $keys
+     * @return string
+     */
+    private function pickFirstDocumentFieldValue(array $document, array $keys): string {
+        foreach ($keys as $key) {
+            if (!empty($document[$key])) {
+                return (string) $document[$key];
+            }
+        }
+
+        return '';
+    }
+
+    /**
      * Search in documents using Gemini File Search
      *
      * @param array $messages Array of messages in format [['role' => 'user', 'content' => '...'], ...]
      * @return array Response ['answer' => '...', 'sources' => [...]] or ['answer' => '...']
      * @throws \Exception On API or network error
      */
-    public function search(array $messages, ?string $model = null): array {
+    public function search(array $messages, ?string $model = null, ?string $promptOverride = null): array {
         $storeName = $this->getStoreData();
         if (empty($this->apiKey) || empty($storeName)) {
             throw new ConfigurationException('Configuration error');
@@ -628,44 +653,70 @@ class Gemini implements AIProviderInterface {
         $requestModel = is_string($model) && $model !== '' ? $model : $this->model;
 
         // Build request body
-        $body = $this->buildSearchBody($messages, $storeName, $requestModel);
+        $promptDescriptor = $this->getPromptDescriptor($requestModel, $promptOverride);
+        $body = $this->buildSearchBody($messages, $storeName, $requestModel, $promptDescriptor['instruction']);
 
         try {
-            // Make API request
-            $url = self::API_BASE . '/models/' . $requestModel . ':generateContent';
-            $result = $this->makeRequest($url, $body, 'POST');
-
-            // Parse response
-            if (empty($result['candidates'][0]['content']['parts'][0]['text'])) {
-                throw new \Exception('Empty response from AI');
-            }
-
-            $responseText = $result['candidates'][0]['content']['parts'][0]['text'];
-            $meta = $this->buildResponseMeta($result, $requestModel);
+            $result = $this->executeSearchRequest($requestModel, $body);
+            $responseText = $this->extractSearchResponseText($result);
+            $meta = $this->buildResponseMeta($result, $requestModel, $promptDescriptor);
 
             $this->recordModelStatus($requestModel, 'ok');
-
-            // Gemini 3+ returns JSON, Gemini 2.5 returns plain text
-            if ($this->isGemini2Model($requestModel)) {
-                return [
-                    'answer' => apply_filters('the_content', $responseText),
-                    'meta' => $meta,
-                ];
-            }
-            $decoded = json_decode($responseText, true);
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                return [
-                    'answer' => apply_filters('the_content', $responseText),
-                    'meta' => $meta,
-                ];
-            }
-            $decoded['answer'] = apply_filters('the_content', $decoded['answer']);
-            $decoded['meta'] = $meta;
-            return $decoded;
+            return $this->formatSearchResponse($responseText, $meta, $requestModel);
         } catch (\Exception $e) {
             $this->recordModelStatus($requestModel, 'failed', $e->getMessage());
             throw $e;
         }
+    }
+
+    /**
+     * @param string $model
+     * @param array<string,mixed> $body
+     * @return array<string,mixed>
+     */
+    private function executeSearchRequest(string $model, array $body): array {
+        $url = self::API_BASE . '/models/' . $model . ':generateContent';
+        return $this->makeRequest($url, $body, 'POST');
+    }
+
+    /**
+     * @param array<string,mixed> $result
+     * @return string
+     */
+    private function extractSearchResponseText(array $result): string {
+        if (empty($result['candidates'][0]['content']['parts'][0]['text'])) {
+            throw new \Exception('Empty response from AI');
+        }
+
+        return (string) $result['candidates'][0]['content']['parts'][0]['text'];
+    }
+
+    /**
+     * @param string $responseText
+     * @param array<string,mixed> $meta
+     * @param string $model
+     * @return array<string,mixed>
+     */
+    private function formatSearchResponse(string $responseText, array $meta, string $model): array {
+        $formattedAnswer = apply_filters('the_content', $responseText);
+        if ($this->isGemini2Model($model)) {
+            return [
+                'answer' => $formattedAnswer,
+                'meta' => $meta,
+            ];
+        }
+
+        $decoded = json_decode($responseText, true);
+        if (json_last_error() !== JSON_ERROR_NONE || !is_array($decoded)) {
+            return [
+                'answer' => $formattedAnswer,
+                'meta' => $meta,
+            ];
+        }
+
+        $decoded['answer'] = apply_filters('the_content', (string) ($decoded['answer'] ?? ''));
+        $decoded['meta'] = $meta;
+        return $decoded;
     }
 
     /**
@@ -735,22 +786,8 @@ class Gemini implements AIProviderInterface {
      * @param string $storeName File Search Store name
      * @return array Request body
      */
-    private function buildSearchBody(array $messages, string $storeName, string $model): array {
-        // Get system instruction with filter support
-        $systemInstruction = $this->getSystemInstruction();
-
-        // Format messages for Gemini API
-        $contents = [];
-        foreach ($messages as $message) {
-            if (!empty($message['content'])) {
-                $contents[] = [
-                    'role' => $message['role'],
-                    'parts' => [['text' => $message['content']]]
-                ];
-            }
-        }
-
-        // Base request body
+    private function buildSearchBody(array $messages, string $storeName, string $model, string $systemInstruction): array {
+        $contents = $this->buildSearchContents($messages);
         $body = [
             'system_instruction' => [
                 'parts' => [['text' => $systemInstruction]]
@@ -763,58 +800,112 @@ class Gemini implements AIProviderInterface {
             ]]
         ];
 
-        // Add JSON schema for Gemini 3+ models
         if (!$this->isGemini2Model($model)) {
-            $body['generationConfig'] = [
-                'temperature' => 0.3,
-                'responseMimeType' => 'application/json',
-                'responseJsonSchema' => [
-                    'type' => 'object',
-                    'properties' => [
-                        'answer' => [
-                            'type' => 'string',
-                            'description' => 'Answer to the user question in HTML format do not use markdown'
-                        ],
-                        'sources' => [
-                            'type' => 'array',
-                            'description' => 'List of sources used for the answer',
-                            'items' => [
-                                'type' => 'object',
-                                'properties' => [
-                                    'url' => [
-                                        'type' => 'string',
-                                        'description' => 'Page URL'
-                                    ],
-                                    'title' => [
-                                        'type' => 'string',
-                                        'description' => 'Page title'
-                                    ]
-                                ],
-                                'required' => ['url', 'title']
-                            ]
-                        ]
-                    ],
-                    'required' => ['answer', 'sources']
-                ]
-            ];
+            $body['generationConfig'] = $this->getStructuredGenerationConfig();
         }
 
         return $body;
     }
 
     /**
+     * @param array<int,array<string,mixed>> $messages
+     * @return array<int,array<string,mixed>>
+     */
+    private function buildSearchContents(array $messages): array {
+        $contents = [];
+        foreach ($messages as $message) {
+            if (empty($message['content'])) {
+                continue;
+            }
+
+            $contents[] = [
+                'role' => $message['role'],
+                'parts' => [['text' => $message['content']]]
+            ];
+        }
+
+        return $contents;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function getStructuredGenerationConfig(): array {
+        return [
+            'temperature' => 0.3,
+            'responseMimeType' => 'application/json',
+            'responseJsonSchema' => [
+                'type' => 'object',
+                'properties' => [
+                    'answer' => [
+                        'type' => 'string',
+                        'description' => 'Answer to the user question in HTML format do not use markdown'
+                    ],
+                    'sources' => [
+                        'type' => 'array',
+                        'description' => 'List of sources used for the answer',
+                        'items' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'url' => [
+                                    'type' => 'string',
+                                    'description' => 'Page URL'
+                                ],
+                                'title' => [
+                                    'type' => 'string',
+                                    'description' => 'Page title'
+                                ]
+                            ],
+                            'required' => ['url', 'title']
+                        ]
+                    ]
+                ],
+                'required' => ['answer', 'sources']
+            ]
+        ];
+    }
+
+    /**
      * @param array<string,mixed> $result
      * @return array<string,mixed>
      */
-    private function buildResponseMeta(array $result, string $model): array {
+    private function buildResponseMeta(array $result, string $model, array $promptDescriptor = []): array {
         $usage = $this->extractUsageMetadata($result);
+        $candidate = isset($result['candidates'][0]) && is_array($result['candidates'][0])
+            ? $result['candidates'][0]
+            : [];
         $meta = [
             'provider' => $this->getProviderLabel(),
             'model' => $model,
         ];
 
+        $responseId = isset($result['responseId']) ? trim((string) $result['responseId']) : '';
+        if ($responseId !== '') {
+            $meta['response_id'] = $responseId;
+        }
+
+        $modelVersion = isset($result['modelVersion']) ? trim((string) $result['modelVersion']) : '';
+        if ($modelVersion !== '') {
+            $meta['model_version'] = $modelVersion;
+        }
+
+        if (!empty($promptDescriptor)) {
+            $meta['prompt'] = $this->buildPromptMeta($promptDescriptor);
+        }
+
         if (!empty($usage)) {
             $meta['usage'] = $usage;
+        }
+
+        if (!empty($candidate)) {
+            $candidateMeta = $this->buildCandidateMeta($candidate);
+            if (count($candidateMeta) > 1) {
+                $meta['candidate'] = $candidateMeta;
+            }
+        }
+
+        if (isset($result['promptFeedback']) && is_array($result['promptFeedback']) && !empty($result['promptFeedback'])) {
+            $meta['prompt_feedback'] = $result['promptFeedback'];
         }
 
         $estimatedCost = $this->estimateTextGenerationCost($usage, $model);
@@ -823,6 +914,76 @@ class Gemini implements AIProviderInterface {
         }
 
         return $meta;
+    }
+
+    /**
+     * @param array<string,mixed> $promptDescriptor
+     * @return array<string,mixed>
+     */
+    private function buildPromptMeta(array $promptDescriptor): array {
+        $promptText = isset($promptDescriptor['instruction']) ? trim((string) $promptDescriptor['instruction']) : '';
+
+        return [
+            'name' => isset($promptDescriptor['name']) ? trim((string) $promptDescriptor['name']) : '',
+            'scope' => isset($promptDescriptor['scope']) ? trim((string) $promptDescriptor['scope']) : '',
+            'mode' => isset($promptDescriptor['mode']) ? trim((string) $promptDescriptor['mode']) : '',
+            'base_name' => isset($promptDescriptor['base_name']) ? trim((string) $promptDescriptor['base_name']) : '',
+            'is_model_specific' => !empty($promptDescriptor['is_model_specific']),
+            'is_custom' => !empty($promptDescriptor['is_custom']),
+            'hash' => $promptText !== '' ? md5($promptText) : '',
+            'preview' => $promptText !== '' ? $this->buildPromptPreview($promptText) : '',
+            'text' => $promptText,
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $candidate
+     * @return array<string,mixed>
+     */
+    private function buildCandidateMeta(array $candidate): array {
+        $candidateMeta = [
+            'index' => isset($candidate['index']) ? (int) $candidate['index'] : 0,
+        ];
+
+        $finishReason = isset($candidate['finishReason']) ? trim((string) $candidate['finishReason']) : '';
+        if ($finishReason !== '') {
+            $candidateMeta['finish_reason'] = $finishReason;
+        }
+
+        $finishMessage = isset($candidate['finishMessage']) ? trim((string) $candidate['finishMessage']) : '';
+        if ($finishMessage !== '') {
+            $candidateMeta['finish_message'] = $finishMessage;
+        }
+
+        if (isset($candidate['tokenCount'])) {
+            $candidateMeta['token_count'] = (int) $candidate['tokenCount'];
+        }
+
+        if (isset($candidate['avgLogprobs'])) {
+            $candidateMeta['avg_logprobs'] = (float) $candidate['avgLogprobs'];
+        }
+
+        foreach ($this->getCandidateArrayFieldMap() as $sourceKey => $targetKey) {
+            if (isset($candidate[$sourceKey]) && is_array($candidate[$sourceKey]) && !empty($candidate[$sourceKey])) {
+                $candidateMeta[$targetKey] = $candidate[$sourceKey];
+            }
+        }
+
+        return $candidateMeta;
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function getCandidateArrayFieldMap(): array {
+        return [
+            'safetyRatings' => 'safety_ratings',
+            'citationMetadata' => 'citation_metadata',
+            'groundingAttributions' => 'grounding_attributions',
+            'groundingMetadata' => 'grounding_metadata',
+            'urlContextMetadata' => 'url_context_metadata',
+            'logprobsResult' => 'logprobs_result',
+        ];
     }
 
     /**
@@ -884,10 +1045,145 @@ class Gemini implements AIProviderInterface {
      * @return string
      */
     public function getSystemInstruction(): string {
-        $customPrompt = trim((string) get_option(self::OPTION_CUSTOM_PROMPT, ''));
-        $systemInstruction = $customPrompt !== '' ? $customPrompt : self::DEFAULT_SYSTEM_INSTRUCTION;
+        $descriptor = $this->getPromptDescriptor($this->getModel());
+        return apply_filters('geweb_aisearch_gemini_system_instruction', $descriptor['instruction'], $this->getModel(), $descriptor);
+    }
 
-        return apply_filters('geweb_aisearch_gemini_system_instruction', $systemInstruction);
+    /**
+     * @param string|null $model
+     * @return array<string,mixed>
+     */
+    public function getPromptDescriptor(?string $model = null, ?string $promptOverride = null): array {
+        $resolvedModel = is_string($model) && $model !== '' ? $model : $this->getModel();
+        $promptOverride = is_string($promptOverride) ? trim($promptOverride) : '';
+        if ($promptOverride !== '') {
+            $baseInstruction = $this->getBasePromptDescriptor($resolvedModel);
+            return [
+                'instruction' => $promptOverride,
+                'name' => 'Temporary prompt',
+                'scope' => 'temporary',
+                'is_model_specific' => false,
+                'is_custom' => true,
+                'is_temporary' => true,
+                'mode' => 'override',
+                'base_name' => (string) ($baseInstruction['name'] ?? ''),
+            ];
+        }
+
+        $storedModelPrompts = $this->getStoredModelPrompts();
+        $storedModelPromptNames = $this->getStoredModelPromptNames();
+        $storedModelPromptModes = $this->getStoredModelPromptModes();
+        $baseInstruction = $this->getBasePromptDescriptor($resolvedModel);
+
+        $modelPrompt = trim((string) ($storedModelPrompts[$resolvedModel] ?? ''));
+        if ($modelPrompt !== '') {
+            $mode = ($storedModelPromptModes[$resolvedModel] ?? 'append') === 'override' ? 'override' : 'append';
+            $instruction = $mode === 'override'
+                ? $modelPrompt
+                : trim($baseInstruction['instruction'] . "\n\n" . $modelPrompt);
+            return [
+                'instruction' => $instruction,
+                'name' => trim((string) ($storedModelPromptNames[$resolvedModel] ?? '')) ?: ('Prompt override for ' . $resolvedModel),
+                'scope' => 'model',
+                'is_model_specific' => true,
+                'is_custom' => true,
+                'mode' => $mode,
+                'base_name' => (string) ($baseInstruction['name'] ?? ''),
+            ];
+        }
+
+        return $baseInstruction;
+    }
+
+    /**
+     * @param string $resolvedModel
+     * @return array<string,mixed>
+     */
+    private function getBasePromptDescriptor(string $resolvedModel): array {
+        $customPrompt = trim((string) get_option(self::OPTION_CUSTOM_PROMPT, ''));
+        if ($customPrompt !== '') {
+            return [
+                'instruction' => $customPrompt,
+                'name' => trim((string) get_option('geweb_aisearch_custom_prompt_name', '')) ?: 'Custom prompt',
+                'scope' => 'global',
+                'is_model_specific' => false,
+                'is_custom' => true,
+                'mode' => 'base',
+            ];
+        }
+
+        return [
+            'instruction' => $this->getDefaultSystemInstructionForModel($resolvedModel),
+            'name' => $this->isGemini2Model($resolvedModel) ? 'Built-in Gemini 2.x prompt' : 'Built-in structured-model prompt',
+            'scope' => $this->isGemini2Model($resolvedModel) ? 'default-gemini-2' : 'default-structured',
+            'is_model_specific' => false,
+            'is_custom' => false,
+            'mode' => 'base',
+        ];
+    }
+
+    /**
+     * @param string|null $model
+     * @return string
+     */
+    public function getDefaultSystemInstructionForModel(?string $model = null): string {
+        $resolvedModel = is_string($model) && $model !== '' ? $model : $this->getModel();
+        if ($this->isGemini2Model($resolvedModel)) {
+            return self::DEFAULT_SYSTEM_INSTRUCTION . self::DEFAULT_SYSTEM_INSTRUCTION_GEMINI2_APPENDIX;
+        }
+
+        return self::DEFAULT_SYSTEM_INSTRUCTION . self::DEFAULT_SYSTEM_INSTRUCTION_STRUCTURED_APPENDIX;
+    }
+
+    /**
+     * @return string
+     */
+    public function getDefaultSystemInstruction(): string {
+        return $this->getDefaultSystemInstructionForModel($this->getModel());
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function getStoredModelPrompts(): array {
+        $value = get_option(self::OPTION_MODEL_PROMPTS, []);
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $prompts = array_map('strval', $value);
+        return array_filter($prompts, static function (string $item): bool {
+            return trim($item) !== '';
+        });
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function getStoredModelPromptNames(): array {
+        $value = get_option(self::OPTION_MODEL_PROMPT_NAMES, []);
+        return is_array($value) ? array_map('strval', $value) : [];
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function getStoredModelPromptModes(): array {
+        $value = get_option(self::OPTION_MODEL_PROMPT_MODES, []);
+        return is_array($value) ? array_map('strval', $value) : [];
+    }
+
+    /**
+     * @param string $prompt
+     * @return string
+     */
+    private function buildPromptPreview(string $prompt): string {
+        $prompt = trim(preg_replace('/\s+/', ' ', $prompt) ?? $prompt);
+        if (function_exists('mb_strimwidth')) {
+            return mb_strimwidth($prompt, 0, 160, '...');
+        }
+
+        return strlen($prompt) > 160 ? substr($prompt, 0, 157) . '...' : $prompt;
     }
 
     /**
@@ -978,15 +1274,6 @@ class Gemini implements AIProviderInterface {
     }
 
     /**
-     * Get the built-in default system instruction
-     *
-     * @return string
-     */
-    public function getDefaultSystemInstruction(): string {
-        return self::DEFAULT_SYSTEM_INSTRUCTION;
-    }
-
-    /**
      * Get recorded model statuses
      *
      * @return array<string,array<string,mixed>>
@@ -1013,13 +1300,11 @@ class Gemini implements AIProviderInterface {
      */
     public function validateConnection(): array {
         if (empty($this->apiKey)) {
-            $result = [
+            return $this->storeConnectionValidationResult([
                 'status' => 'missing',
                 'message' => 'No API key saved.',
                 'timestamp' => current_time('timestamp'),
-            ];
-            update_option(self::OPTION_CONNECTION_STATUS, $result);
-            return $result;
+            ]);
         }
 
         try {
@@ -1029,20 +1314,26 @@ class Gemini implements AIProviderInterface {
                 'message' => !empty($remoteModels) ? 'Gemini API key is valid.' : 'Gemini API returned no usable models.',
                 'timestamp' => current_time('timestamp'),
             ];
-            update_option(self::OPTION_CONNECTION_STATUS, $result);
             if (!empty($remoteModels)) {
                 set_transient(self::TRANSIENT_MODELS, $remoteModels, 12 * HOUR_IN_SECONDS);
             }
-            return $result;
+            return $this->storeConnectionValidationResult($result);
         } catch (\Exception $e) {
-            $result = [
+            return $this->storeConnectionValidationResult([
                 'status' => 'failed',
                 'message' => $this->sanitizeConnectionErrorMessage($e->getMessage()),
                 'timestamp' => current_time('timestamp'),
-            ];
-            update_option(self::OPTION_CONNECTION_STATUS, $result);
-            return $result;
+            ]);
         }
+    }
+
+    /**
+     * @param array<string,mixed> $result
+     * @return array<string,mixed>
+     */
+    private function storeConnectionValidationResult(array $result): array {
+        update_option(self::OPTION_CONNECTION_STATUS, $result);
+        return $result;
     }
 
     /**
@@ -1085,50 +1376,27 @@ class Gemini implements AIProviderInterface {
             return 'Could not validate the API key. This plugin expects a Google AI Studio Gemini API key.';
         }
 
-        if (stripos($message, 'API_KEY_INVALID') !== false || stripos($message, 'API key not valid') !== false) {
+        if ($this->messageContainsAny($message, ['API_KEY_INVALID', 'API key not valid'])) {
             return 'The API key is invalid. Enter a valid Google AI Studio Gemini API key.';
         }
 
-        if (
-            stripos($message, 'PERMISSION_DENIED') !== false ||
-            stripos($message, 'permission denied') !== false ||
-            stripos($message, 'forbidden') !== false
-        ) {
+        if ($this->messageContainsAny($message, ['PERMISSION_DENIED', 'permission denied', 'forbidden'])) {
             return 'The API key does not have permission to use the Gemini API or the selected resource.';
         }
 
-        if (
-            stripos($message, 'RESOURCE_EXHAUSTED') !== false ||
-            stripos($message, 'quota') !== false ||
-            stripos($message, 'rate limit') !== false ||
-            stripos($message, 'too many requests') !== false
-        ) {
+        if ($this->messageContainsAny($message, ['RESOURCE_EXHAUSTED', 'quota', 'rate limit', 'too many requests'])) {
             return 'The Gemini API quota or rate limit has been reached for this project.';
         }
 
-        if (
-            stripos($message, 'SERVICE_DISABLED') !== false ||
-            stripos($message, 'api has not been used') !== false ||
-            stripos($message, 'is not enabled') !== false
-        ) {
+        if ($this->messageContainsAny($message, ['SERVICE_DISABLED', 'api has not been used', 'is not enabled'])) {
             return 'The Gemini API is not enabled for this Google project.';
         }
 
-        if (
-            stripos($message, 'API key expired') !== false ||
-            stripos($message, 'API_KEY_SERVICE_BLOCKED') !== false ||
-            stripos($message, 'API_KEY_HTTP_REFERRER_BLOCKED') !== false ||
-            stripos($message, 'API_KEY_IP_ADDRESS_BLOCKED') !== false
-        ) {
+        if ($this->messageContainsAny($message, ['API key expired', 'API_KEY_SERVICE_BLOCKED', 'API_KEY_HTTP_REFERRER_BLOCKED', 'API_KEY_IP_ADDRESS_BLOCKED'])) {
             return 'This API key is blocked by its Google API key restrictions.';
         }
 
-        if (
-            stripos($message, 'UNAVAILABLE') !== false ||
-            stripos($message, 'timed out') !== false ||
-            stripos($message, 'could not resolve host') !== false ||
-            stripos($message, 'network') !== false
-        ) {
+        if ($this->messageContainsAny($message, ['UNAVAILABLE', 'timed out', 'could not resolve host', 'network'])) {
             return 'The Gemini API could not be reached right now. Please try again.';
         }
 
@@ -1154,6 +1422,21 @@ class Gemini implements AIProviderInterface {
         }
 
         return preg_replace('/\s+/', ' ', $message) ?: 'Could not validate the API key. This plugin expects a Google AI Studio Gemini API key.';
+    }
+
+    /**
+     * @param string $message
+     * @param array<int,string> $fragments
+     * @return bool
+     */
+    private function messageContainsAny(string $message, array $fragments): bool {
+        foreach ($fragments as $fragment) {
+            if ($fragment !== '' && stripos($message, $fragment) !== false) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -1189,25 +1472,8 @@ class Gemini implements AIProviderInterface {
         $models = [];
 
         foreach (($result['models'] ?? []) as $model) {
-            $name = isset($model['name']) ? (string) $model['name'] : '';
-            $methods = isset($model['supportedGenerationMethods']) && is_array($model['supportedGenerationMethods'])
-                ? $model['supportedGenerationMethods']
-                : [];
-
-            if ($name === '' || !in_array('generateContent', $methods, true)) {
-                continue;
-            }
-
-            $shortName = preg_replace('#^models/#', '', $name);
-            if (!is_string($shortName) || $shortName === '') {
-                continue;
-            }
-
-            if (strpos($shortName, 'embedding') !== false) {
-                continue;
-            }
-
-            if (!$this->supportsFileSearch($shortName)) {
+            $shortName = $this->extractUsableModelName($model);
+            if ($shortName === '') {
                 continue;
             }
 
@@ -1218,6 +1484,36 @@ class Gemini implements AIProviderInterface {
         sort($models);
 
         return $models;
+    }
+
+    /**
+     * @param mixed $model
+     * @return string
+     */
+    private function extractUsableModelName($model): string {
+        if (!is_array($model)) {
+            return '';
+        }
+
+        $name = isset($model['name']) ? (string) $model['name'] : '';
+        $methods = isset($model['supportedGenerationMethods']) && is_array($model['supportedGenerationMethods'])
+            ? $model['supportedGenerationMethods']
+            : [];
+
+        if ($name === '' || !in_array('generateContent', $methods, true)) {
+            return '';
+        }
+
+        $shortName = preg_replace('#^models/#', '', $name);
+        if (!is_string($shortName) || $shortName === '') {
+            return '';
+        }
+
+        if (strpos($shortName, 'embedding') !== false || !$this->supportsFileSearch($shortName)) {
+            return '';
+        }
+
+        return $shortName;
     }
 
     /**

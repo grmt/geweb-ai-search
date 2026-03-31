@@ -12,6 +12,7 @@ use League\HTMLToMarkdown\HtmlConverter;
  */
 class HTML2MD {
     private const OPTION_INCLUDE_REFERENCED_DOCUMENTS = 'geweb_aisearch_include_referenced_documents';
+    private const OPTION_FRONTEND_AI_PAGE_ID = 'geweb_aisearch_frontend_ai_page_id';
     /**
      * Post meta key for storing document name in Gemini
      */
@@ -188,6 +189,13 @@ class HTML2MD {
             return;
         }
 
+        if ($this->isFrontendAiPage($postId)) {
+            update_post_meta($postId, self::META_EXCLUDE, '1');
+            $this->clearScheduledProcessing($postId);
+            $this->deleteDocumentForPost($postId, 'excluded');
+            return;
+        }
+
         $this->saveExcludeSetting($postId);
 
         // Check if post type is enabled
@@ -244,6 +252,7 @@ class HTML2MD {
             'fields' => 'ids',
             'no_found_rows' => false,
             'meta_query' => $this->getIndexableMetaQuery(),
+            'post__not_in' => $this->getNonIndexablePostIds(),
         ]);
         $total = $totalQuery->found_posts;
 
@@ -255,6 +264,7 @@ class HTML2MD {
             'paged' => $page,
             'fields' => 'ids',
             'meta_query' => $this->getIndexableMetaQuery(),
+            'post__not_in' => $this->getNonIndexablePostIds(),
         ]);
 
         $success = 0;
@@ -481,8 +491,16 @@ class HTML2MD {
      * @return string
      */
     private function getColumnHtml(int $postId): string {
-        $statusData = $this->getStatusData($postId);
         $isExcluded = $this->isExcluded($postId);
+        $hideIndexControls = $this->shouldHideIndexControls($postId, $isExcluded);
+        $statusData = $hideIndexControls
+            ? [
+                'label' => 'Excluded by plugin',
+                'color' => '#646970',
+                'last_indexed' => '',
+                'error' => '',
+            ]
+            : $this->getStatusData($postId);
         $html = '<div class="geweb-ai-index-cell" data-post-id="' . esc_attr((string) $postId) . '">';
         $html .= '<p style="margin:0; color:' . esc_attr($statusData['color']) . ';">' . esc_html($statusData['label']) . '</p>';
 
@@ -495,15 +513,45 @@ class HTML2MD {
         }
 
         $html .= '<p class="geweb-ai-index-feedback" style="display:none; margin:4px 0 0;"></p>';
-        $html .= '<p style="margin:8px 0 0;">';
-        $html .= '<button type="button" class="button button-small geweb-ai-reupload">Upload</button> ';
-        $html .= '<label style="margin-left:8px;">';
-        $html .= '<input type="checkbox" class="geweb-ai-toggle-exclude" ' . checked($isExcluded, true, false) . disabled($isExcluded, true, false) . '> Exclude';
-        $html .= '</label>';
+        if (!$hideIndexControls) {
+            $html .= '<p style="margin:8px 0 0;">';
+            $html .= '<button type="button" class="button button-small geweb-ai-reupload">Upload</button> ';
+            $html .= '<label style="margin-left:8px;">';
+            $html .= '<input type="checkbox" class="geweb-ai-toggle-exclude" ' . checked($isExcluded, true, false) . disabled($isExcluded, true, false) . '> Exclude';
+            $html .= '</label>';
+            $html .= '</p>';
+        }
 
-        $html .= '</p></div>';
+        $html .= '</div>';
 
         return $html;
+    }
+
+    /**
+     * Hide manual indexing controls for shortcode-driven utility pages that are already excluded.
+     *
+     * @param int $postId
+     * @param bool $isExcluded
+     * @return bool
+     */
+    private function shouldHideIndexControls(int $postId, bool $isExcluded): bool {
+        if (!$isExcluded) {
+            return false;
+        }
+
+        if ($postId === (int) get_option(self::OPTION_FRONTEND_AI_PAGE_ID, 0)) {
+            return true;
+        }
+
+        $post = get_post($postId);
+        if (!$post instanceof \WP_Post || $post->post_type !== 'page') {
+            return false;
+        }
+
+        $content = (string) $post->post_content;
+        return $content !== '' && has_shortcode($content, 'geweb_ai_search')
+            ? true
+            : (bool) preg_match('/\[[^\]]+\]/', $content);
     }
 
     /**
@@ -738,6 +786,12 @@ class HTML2MD {
         $post = get_post($postId);
         if (!$post) {
             return ['success' => false, 'message' => 'Post not found.'];
+        }
+
+        if ($this->isFrontendAiPage($postId)) {
+            update_post_meta($postId, self::META_EXCLUDE, '1');
+            $this->deleteDocumentForPost($postId, 'excluded');
+            return ['success' => false, 'message' => 'The AI search page is excluded from AI indexing.'];
         }
 
         if ($post->post_status !== 'publish') {
@@ -1041,6 +1095,22 @@ class HTML2MD {
                 'compare' => '!=',
             ],
         ];
+    }
+
+    /**
+     * @return array<int,int>
+     */
+    private function getNonIndexablePostIds(): array {
+        $pageId = (int) get_option(self::OPTION_FRONTEND_AI_PAGE_ID, 0);
+        return $pageId > 0 ? [$pageId] : [];
+    }
+
+    /**
+     * @param int $postId
+     * @return bool
+     */
+    private function isFrontendAiPage(int $postId): bool {
+        return $postId > 0 && $postId === (int) get_option(self::OPTION_FRONTEND_AI_PAGE_ID, 0);
     }
 
     /**

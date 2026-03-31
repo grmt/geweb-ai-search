@@ -1,0 +1,419 @@
+<?php
+namespace Geweb\AISearch;
+
+defined('ABSPATH') || exit;
+
+/**
+ * Renders the plugin admin settings page from prepared context data.
+ */
+class AdminPageRenderer {
+    /**
+     * @param array<string,mixed> $context
+     * @return void
+     */
+    public function render(array $context): void {
+        extract($context, EXTR_SKIP);
+        ?>
+        <div class="wrap">
+            <h1>Geweb AI Search</h1>
+            <h2 class="nav-tab-wrapper" style="margin-bottom:16px;">
+                <a href="<?php echo esc_url((string) $generalTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'general' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="general">General</a>
+                <a href="<?php echo esc_url((string) $promptsTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'prompts' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="prompts">Prompts</a>
+                <a href="<?php echo esc_url((string) $documentsTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'documents' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="documents">Documents</a>
+                <a href="<?php echo esc_url((string) $storesTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'stores' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="stores">Gemini Stores</a>
+                <a href="<?php echo esc_url((string) $conversationsTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'conversations' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="conversations">Conversations</a>
+            </h2>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" accept-charset="UTF-8">
+                <input type="hidden" name="action" value="geweb_save">
+                <input type="hidden" name="geweb_ai_search_referenced_document_targets" id="geweb_ai_search_referenced_document_targets" value="">
+                <?php wp_nonce_field('geweb_ai_search_save_settings'); ?>
+
+                <div class="geweb-settings-tab-panel" data-geweb-tab-panel="general" <?php echo $activeTab === 'general' ? '' : (string) $inlineStyleHidden; ?>>
+                <table class="form-table">
+                    <tr>
+                        <th><label for="geweb_ai_search_provider">AI Provider:</label></th>
+                        <td>
+                            <select name="geweb_ai_search_provider" id="geweb_ai_search_provider" disabled>
+                                <?php foreach ($availableProviders as $providerKey => $providerLabel): ?>
+                                    <option value="<?php echo esc_attr((string) $providerKey); ?>" <?php selected($selectedProvider, $providerKey); ?>>
+                                        <?php echo esc_html((string) $providerLabel); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <p class="description">Provider abstraction is now in place. ChatGPT/OpenAI support is the next step, but only Gemini is wired up right now.</p>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <th><label for="geweb_api_key">API Key:</label></th>
+                        <td>
+                            <div style="position:absolute; left:-9999px; top:auto; width:1px; height:1px; overflow:hidden;" aria-hidden="true">
+                                <input type="text" name="geweb_fake_username" autocomplete="username" tabindex="-1">
+                                <input type="password" name="geweb_fake_password" autocomplete="current-password" tabindex="-1">
+                            </div>
+                            <div style="display:flex; align-items:center; gap:8px; max-width:460px;">
+                                <input type="password" id="geweb_api_key" name="geweb_gemini_token" placeholder="<?php echo esc_attr($storeEnabled ? 'API Key is set' : 'Enter API Key'); ?>" class="regular-text" style="flex:1 1 auto;" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" data-current-key-valid="<?php echo $hasValidSavedApiKey ? '1' : '0'; ?>">
+                                <button type="button" class="button" id="geweb-toggle-api-key-visibility" aria-label="Show API key" aria-pressed="false" title="Show API key" <?php echo (string) $inlineStyleHidden; ?>>
+                                    <span class="dashicons dashicons-visibility" aria-hidden="true" style="line-height:1.5;"></span>
+                                </button>
+                            </div>
+                            <p class="description" id="geweb-api-key-replacement-warning" style="display:none; color:#996800;">
+                                You are entering a new API key. The currently saved working key will no longer be used after you save settings.
+                            </p>
+                            <p class="description">Enter a Google AI Studio Gemini API key from <a href="https://aistudio.google.com/app/api-keys" target="_blank">Google AI Studio</a>. Other Google Cloud or Maps API keys will not work here.</p>
+                            <?php if (is_array($connectionStatus) && !empty($connectionStatus['status'])): ?>
+                                <?php
+                                $apiStatus = (string) $connectionStatus['status'];
+                                $apiMessage = isset($connectionStatus['message']) ? (string) $connectionStatus['message'] : '';
+                                $apiTimestamp = !empty($connectionStatus['timestamp'])
+                                    ? wp_date(get_option('date_format') . ' ' . get_option('time_format'), intval($connectionStatus['timestamp']))
+                                    : '';
+                                if ($apiStatus === 'ok') {
+                                    $apiColor = (string) $statusColorSuccess;
+                                    $apiLabel = 'Valid';
+                                } elseif ($apiStatus === 'missing') {
+                                    $apiColor = (string) $statusColorNeutral;
+                                    $apiLabel = 'Missing';
+                                } else {
+                                    $apiColor = (string) $statusColorError;
+                                    $apiLabel = 'Invalid';
+                                }
+                                ?>
+                                <p class="description" style="color: <?php echo esc_attr($apiColor); ?>;">
+                                    <strong>API key status:</strong> <?php echo esc_html($apiLabel); ?>
+                                    <?php if ($apiTimestamp !== ''): ?>
+                                        at <?php echo esc_html($apiTimestamp); ?>
+                                    <?php endif; ?>
+                                    <?php if ($apiMessage !== ''): ?>
+                                        <br><small><?php echo esc_html($apiMessage); ?></small>
+                                    <?php endif; ?>
+                                </p>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <th><label for="geweb_ai_search_model">Select Model:</label></th>
+                        <td>
+                            <select name="geweb_ai_search_model" id="geweb_ai_search_model">
+                                <?php foreach ($models as $model): ?>
+                                    <option value="<?php echo esc_attr((string) $model); ?>" <?php selected($selectedModel, $model); ?>>
+                                        <?php echo esc_html((string) $model); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <p class="description" id="geweb-ai-model-refresh-status" <?php echo (string) $inlineStyleHidden; ?>></p>
+                            <p class="description">Current model: <code><?php echo esc_html((string) $selectedModel); ?></code></p>
+                            <p class="description">Default model: <code><?php echo esc_html((string) $defaultModel); ?></code></p>
+                            <p class="description">The list above is fetched from Gemini when possible and falls back to the bundled defaults if the API is unavailable.</p>
+                            <?php if (!empty($modelStatuses)): ?>
+                                <div style="margin-top:12px;">
+                                    <strong>Model status</strong>
+                                    <ul style="margin:8px 0 0 18px;">
+                                        <?php foreach ($models as $model): ?>
+                                            <?php
+                                            $entry = $modelStatuses[$model] ?? null;
+                                            if (!is_array($entry) || empty($entry['status'])) {
+                                                continue;
+                                            }
+
+                                            $status = $entry['status'] === 'failed' ? 'Failed' : 'OK';
+                                            $color = $entry['status'] === 'failed' ? (string) $statusColorError : (string) $statusColorSuccess;
+                                            $timestamp = !empty($entry['timestamp'])
+                                                ? wp_date(get_option('date_format') . ' ' . get_option('time_format'), intval($entry['timestamp']))
+                                                : '';
+                                            $message = isset($entry['message']) ? (string) $entry['message'] : '';
+                                            ?>
+                                            <li style="color:<?php echo esc_attr($color); ?>;">
+                                                <code><?php echo esc_html((string) $model); ?></code>
+                                                <?php echo esc_html($status); ?>
+                                                <?php if ($timestamp !== ''): ?>
+                                                    at <?php echo esc_html($timestamp); ?>
+                                                <?php endif; ?>
+                                                <?php if ($message !== ''): ?>
+                                                    <br><small style="color:#50575e;"><?php echo esc_html($message); ?></small>
+                                                <?php endif; ?>
+                                            </li>
+                                        <?php endforeach; ?>
+                                    </ul>
+                                </div>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <th><label for="geweb_ai_search_frontend_ai_interface">AI Search Interface:</label></th>
+                        <td>
+                            <select name="geweb_ai_search_frontend_ai_interface" id="geweb_ai_search_frontend_ai_interface">
+                                <option value="modal" <?php selected($frontendAiInterface, 'modal'); ?>>Modal chat</option>
+                                <option value="fullscreen" <?php selected($frontendAiInterface, 'fullscreen'); ?>>Full-screen workspace</option>
+                            </select>
+                            <p class="description">Choose how the frontend AI search opens. Modal chat keeps a compact conversation window. Full-screen workspace shows conversation history on the left, the chat in the middle, and sources on the right.</p>
+                            <p class="description">Preferred page-based setup: use the automatically created AI Search page or place the shortcode <code>[geweb_ai_search]</code> on a normal WordPress page that should own the menu and layout.</p>
+                            <p class="description">Supported shortcode attributes: <code>title</code>, <code>search_results="show|hide"</code>, <code>search_results_height="0-100"</code>, <code>manage_link="show|hide"</code>.</p>
+                            <?php if ($frontendAiPageId > 0 && $frontendAiPageUrl !== ''): ?>
+                                <p class="description">Current AI Search page: <a href="<?php echo esc_url((string) $frontendAiPageUrl); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html((string) ($frontendAiPageTitle ?: 'AI Search')); ?></a></p>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <th><label for="geweb_ai_search_conversation_trim_message_limit">Compaction:</label></th>
+                        <td>
+                            <p style="margin-top:0;">
+                                <label for="geweb_ai_search_conversation_trim_message_limit"><strong>Start trimming request context after this many messages</strong></label><br>
+                                <input type="number" id="geweb_ai_search_conversation_trim_message_limit" name="geweb_ai_search_conversation_trim_message_limit" min="2" step="1" value="<?php echo esc_attr((string) $conversationTrimMessageLimit); ?>" class="small-text">
+                            </p>
+                            <p style="margin-top:12px;">
+                                <label for="geweb_ai_search_conversation_trim_char_limit"><strong>Maximum request-context size in characters</strong></label><br>
+                                <input type="number" id="geweb_ai_search_conversation_trim_char_limit" name="geweb_ai_search_conversation_trim_char_limit" min="500" step="100" value="<?php echo esc_attr((string) $conversationTrimCharLimit); ?>" class="small-text">
+                            </p>
+                            <p style="margin-top:12px;">
+                                <label for="geweb_ai_search_local_conversation_archive_limit"><strong>Saved conversations to show in the chat sidebar</strong></label><br>
+                                <input type="number" id="geweb_ai_search_local_conversation_archive_limit" name="geweb_ai_search_local_conversation_archive_limit" min="1" step="1" value="<?php echo esc_attr((string) $localConversationArchiveLimit); ?>" class="small-text">
+                            </p>
+                            <p class="description">Number of saved conversations to show in the frontend chat sidebar at once. Full conversation history is stored in WordPress, while only a shorter trimmed context is sent to the AI model.</p>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <th>Select Post Types for AI Search:</th>
+                        <td>
+                            <?php foreach ($allPostTypes as $postType): ?>
+                            <p>
+                                <label>
+                                    <input type="checkbox" name="geweb_ai_search_post_types[]" value="<?php echo esc_attr((string) $postType->name); ?>" <?php checked(in_array($postType->name, $postTypes), true); ?>>
+                                    <?php echo esc_html((string) $postType->label); ?>
+                                </label>
+                            </p>
+                            <?php endforeach; ?>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <th><label for="geweb_ai_search_include_referenced_documents">Referenced Documents:</label></th>
+                        <td>
+                            <label for="geweb_ai_search_include_referenced_documents">
+                                <input type="checkbox" id="geweb_ai_search_include_referenced_documents" name="geweb_ai_search_include_referenced_documents" value="1" <?php checked($includeReferencedDocuments); ?>>
+                                Upload referenced local documents together with indexed pages
+                            </label>
+                            <p class="description">When enabled, files linked from post content in the WordPress uploads folder are uploaded to the Gemini store as separate documents. When disabled, linked files are detected but not uploaded.</p>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <th><label for="geweb_ai_search_preserve_data_on_uninstall">Uninstall Cleanup:</label></th>
+                        <td>
+                            <label for="geweb_ai_search_preserve_data_on_uninstall">
+                                <input type="checkbox" id="geweb_ai_search_preserve_data_on_uninstall" name="geweb_ai_search_preserve_data_on_uninstall" value="1" <?php checked($preserveDataOnUninstall); ?>>
+                                Keep plugin data when uninstalling
+                            </label>
+                            <p class="description">When enabled, uninstalling the plugin keeps its settings, status metadata, and indexed document tables in the WordPress database. The stored API key and encryption key are always removed on uninstall.</p>
+                        </td>
+                    </tr>
+
+                    <?php if ($storeEnabled): ?>
+                        <tr>
+                            <th>File Store Created:</th>
+                            <td>
+                                <label for="geweb_ai_search_create_store">
+                                    <input type="checkbox" id="geweb_ai_search_create_store" name="geweb_ai_search_create_store" value="1" />
+                                    Create a New Store
+                                </label>
+                                <p class="description">Warning: Recreating the store will delete all indexed documents. You'll need to regenerate the library.</p>
+                            </td>
+                        </tr>
+                        <?php if (!empty($postTypes)): ?>
+                            <?php HTML2MD::renderButton(); ?>
+                        <?php endif; ?>
+                    <?php endif; ?>
+                </table>
+                </div>
+
+                <div class="geweb-settings-tab-panel" data-geweb-tab-panel="prompts" <?php echo $activeTab === 'prompts' ? '' : (string) $inlineStyleHidden; ?>>
+                <table class="form-table">
+                    <tr>
+                        <th><label for="geweb_ai_search_custom_prompt">AI Prompt:</label></th>
+                        <td>
+                            <p class="description" style="margin-top:0;">
+                                <strong>Currently using:</strong>
+                                <?php echo esc_html((string) $currentPromptLabel); ?>
+                            </p>
+                            <p style="margin-top:0;">
+                                <label for="geweb_ai_search_custom_prompt_name"><strong>Prompt name</strong></label><br>
+                                <input type="text" id="geweb_ai_search_custom_prompt_name" name="geweb_ai_search_custom_prompt_name" value="<?php echo esc_attr((string) $customPromptName); ?>" class="regular-text" placeholder="Optional name for this prompt version">
+                            </p>
+                            <textarea id="geweb_ai_search_custom_prompt" name="geweb_ai_search_custom_prompt" rows="10" class="large-text code" placeholder="Enter the AI prompt used for Gemini requests."><?php echo esc_textarea((string) $customPrompt); ?></textarea>
+                            <textarea id="geweb_ai_search_default_prompt" <?php echo (string) $inlineStyleHidden; ?> readonly><?php echo esc_textarea((string) $defaultPrompt); ?></textarea>
+                            <p>
+                                <button type="button" class="button" id="geweb-ai-restore-default-prompt" data-default-prompt="<?php echo esc_attr(base64_encode((string) $defaultPrompt)); ?>">Restore default prompt</button>
+                            </p>
+                            <p class="description">If this field is empty, the built-in default prompt is used. This is the generic base prompt.</p>
+                            <p class="description">Below you can optionally add a model-specific prompt to this generic prompt, or explicitly override it for a specific model.</p>
+                            <?php if (!empty($models)): ?>
+                                <p style="margin-top:12px; max-width:360px;">
+                                    <label for="geweb_ai_search_prompt_model_jump"><strong>Jump to model prompt</strong></label><br>
+                                    <select id="geweb_ai_search_prompt_model_jump" class="regular-text">
+                                        <option value="">Select a model...</option>
+                                        <?php foreach ($models as $model): ?>
+                                            <option value="<?php echo esc_attr((string) $model); ?>" <?php selected($model, $selectedModel); ?>>
+                                                <?php echo esc_html((string) $model); ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </p>
+                                <div style="margin-top:16px; display:flex; flex-direction:column; gap:12px; max-width:900px;">
+                                    <?php foreach ($modelPromptRows as $row): ?>
+                                        <details data-geweb-model-prompt-details="<?php echo esc_attr((string) $row['model']); ?>" style="border:1px solid #dcdcde; border-radius:6px; padding:10px 12px;" <?php echo !empty($row['open']) ? 'open' : ''; ?>>
+                                            <summary style="cursor:pointer; font-weight:600;">
+                                                <?php echo esc_html((string) $row['model']); ?>
+                                                <?php if (!empty($row['is_current'])): ?>
+                                                    <span style="color:#646970; font-weight:400;">(current default model)</span>
+                                                <?php endif; ?>
+                                            </summary>
+                                            <div style="margin-top:12px;">
+                                                <input type="hidden" name="geweb_ai_search_model_prompt_models[]" value="<?php echo esc_attr((string) $row['model']); ?>">
+                                                <p style="margin-top:0;">
+                                                    <label for="geweb_ai_search_model_prompt_name_<?php echo esc_attr((string) $row['index']); ?>"><strong>Prompt name</strong></label><br>
+                                                    <input type="text" id="geweb_ai_search_model_prompt_name_<?php echo esc_attr((string) $row['index']); ?>" name="geweb_ai_search_model_prompt_names[]" value="<?php echo esc_attr((string) $row['name']); ?>" data-geweb-model-prompt-name="<?php echo esc_attr((string) $row['model']); ?>" class="regular-text" placeholder="Optional name for the prompt override used with <?php echo esc_attr((string) $row['model']); ?>">
+                                                </p>
+                                                <p style="margin-top:12px;">
+                                                    <span><strong>How this model-specific prompt should be applied</strong></span><br>
+                                                    <label style="margin-right:16px;">
+                                                        <input type="radio" name="geweb_ai_search_model_prompt_modes[<?php echo esc_attr((string) $row['index']); ?>]" value="append" data-geweb-model-prompt-mode="<?php echo esc_attr((string) $row['model']); ?>" <?php checked($row['mode'], 'append'); ?>>
+                                                        Add to generic prompt
+                                                    </label>
+                                                    <label>
+                                                        <input type="radio" name="geweb_ai_search_model_prompt_modes[<?php echo esc_attr((string) $row['index']); ?>]" value="override" data-geweb-model-prompt-mode="<?php echo esc_attr((string) $row['model']); ?>" <?php checked($row['mode'], 'override'); ?>>
+                                                        Override generic prompt
+                                                    </label>
+                                                </p>
+                                                <textarea id="geweb_ai_search_model_prompt_<?php echo esc_attr((string) $row['index']); ?>" name="geweb_ai_search_model_prompts[]" rows="8" data-geweb-model-prompt="<?php echo esc_attr((string) $row['model']); ?>" class="large-text code" placeholder="Leave empty to use the general prompt for <?php echo esc_attr((string) $row['model']); ?>."><?php echo esc_textarea((string) $row['prompt']); ?></textarea>
+                                                <p class="description">Built-in prompt for this model starts with:</p>
+                                                <textarea readonly rows="4" class="large-text code" style="opacity:.75;"><?php echo esc_textarea((string) $row['default_prompt']); ?></textarea>
+                                            </div>
+                                        </details>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <th><label for="geweb_ai_search_prompt_history_limit">Prompt History:</label></th>
+                        <td>
+                            <input type="number" id="geweb_ai_search_prompt_history_limit" name="geweb_ai_search_prompt_history_limit" min="1" step="1" value="<?php echo esc_attr((string) $promptHistoryLimit); ?>" class="small-text">
+                            <p class="description">Number of prompt versions to keep per scope. The generic prompt keeps its own history, and each model-specific prompt keeps its own history too.</p>
+                            <?php if (!empty($promptHistoryItems)): ?>
+                                <div id="geweb-ai-prompt-history-list" style="margin-top: 12px; display: flex; flex-direction: column; gap: 8px; max-width: 800px;">
+                                    <?php foreach ($promptHistoryItems as $item): ?>
+                                        <div class="geweb-ai-prompt-history-item" data-entry-id="<?php echo esc_attr((string) $item['entry_id']); ?>" data-timestamp="<?php echo esc_attr((string) $item['saved_at']); ?>" data-prompt="<?php echo esc_attr((string) $item['prompt_b64']); ?>" data-is-default="<?php echo !empty($item['is_default']) ? '1' : '0'; ?>" data-can-rename="<?php echo !empty($item['can_rename']) ? '1' : '0'; ?>" data-scope="<?php echo esc_attr((string) $item['scope']); ?>" data-model="<?php echo esc_attr((string) $item['model']); ?>" data-mode="<?php echo esc_attr((string) $item['mode']); ?>" style="padding: 8px; border: 1px solid #dcdcde; border-radius: 4px; cursor: pointer;">
+                                            <div style="display: flex; align-items: center; justify-content: space-between;">
+                                                <div style="flex-grow: 1; margin-right: 10px;">
+                                                    <div style="font-size:12px; color:#646970; margin-bottom:4px;"><?php echo esc_html((string) $item['scope_label']); ?></div>
+                                                    <span class="geweb-ai-prompt-history-name-label"><?php echo esc_html((string) $item['name']); ?></span>
+                                                    <?php if (!empty($item['can_rename'])): ?>
+                                                        <input type="text" name="geweb_ai_search_prompt_history_names[<?php echo esc_attr((string) $item['entry_id']); ?>]" value="<?php echo esc_attr((string) $item['name']); ?>" class="regular-text geweb-ai-prompt-history-name-input" style="display:none; width:100%;" />
+                                                    <?php endif; ?>
+                                                </div>
+                                                <span style="color: #646970; white-space: nowrap; margin-right: 10px;"><?php echo esc_html((string) $item['saved_at_label']); ?></span>
+                                                <?php if (!empty($item['can_rename'])): ?>
+                                                    <button type="button" class="button geweb-ai-rename-history-prompt">Rename</button>
+                                                <?php endif; ?>
+                                                <button type="button" class="button geweb-ai-use-history-prompt">Use</button>
+                                                <button type="button" class="button-link button-link-delete geweb-ai-delete-history-prompt" style="margin-left: 5px;" title="Delete"><span class="dashicons dashicons-trash"></span></button>
+                                            </div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                                <button type="button" class="button" id="geweb-ai-clear-history" style="margin-top: 12px;">Clear All History</button>
+                                <div style="margin-top:12px; max-width: 800px;">
+                                    <p class="description" style="margin:0 0 8px 0;">Select a saved prompt version to compare it with the current AI Prompt. The newest previous version is shown automatically.</p>
+                                    <pre id="geweb-ai-prompt-history-diff" style="margin-top:8px; padding:12px; background:#fff; border:1px solid #dcdcde; min-height:20em; max-height:none; overflow:auto; white-space:pre-wrap;">Select a saved prompt version to compare it with the current AI Prompt.</pre>
+                                </div>
+                            <?php else: ?>
+                                <p class="description">No previous prompts saved yet.</p>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+                </table>
+                </div>
+                <p class="submit">
+                    <input type="submit" id="geweb-save-settings" class="button-primary" value="Save Settings" disabled>
+                </p>
+            </form>
+
+            <div class="geweb-settings-tab-panel" data-geweb-tab-panel="documents" <?php echo $activeTab === 'documents' ? '' : (string) $inlineStyleHidden; ?>>
+                <p class="description" style="margin-top:0; max-width: 900px;">
+                    This table shows local files found in managed content, whether they have been uploaded to the Gemini store, and any uploaded documents that are no longer referenced.
+                </p>
+                <?php if (!empty($documentsApiStatusLabel)): ?>
+                    <p class="description" style="color: <?php echo esc_attr((string) $documentsApiStatusColor); ?>;">
+                        <strong>API key status:</strong> <?php echo esc_html((string) $documentsApiStatusLabel); ?>
+                        <?php if ($documentsApiStatusMessage !== ''): ?>
+                            <br><small><?php echo esc_html((string) $documentsApiStatusMessage); ?></small>
+                        <?php endif; ?>
+                    </p>
+                <?php endif; ?>
+                <p>
+                    <button type="button" class="button" id="geweb-refresh-referenced-documents" <?php disabled(!$hasReferencedDocumentCache); ?>>Refresh List</button>
+                    <span id="geweb-referenced-documents-status" style="margin-left:10px; color:#646970;">
+                        <?php if ($referencedCacheTime > 0): ?>
+                            Showing cached list. Last refreshed: <?php echo esc_html((string) $referencedCacheLabel); ?>
+                        <?php else: ?>
+                            Loading referenced documents...
+                        <?php endif; ?>
+                    </span>
+                </p>
+                <?php if (!empty($referencedDebug)): ?>
+                    <p class="description">
+                        Scanned posts: <?php echo esc_html((string) ($referencedDebug['managed_posts'] ?? 0)); ?>,
+                        posts with document links: <?php echo esc_html((string) ($referencedDebug['posts_with_document_links'] ?? 0)); ?>,
+                        accepted document references: <?php echo esc_html((string) ($referencedDebug['accepted_documents'] ?? 0)); ?>
+                        <?php if (!empty($referencedDebug['using_all_public_post_types'])): ?>
+                            <br><small>No post types are configured yet, so this overview is scanning all public post types.</small>
+                        <?php endif; ?>
+                    </p>
+                <?php endif; ?>
+                <div id="geweb-referenced-documents-container" data-needs-refresh="<?php echo $hasReferencedDocumentCache ? '0' : '1'; ?>" style="margin-top:16px;">
+                    <?php echo $referencedDocumentsHtml; ?>
+                </div>
+            </div>
+
+            <div class="geweb-settings-tab-panel" data-geweb-tab-panel="stores" <?php echo $activeTab === 'stores' ? '' : (string) $inlineStyleHidden; ?>>
+                <p class="description" style="margin-top:0; max-width: 900px;">
+                    This table shows all Gemini File Search Stores visible to the configured API key, marks the one used by this plugin, and helps spot likely orphaned stores. Select a store to inspect its uploaded items below.
+                </p>
+                <?php if (!$isGeminiProvider): ?>
+                    <p>This tab is only available when the Gemini provider is active.</p>
+                <?php else: ?>
+                    <p>
+                        <button type="button" class="button" id="geweb-refresh-gemini-stores" <?php disabled(!$providerHasStoreCache); ?>>Refresh List</button>
+                        <span id="geweb-gemini-stores-status" style="margin-left:10px; color:#646970;">
+                            <?php if ($providerStoreCacheTime > 0): ?>
+                                Last refreshed: <?php echo esc_html((string) $providerStoreCacheLabel); ?>
+                            <?php else: ?>
+                                Loading Gemini stores...
+                            <?php endif; ?>
+                        </span>
+                    </p>
+                    <p id="geweb-gemini-stores-error" class="description" style="color:<?php echo esc_attr((string) $statusColorError); ?>;<?php echo $providerStoreError !== '' ? '' : ' display:none;'; ?>"><?php echo esc_html((string) $providerStoreError); ?></p>
+                    <div id="geweb-gemini-stores-container" data-needs-refresh="<?php echo $providerHasStoreCache ? '0' : '1'; ?>" style="margin-top:16px;">
+                        <?php echo $geminiStoresHtml; ?>
+                    </div>
+                    <?php echo $geminiStoreDocumentsPanelHtml; ?>
+                <?php endif; ?>
+            </div>
+
+            <div class="geweb-settings-tab-panel" data-geweb-tab-panel="conversations" <?php echo $activeTab === 'conversations' ? '' : (string) $inlineStyleHidden; ?>>
+                <p class="description" style="margin-top:0; max-width: 900px;">
+                    Saved AI conversations are grouped by browser-side conversation ID and show the latest summary, last usage time, total token usage, and an estimated Gemini text-generation cost when usage metadata is available. Entries appear after a successful AI response, not only when the dialog is closed.
+                </p>
+                <div style="margin-top:16px;">
+                    <?php echo $conversationsHtml; ?>
+                </div>
+            </div>
+        </div>
+        <?php
+    }
+}

@@ -100,5 +100,5 @@ interface AIProviderInterface {
      * @param array<int,array<string,mixed>> $messages
      * @return array<string,mixed>
      */
-    public function search(array $messages, ?string $model = null): array;
+    public function search(array $messages, ?string $model = null, ?string $promptOverride = null): array;
 }

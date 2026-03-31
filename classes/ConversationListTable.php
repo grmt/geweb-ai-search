@@ -123,8 +123,10 @@ class ConversationListTable extends \WP_List_Table {
 
         return sprintf(
             '<div class="geweb-conversation-summary-cell" data-conversation-id="%s" data-current-summary="%s">' .
-                '<div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">' .
+                '<div>' .
                     '<strong class="geweb-conversation-summary-label">%s</strong>' .
+                '</div>' .
+                '<div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:6px;">' .
                     '<button type="button" class="button-link geweb-edit-conversation-trigger">Rename</button>' .
                     '<button type="button" class="button-link geweb-delete-conversation-trigger">Delete</button>' .
                     '%s' .
