@@ -157,8 +157,8 @@ class AdminSettingsManager {
             $normalizedTargets[sanitize_text_field($fileHash)] = (bool) $target;
         }
 
-        $documentStore = new DocumentStore();
-        $documentStore->applyReferencedDocumentSelectionTargets($normalizedTargets);
+        $documentManager = new ReferencedDocumentManager();
+        $documentManager->applyReferencedDocumentSelectionTargets($normalizedTargets);
     }
 
     /**
@@ -493,9 +493,9 @@ class AdminSettingsManager {
      * @return void
      */
     private function clearLocalIndexTracking(): void {
-        $documentStore = new DocumentStore();
-        $documentStore->clearAllTrackedDocuments();
-        HTML2MD::clearAllIndexedState();
+        $documentManager = new ReferencedDocumentManager();
+        $documentManager->clearAllTrackedDocuments();
+        PostIndexManager::clearAllIndexedState();
     }
 
     /**

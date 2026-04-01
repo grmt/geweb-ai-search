@@ -11,10 +11,10 @@ if (get_option('geweb_aisearch_preserve_data_on_uninstall', '0') === '1') {
     return;
 }
 
-$encryptionFile = __DIR__ . '/classes/Encryption.php';
-$providerInterfaceFile = __DIR__ . '/classes/AIProviderInterface.php';
-$providerFactoryFile = __DIR__ . '/classes/ProviderFactory.php';
-$geminiFile = __DIR__ . '/classes/Gemini.php';
+$encryptionFile = __DIR__ . '/classes/Core/Encryption.php';
+$providerInterfaceFile = __DIR__ . '/classes/Providers/AIProviderInterface.php';
+$providerFactoryFile = __DIR__ . '/classes/Providers/ProviderFactory.php';
+$geminiFile = __DIR__ . '/classes/Providers/Gemini.php';
 if (file_exists($encryptionFile)) {
     require_once $encryptionFile;
 }

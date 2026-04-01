@@ -36,6 +36,7 @@ require_once GEWEB_AI_SEARCH_PATH . 'libs/md/vendor/autoload.php';
 spl_autoload_register(function ($class) {
     $prefix = 'Geweb\\AISearch\\';
     $baseDir = GEWEB_AI_SEARCH_PATH . 'classes/';
+    static $fallbackMap = null;
 
     $len = strlen($prefix);
     if (strncmp($prefix, $class, $len) !== 0) {
@@ -46,16 +47,28 @@ spl_autoload_register(function ($class) {
     $file = $baseDir . str_replace('\\', '/', $relativeClass) . '.php';
     if (file_exists($file)) {
         require_once $file;
+        return;
+    }
+
+    if ($fallbackMap === null) {
+        $fallbackMap = [];
+        foreach (glob($baseDir . '*/*.php') ?: [] as $nestedFile) {
+            $fallbackMap[basename($nestedFile, '.php')] = $nestedFile;
+        }
+    }
+
+    if (isset($fallbackMap[$relativeClass]) && file_exists($fallbackMap[$relativeClass])) {
+        require_once $fallbackMap[$relativeClass];
     }
 });
 
 // Initialize plugin
 add_action('plugins_loaded', function () {
-    static $html2md = null;
+    static $postIndexManager = null;
     static $plugin = null;
 
-    if ($html2md === null) {
-        $html2md = new \Geweb\AISearch\HTML2MD();
+    if ($postIndexManager === null) {
+        $postIndexManager = new \Geweb\AISearch\PostIndexManager();
     }
 
     if ($plugin === null) {
@@ -71,21 +84,12 @@ register_activation_hook(__FILE__, function () {
         wp_die('Geweb AI Search requires PHP 7.2 or higher (for Sodium support). Your current version is ' . PHP_VERSION);
     }
 
-    $documentStoreFile = GEWEB_AI_SEARCH_PATH . 'classes/DocumentStore.php';
-    if (!class_exists('\\Geweb\\AISearch\\DocumentStore') && file_exists($documentStoreFile)) {
-        require_once $documentStoreFile;
-    }
-
     if (!class_exists('\\Geweb\\AISearch\\DocumentStore')) {
         wp_die('Geweb AI Search could not load the DocumentStore class during activation.');
     }
 
     // Create custom database tables
     \Geweb\AISearch\DocumentStore::install();
-
-    if (!class_exists('\\Geweb\\AISearch\\WP')) {
-        require_once GEWEB_AI_SEARCH_PATH . 'classes/WP.php';
-    }
 
     \Geweb\AISearch\WP::ensureFrontendAiPageExists();
     \Geweb\AISearch\WP::registerFrontendAiRewrite();

@@ -224,7 +224,7 @@ class AdminPageRenderer {
                             </td>
                         </tr>
                         <?php if (!empty($postTypes)): ?>
-                            <?php HTML2MD::renderButton(); ?>
+                            <?php PostIndexManager::renderButton(); ?>
                         <?php endif; ?>
                     <?php endif; ?>
                 </table>
@@ -329,7 +329,7 @@ class AdminPageRenderer {
                                 <button type="button" class="button" id="geweb-ai-clear-history" style="margin-top: 12px;">Clear All History</button>
                                 <div style="margin-top:12px; max-width: 800px;">
                                     <p class="description" style="margin:0 0 8px 0;">Select a saved prompt version to compare it with the current AI Prompt. The newest previous version is shown automatically.</p>
-                                    <pre id="geweb-ai-prompt-history-diff" style="margin-top:8px; padding:12px; background:#fff; border:1px solid #dcdcde; min-height:20em; max-height:none; overflow:auto; white-space:pre-wrap;">Select a saved prompt version to compare it with the current AI Prompt.</pre>
+                                    <div id="geweb-ai-prompt-history-diff" style="margin-top:8px; padding:12px; background:#fff; border:1px solid #dcdcde; min-height:20em; max-height:none; overflow:auto;">Select a saved prompt version to compare it with the current AI Prompt.</div>
                                 </div>
                             <?php else: ?>
                                 <p class="description">No previous prompts saved yet.</p>
