@@ -1,19 +1,43 @@
 (function($) {
     let nonceRequest = null;
+    const MANAGED_TITLE_URL_REGEX_SUFFIX = String.raw`[^\n]*?(https?:\/\/[^\s<>"']+)`;
+    const TRAILING_SLASH_REGEX = /\/?$/;
+
+    function getAiSearchConfig() {
+        return globalThis.geweb_aisearch ?? {};
+    }
+
+    function getI18nValue(key) {
+        return getAiSearchConfig().i18n?.[key];
+    }
+
+    function normalizeObject(value) {
+        return value && typeof value === 'object' ? value : {};
+    }
+
+    function safeParseUrl(url, base) {
+        try {
+            return new URL(url, base);
+        } catch (error) {
+            console.debug('URL parsing failed.', error);
+            return null;
+        }
+    }
 
     function t(key, fallback) {
-        if (window.geweb_aisearch && geweb_aisearch.i18n && geweb_aisearch.i18n[key]) {
-            return geweb_aisearch.i18n[key];
+        const translated = getI18nValue(key);
+        if (translated) {
+            return translated;
         }
 
         return fallback;
     }
 
     function fetchSearchNonce() {
-        return $.post(geweb_aisearch.ajax_url, {
+        return $.post(getAiSearchConfig().ajax_url, {
             action: 'geweb_get_nonce'
         }).then(function(response) {
-            if (response && response.success && response.data && response.data.nonce) {
+            if (response?.data?.nonce && response?.success) {
                 geweb_aisearch.search_nonce = response.data.nonce;
                 return geweb_aisearch.search_nonce;
             }
@@ -36,9 +60,9 @@
         return nonceRequest;
     }
 
-    window.GewebAISearchSourceMethods = {
+    globalThis.GewebAISearchSourceMethods = {
         buildResponseDetails(meta) {
-            const normalizedMeta = meta && typeof meta === 'object' ? meta : {};
+            const normalizedMeta = normalizeObject(meta);
             if (!Object.keys(normalizedMeta).length) {
                 return null;
             }
@@ -94,9 +118,9 @@
 
         buildCompactResponseMetaEntries(meta) {
             const entries = [];
-            const usage = meta.usage && typeof meta.usage === 'object' ? meta.usage : {};
-            const candidate = meta.candidate && typeof meta.candidate === 'object' ? meta.candidate : {};
-            const prompt = meta.prompt && typeof meta.prompt === 'object' ? meta.prompt : {};
+            const usage = normalizeObject(meta.usage);
+            const candidate = normalizeObject(meta.candidate);
+            const prompt = normalizeObject(meta.prompt);
             const grounding = this.getGroundingMetadata(meta);
 
             const pushEntry = (label, value) => {
@@ -118,7 +142,7 @@
             if (usage.total_tokens) {
                 pushEntry('Tokens', `${usage.total_tokens}`);
             }
-            if (typeof meta.estimated_cost_usd !== 'undefined') {
+            if (meta.estimated_cost_usd !== undefined) {
                 pushEntry('Estimated cost', `$${Number(meta.estimated_cost_usd).toFixed(6)}`);
             }
 
@@ -127,7 +151,7 @@
                 pushEntry('Grounding chunks', `${chunks.length}`);
             }
 
-            const supports = Array.isArray(grounding && grounding.groundingSupports) ? grounding.groundingSupports : [];
+            const supports = Array.isArray(grounding?.groundingSupports) ? grounding.groundingSupports : [];
             if (supports.length) {
                 pushEntry('Grounding supports', `${supports.length}`);
             }
@@ -136,18 +160,16 @@
         },
 
         getGroundingMetadata(meta) {
-            const candidate = meta && meta.candidate && typeof meta.candidate === 'object' ? meta.candidate : {};
+            const candidate = normalizeObject(meta?.candidate);
             return candidate.grounding_metadata && typeof candidate.grounding_metadata === 'object'
                 ? candidate.grounding_metadata
                 : {};
         },
 
         getGroundingChunks(grounding) {
-            const chunks = Array.isArray(grounding && grounding.groundingChunks) ? grounding.groundingChunks : [];
+            const chunks = Array.isArray(grounding?.groundingChunks) ? grounding.groundingChunks : [];
             return chunks.map((chunk) => {
-                const context = chunk && chunk.retrievedContext && typeof chunk.retrievedContext === 'object'
-                    ? chunk.retrievedContext
-                    : {};
+                const context = normalizeObject(chunk?.retrievedContext);
                 return {
                     title: String(context.title || ''),
                     text: this.formatMetaValue(String(context.text || '')),
@@ -163,7 +185,7 @@
             }
 
             const grounding = this.getGroundingMetadata(meta);
-            const supports = Array.isArray(grounding && grounding.groundingSupports) ? grounding.groundingSupports : [];
+            const supports = Array.isArray(grounding?.groundingSupports) ? grounding.groundingSupports : [];
             if (!supports.length) {
                 return html;
             }
@@ -177,10 +199,10 @@
 
             const blockFootnotes = new Map();
             supports.forEach((support) => {
-                const indices = Array.isArray(support && support.groundingChunkIndices)
+                const indices = Array.isArray(support?.groundingChunkIndices)
                     ? support.groundingChunkIndices.filter((value) => Number.isInteger(value) && value >= 0)
                     : [];
-                const segmentText = String(support && support.segment && support.segment.text || '').replace(/\s+/g, ' ').trim();
+                const segmentText = String(support?.segment?.text || '').replaceAll(/\s+/g, ' ').trim();
                 if (!indices.length || !segmentText) {
                     return;
                 }
@@ -193,7 +215,7 @@
                 const existing = blockFootnotes.get(matchedBlock) || [];
                 indices.forEach((index) => {
                     const localFootnote = index + 1;
-                    const footnote = Number(sourceFootnoteMap && sourceFootnoteMap[localFootnote]) || localFootnote;
+                    const footnote = Number(sourceFootnoteMap?.[localFootnote]) || localFootnote;
                     if (!existing.includes(footnote)) {
                         existing.push(footnote);
                     }
@@ -215,7 +237,7 @@
         },
 
         findBestGroundingBlockMatch(blocks, segmentText) {
-            const normalizedSegment = String(segmentText || '').replace(/\s+/g, ' ').trim().toLowerCase();
+            const normalizedSegment = String(segmentText || '').replaceAll(/\s+/g, ' ').trim().toLowerCase();
             if (!normalizedSegment) {
                 return null;
             }
@@ -223,7 +245,7 @@
             let bestBlock = null;
             let bestScore = 0;
             blocks.forEach((block) => {
-                const blockText = String(block.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                const blockText = String(block.textContent || '').replaceAll(/\s+/g, ' ').trim().toLowerCase();
                 if (!blockText) {
                     return;
                 }
@@ -258,7 +280,7 @@
                     return;
                 }
 
-                if (value === null || typeof value === 'undefined') {
+                if (value === null || value === undefined) {
                     return;
                 }
 
@@ -271,7 +293,7 @@
                     if (simpleValues) {
                         entries.push({
                             label: this.formatMetaLabel(path),
-                            value: value.map((item) => String(item)).join(', ')
+                            value: value.map(String).join(', ')
                         });
                         return;
                     }
@@ -305,10 +327,10 @@
 
         formatMetaLabel(path) {
             return String(path || 'value')
-                .replace(/_/g, ' ')
-                .replace(/\s+/g, ' ')
+                .replaceAll('_', ' ')
+                .replaceAll(/\s+/g, ' ')
                 .trim()
-                .replace(/\b\w/g, (char) => char.toUpperCase());
+                .replaceAll(/\b\w/g, (char) => char.toUpperCase());
         },
 
         formatMetaValue(value) {
@@ -331,7 +353,7 @@
                 return `title:${title}`;
             }
 
-            const snippet = String(source.snippet || '').replace(/\s+/g, ' ').trim().toLowerCase();
+            const snippet = String(source.snippet || '').replaceAll(/\s+/g, ' ').trim().toLowerCase();
             return snippet ? `snippet:${snippet}` : '';
         },
 
@@ -341,7 +363,7 @@
             const history = Array.isArray(this.conversationHistory) ? this.conversationHistory : [];
 
             history.forEach((item, historyIndex) => {
-                if (!item || item.role !== 'model') {
+                if (item?.role !== 'model') {
                     return;
                 }
 
@@ -466,7 +488,7 @@
             });
 
             this.$sourcesBox.append($list);
-            void this.hydrateResolvedSourceReferences($list, normalizedSources);
+            this.hydrateResolvedSourceReferences($list, normalizedSources);
         },
 
         async hydrateResolvedSourceReferences($list, sources) {
@@ -476,7 +498,7 @@
 
             const uncachedUrls = [];
             sources.forEach((source) => {
-                const url = String(source && source.url || '').trim();
+                const url = String(source?.url || '').trim();
                 if (url && !this.sourceReferenceCache[url]) {
                     uncachedUrls.push(url);
                 }
@@ -495,9 +517,7 @@
                         }
                     });
 
-                    const references = response && response.success && response.data && response.data.references
-                        ? response.data.references
-                        : {};
+                    const references = response?.success ? response?.data?.references ?? {} : {};
                     Object.keys(references).forEach((url) => {
                         const reference = references[url];
                         if (reference && typeof reference === 'object') {
@@ -505,7 +525,7 @@
                         }
                     });
                 } catch (error) {
-                    // Keep the initial labels if resolving fails.
+                    console.debug('Source reference resolution failed.', error);
                 }
             }
 
@@ -546,8 +566,8 @@
 
             const normalized = Array.isArray(sources) && sources.length
                 ? sources.reduce((accumulator, source) => {
-                    const title = source && source.title ? String(source.title).trim() : '';
-                    const url = source && source.url ? String(source.url).trim() : '';
+                    const title = source?.title ? String(source.title).trim() : '';
+                    const url = source?.url ? String(source.url).trim() : '';
                     const key = (url || title).toLowerCase();
 
                     if (!key || seen.has(key) || !this.isManagedSourceUrl(url)) {
@@ -606,16 +626,29 @@
         },
 
         findManagedUrlForGroundingChunk(chunk, sources, answerText) {
-            const title = String(chunk && chunk.title || '').trim();
-            const directUrl = this.normalizeManagedSourceUrl(chunk && chunk.url || '');
+            const title = String(chunk?.title || '').trim();
+            const directUrl = this.normalizeManagedSourceUrl(chunk?.url || '');
             if (directUrl) {
                 return directUrl;
             }
 
-            for (let index = 0; index < sources.length; index += 1) {
-                const source = sources[index];
-                const sourceUrl = this.normalizeManagedSourceUrl(source && source.url || '');
-                const sourceTitle = String(source && source.title || '').trim();
+            const sourceMatchUrl = this.findMatchingManagedUrlByTitle(title, sources);
+            if (sourceMatchUrl) {
+                return sourceMatchUrl;
+            }
+
+            const managedDocumentUrl = this.buildManagedDocumentUrlFromTitle(title);
+            if (managedDocumentUrl) {
+                return managedDocumentUrl;
+            }
+
+            return this.findManagedUrlMentionedInAnswer(title, answerText);
+        },
+
+        findMatchingManagedUrlByTitle(title, sources) {
+            for (const source of sources) {
+                const sourceUrl = this.normalizeManagedSourceUrl(source?.url || '');
+                const sourceTitle = String(source?.title || '').trim();
                 if (!sourceUrl) {
                     continue;
                 }
@@ -624,20 +657,27 @@
                 }
             }
 
-            if (/^\d+\.md$/i.test(title)) {
-                return `${String(geweb_aisearch.site_url || window.location.origin || '').replace(/\/$/, '')}/?p=${title.replace(/\.md$/i, '')}`;
-            }
-
-            const text = String(answerText || '');
-            if (title && text) {
-                const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const match = text.match(new RegExp(`${escapedTitle}[^\\n]*?(https?:\\/\\/[^\\s<>"']+)`, 'i'));
-                if (match && match[1]) {
-                    return match[1];
-                }
-            }
-
             return '';
+        },
+
+        buildManagedDocumentUrlFromTitle(title) {
+            if (!/^\d+\.md$/i.test(title)) {
+                return '';
+            }
+
+            return `${String(getAiSearchConfig().site_url || globalThis.location?.origin || '').replace(TRAILING_SLASH_REGEX, '')}/?p=${title.replace(/\.md$/i, '')}`;
+        },
+
+        findManagedUrlMentionedInAnswer(title, answerText) {
+            const text = String(answerText || '');
+            if (!title || !text) {
+                return '';
+            }
+
+            const escapedTitle = title.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+            const titleUrlPattern = new RegExp(`${escapedTitle}${MANAGED_TITLE_URL_REGEX_SUFFIX}`, 'i');
+            const match = titleUrlPattern.exec(text);
+            return match?.[1] || '';
         },
 
         highlightSourceReference(footnote) {
@@ -659,7 +699,7 @@
         },
 
         activateSourceReferenceItem($target) {
-            if (!$target || !$target.length || !this.$sourcesBox.length) {
+            if (!$target?.length || !this.$sourcesBox.length) {
                 return;
             }
 
@@ -669,7 +709,7 @@
         },
 
         extractSourcesFromMeta(responseMeta, seen) {
-            const meta = responseMeta && typeof responseMeta === 'object' ? responseMeta : {};
+            const meta = normalizeObject(responseMeta);
             const extracted = [];
 
             const visit = (value) => {
@@ -734,8 +774,8 @@
                 value.domain,
             ];
 
-            for (let index = 0; index < candidates.length; index += 1) {
-                const candidate = typeof candidates[index] === 'string' ? candidates[index].trim() : '';
+            for (const rawCandidate of candidates) {
+                const candidate = typeof rawCandidate === 'string' ? rawCandidate.trim() : '';
                 if (candidate) {
                     return candidate;
                 }
@@ -756,7 +796,7 @@
             const extracted = [];
             parser.querySelectorAll('a[href]').forEach((anchor) => {
                 const href = this.normalizeManagedSourceUrl(anchor.getAttribute('href') || '');
-                const text = String(anchor.textContent || '').replace(/\s+/g, ' ').trim();
+                const text = String(anchor.textContent || '').replaceAll(/\s+/g, ' ').trim();
                 if (!href) {
                     return;
                 }
@@ -778,7 +818,7 @@
                 return extracted;
             }
 
-            const parserText = String(parser.textContent || '').replace(/\s+/g, ' ').trim();
+            const parserText = String(parser.textContent || '').replaceAll(/\s+/g, ' ').trim();
             const rawMatches = parserText.match(/(?:https?:\/\/[^\s)]+|\/[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=%-]+)/g) || [];
             rawMatches.forEach((match) => {
                 const url = this.normalizeManagedSourceUrl(match);
@@ -828,27 +868,27 @@
                 return '';
             }
 
-            try {
-                const parsed = new URL(normalizedUrl);
-                const pathname = parsed.pathname.replace(/^\/+/, '');
-                if (pathname) {
-                    return pathname.replace(/\/?$/, '/');
-                }
-
-                const pageId = parsed.searchParams.get('page_id');
-                if (pageId) {
-                    return `page ${pageId}`;
-                }
-
-                const postId = parsed.searchParams.get('p');
-                if (postId) {
-                    return `post ${postId}`;
-                }
-
-                return parsed.search.replace(/^\?/, '');
-            } catch (error) {
+            const parsed = safeParseUrl(normalizedUrl);
+            if (!parsed) {
                 return '';
             }
+
+            const pathname = parsed.pathname.replace(/^\/+/, '');
+            if (pathname) {
+                return pathname.replace(TRAILING_SLASH_REGEX, '/');
+            }
+
+            const pageId = parsed.searchParams.get('page_id');
+            if (pageId) {
+                return `page ${pageId}`;
+            }
+
+            const postId = parsed.searchParams.get('p');
+            if (postId) {
+                return `post ${postId}`;
+            }
+
+            return parsed.search.replace(/^\?/, '');
         },
 
         normalizeManagedSourceUrl(url) {
@@ -857,13 +897,13 @@
                 return '';
             }
 
-            try {
-                const siteUrl = new URL(String(geweb_aisearch.site_url || window.location.origin || ''));
-                const normalized = new URL(candidate, siteUrl);
-                return normalized.origin === siteUrl.origin ? normalized.toString() : '';
-            } catch (error) {
+            const siteUrl = safeParseUrl(String(getAiSearchConfig().site_url || globalThis.location?.origin || ''));
+            if (!siteUrl) {
                 return '';
             }
+
+            const normalized = safeParseUrl(candidate, siteUrl);
+            return normalized?.origin === siteUrl.origin ? normalized.toString() : '';
         },
 
         isManagedSourceUrl(url) {
@@ -873,7 +913,7 @@
         getLatestSources() {
             for (let index = this.conversationHistory.length - 1; index >= 0; index -= 1) {
                 const item = this.conversationHistory[index];
-                if (item && item.role === 'model' && Array.isArray(item.sources) && item.sources.length) {
+                if (item?.role === 'model' && Array.isArray(item.sources) && item.sources.length) {
                     return item.sources;
                 }
             }
@@ -884,7 +924,7 @@
         getLatestAnswerText() {
             for (let index = this.conversationHistory.length - 1; index >= 0; index -= 1) {
                 const item = this.conversationHistory[index];
-                if (item && item.role === 'model' && item.content) {
+                if (item?.role === 'model' && item.content) {
                     return String(item.content);
                 }
             }
@@ -895,7 +935,7 @@
         getLatestResponseMeta() {
             for (let index = this.conversationHistory.length - 1; index >= 0; index -= 1) {
                 const item = this.conversationHistory[index];
-                if (item && item.role === 'model' && item.meta && typeof item.meta === 'object') {
+                if (item?.role === 'model' && item.meta && typeof item.meta === 'object') {
                     return item.meta;
                 }
             }

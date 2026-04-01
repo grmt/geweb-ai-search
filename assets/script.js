@@ -1,12 +1,25 @@
+function getAiSearchConfig() {
+	return globalThis.geweb_aisearch ?? {};
+}
+
+function t(key, fallback) {
+	const translated = getAiSearchConfig().i18n?.[key];
+	return translated || fallback;
+}
+
+function getLocalConversationArchiveLimit() {
+	const value = Number(getAiSearchConfig().local_conversation_archive_limit);
+	return Number.isFinite(value) && value >= 1 ? value : 12;
+}
+
 jQuery(document).ready(function($) {
-	const GEWEB_AI_CONVERSATION_STORAGE_KEY = 'gewebAiConversationArchiveV1';
 	let nonceRequest = null;
 
 	function fetchSearchNonce() {
-		return $.post(geweb_aisearch.ajax_url, {
+		return $.post(getAiSearchConfig().ajax_url, {
 			action: 'geweb_get_nonce'
 		}).then(function(response) {
-			if (response && response.success && response.data && response.data.nonce) {
+			if (response?.success && response?.data?.nonce) {
 				geweb_aisearch.search_nonce = response.data.nonce;
 				return geweb_aisearch.search_nonce;
 			}
@@ -32,29 +45,6 @@ jQuery(document).ready(function($) {
 	ensureSearchNonce().catch(function() {
 		return null;
 	});
-
-	function t(key, fallback) {
-		if (geweb_aisearch && geweb_aisearch.i18n && geweb_aisearch.i18n[key]) {
-			return geweb_aisearch.i18n[key];
-		}
-
-		return fallback;
-	}
-
-	function getConversationTrimMessageLimit() {
-		const value = Number(geweb_aisearch && geweb_aisearch.conversation_trim_message_limit);
-		return Number.isFinite(value) && value >= 2 ? value : 12;
-	}
-
-	function getConversationTrimCharLimit() {
-		const value = Number(geweb_aisearch && geweb_aisearch.conversation_trim_char_limit);
-		return Number.isFinite(value) && value >= 500 ? value : 12000;
-	}
-
-	function getLocalConversationArchiveLimit() {
-		const value = Number(geweb_aisearch && geweb_aisearch.local_conversation_archive_limit);
-		return Number.isFinite(value) && value >= 1 ? value : 12;
-	}
 	
 	const GewebModal = {
 	    ai: document.getElementById('geweb-ai-modal'),
@@ -67,12 +57,12 @@ jQuery(document).ready(function($) {
 	    },
 
 	    isPageView() {
-	        return this.ai && this.ai.getAttribute('data-geweb-page-view') === '1';
+	        return this.ai?.dataset?.gewebPageView === '1';
 	    },
 
 	    buildFrontendAiPageUrl(query, conversationId) {
-	        const baseUrl = geweb_aisearch.frontend_ai_page_url || window.location.href;
-	        const url = new URL(baseUrl, window.location.origin);
+	        const baseUrl = geweb_aisearch.frontend_ai_page_url || globalThis.location?.href;
+	        const url = new URL(baseUrl, globalThis.location?.origin);
 	        const trimmedQuery = (query || '').trim();
 	        const trimmedConversationId = (conversationId || '').trim();
 	        url.searchParams.delete('geweb_ai_chat');
@@ -129,7 +119,7 @@ jQuery(document).ready(function($) {
 	                this.matchTriggerButtonSize($button, $searchButton);
 	                $button.on('click', () => {
 	                    const query = $input.val().trim();
-	                    window.location.href = this.buildFrontendAiPageUrl(query, GewebAIChat.getPreferredConversationId());
+	                    globalThis.location.href = this.buildFrontendAiPageUrl(query, GewebAIChat.getPreferredConversationId());
 	                });
 
 	                $form.addClass('geweb-ai-search-form');
@@ -168,7 +158,7 @@ jQuery(document).ready(function($) {
 	        GewebAIChat.focusInput();
 
 	        if (GewebAIChat.shouldAutoSubmitQuery(trimmedQuery)) {
-	            window.setTimeout(function() {
+	            globalThis.setTimeout(function() {
 	                GewebAIChat.sendMessage(trimmedQuery);
 	            }, 0);
 	        }
@@ -203,7 +193,7 @@ jQuery(document).ready(function($) {
 
             $('.close', this.ai).on('click', () => {
                 if (this.isPageView()) {
-                    window.location.href = geweb_aisearch.frontend_ai_exit_url || window.location.origin;
+                    globalThis.location.href = geweb_aisearch.frontend_ai_exit_url || globalThis.location?.origin;
                     return;
                 }
                 this.ai.close();
@@ -223,8 +213,7 @@ jQuery(document).ready(function($) {
 	            return;
 	        }
 	
-	        document.body.classList.add('geweb-ai-page');
-	        document.body.classList.add('geweb-ai-page-open');
+	        document.body.classList.add('geweb-ai-page', 'geweb-ai-page-open');
 	        this.bindFrontendHeaderSearch();
 	        this.bindWorkspacePaneResizers();
 	        this.bindPanelCollapseButtons();
@@ -233,7 +222,7 @@ jQuery(document).ready(function($) {
 
 	    bindWorkspacePaneResizers() {
 	        const workspace = this.ai ? this.ai.querySelector('.geweb-ai-workspace') : null;
-	        if (!workspace || window.innerWidth <= 1023) {
+	        if (!workspace || globalThis.innerWidth <= 1023) {
 	            return;
 	        }
 
@@ -264,37 +253,43 @@ jQuery(document).ready(function($) {
 	        };
 
 	        workspace.querySelectorAll('.geweb-ai-pane-resizer').forEach((handle) => {
-	            const side = handle.getAttribute('data-resize-target');
-	            if (!side) {
-	                return;
-	            }
-
-	            handle.addEventListener('pointerdown', (event) => {
-	                event.preventDefault();
-	                const rect = workspace.getBoundingClientRect();
-	                handle.classList.add('is-active');
-	                document.body.style.cursor = 'ew-resize';
-
-	                const move = (moveEvent) => {
-	                    if (side === 'left') {
-	                        setPaneWidth('left', moveEvent.clientX - rect.left);
-	                        return;
-	                    }
-
-	                    setPaneWidth('right', rect.right - moveEvent.clientX);
-	                };
-
-	                const stop = () => {
-	                    handle.classList.remove('is-active');
-	                    document.body.style.cursor = '';
-	                    window.removeEventListener('pointermove', move);
-	                    window.removeEventListener('pointerup', stop);
-	                };
-
-	                window.addEventListener('pointermove', move);
-	                window.addEventListener('pointerup', stop);
-	            });
+	            this.bindWorkspacePaneResizeHandle(handle, workspace, setPaneWidth);
 	        });
+	    },
+
+	    bindWorkspacePaneResizeHandle(handle, workspace, setPaneWidth) {
+	        const side = handle.dataset.resizeTarget;
+	        if (!side) {
+	            return;
+	        }
+
+	        handle.addEventListener('pointerdown', (event) => {
+	            this.startWorkspacePaneResize(event, handle, side, workspace, setPaneWidth);
+	        });
+	    },
+
+	    startWorkspacePaneResize(event, handle, side, workspace, setPaneWidth) {
+	        event.preventDefault();
+	        const rect = workspace.getBoundingClientRect();
+	        handle.classList.add('is-active');
+	        document.body.style.cursor = 'ew-resize';
+
+	        const move = (moveEvent) => {
+	            const width = side === 'left'
+	                ? moveEvent.clientX - rect.left
+	                : rect.right - moveEvent.clientX;
+	            setPaneWidth(side, width);
+	        };
+
+	        const stop = () => {
+	            handle.classList.remove('is-active');
+	            document.body.style.cursor = '';
+	            globalThis.removeEventListener('pointermove', move);
+	            globalThis.removeEventListener('pointerup', stop);
+	        };
+
+	        globalThis.addEventListener('pointermove', move);
+	        globalThis.addEventListener('pointerup', stop);
 	    },
 
 	    bindPanelCollapseButtons() {
@@ -320,8 +315,8 @@ jQuery(document).ready(function($) {
 
 	    syncPanelCollapseButtons() {
 	        const workspace = this.ai ? this.ai.querySelector('.geweb-ai-workspace') : null;
-	        const leftCollapsed = !!(workspace && workspace.classList.contains('is-left-collapsed'));
-	        const rightCollapsed = !!(workspace && workspace.classList.contains('is-right-collapsed'));
+	        const leftCollapsed = !!workspace?.classList.contains('is-left-collapsed');
+	        const rightCollapsed = !!workspace?.classList.contains('is-right-collapsed');
 	        const $searchPanel = $('.geweb-ai-search-results-panel');
 	        const searchCollapsed = $searchPanel.hasClass('is-collapsed');
 
@@ -372,13 +367,13 @@ jQuery(document).ready(function($) {
 	            $form.on('submit', (event) => {
 	                event.preventDefault();
 	                const query = String($input.val() || '').trim();
-	                window.location.href = this.buildFrontendAiPageUrl(query, GewebAIChat.getPreferredConversationId());
+	                globalThis.location.href = this.buildFrontendAiPageUrl(query, GewebAIChat.getPreferredConversationId());
 	            });
 	        });
 	    },
 
 	    escapeAttr(text) {
-	        return String(text).replace(/"/g, '&quot;');
+	        return String(text).replaceAll('"', '&quot;');
 	    },
 
 	};
@@ -509,18 +504,18 @@ jQuery(document).ready(function($) {
 	    },
 
 	    getAjaxErrorMessage(xhr, fallbackMessage) {
-	        const responseJsonMessage = xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message
+	        const responseJsonMessage = xhr?.responseJSON?.data?.message
 	            ? String(xhr.responseJSON.data.message).trim()
 	            : '';
 	        if (responseJsonMessage) {
 	            return responseJsonMessage;
 	        }
 
-	        const rawResponseText = xhr && typeof xhr.responseText === 'string'
+	        const rawResponseText = typeof xhr?.responseText === 'string'
 	            ? String(xhr.responseText).trim()
 	            : '';
 	        if (rawResponseText) {
-	            const plainText = $('<div></div>').html(rawResponseText).text().replace(/\s+/g, ' ').trim();
+	            const plainText = $('<div></div>').html(rawResponseText).text().replaceAll(/\s+/g, ' ').trim();
 	            if (plainText) {
 	                return plainText.length > 220 ? `${plainText.slice(0, 217)}...` : plainText;
 	            }
@@ -636,8 +631,9 @@ jQuery(document).ready(function($) {
 
 	        try {
 	            await ensureSearchNonce();
-	        } catch (error) {
-	            $loader.remove();
+		        } catch (error) {
+		            console.debug('Could not initialize nonce before sending chat message.', error);
+		            $loader.remove();
 	            this.requestInFlight = false;
 	            this.appendMessage({ answer: t('couldNotStart', 'Could not start the AI search. Please try again.'), sources: [] }, 'ai');
 	            this.toggleSubmitButton();
@@ -668,14 +664,14 @@ jQuery(document).ready(function($) {
 		async handleResponse(response, $loader) {
 		    $loader.remove();
 		    this.requestInFlight = false;
-		    if (response.success && response.data) {
+		    if (response?.success && response?.data) {
 		        const compactedBeforeAppend = this.compactedConversation;
 		        this.compactedConversation = !!response.data.context_compacted;
 		        this.conversationHistory.push({
 		            role: 'model',
 		            content: response.data.answer,
 		            sources: Array.isArray(response.data.sources) ? response.data.sources : [],
-		            meta: response.data && response.data.meta && typeof response.data.meta === 'object' ? response.data.meta : {}
+		            meta: response.data?.meta && typeof response.data.meta === 'object' ? response.data.meta : {}
 		        });
 		        if (!compactedBeforeAppend && this.compactedConversation) {
 		            this.appendSystemNote(t('earlierTrimmed', 'Earlier messages were trimmed to keep the conversation context compact.'));
@@ -705,7 +701,7 @@ jQuery(document).ready(function($) {
 		        this.$answerBox.append($msg);
 		    } else {
 		        const $container = $('<div class="ai-message"></div>');
-		        const responseMeta = text && text.meta && typeof text.meta === 'object' ? text.meta : {};
+		        const responseMeta = text?.meta && typeof text.meta === 'object' ? text.meta : {};
 		        const sourceFootnoteMap = this.getResponseSourceFootnoteMap(text.sources || [], text.answer || '', responseMeta);
 		        const answerWithFootnotes = this.decorateAnswerWithGroundingFootnotes(String(text.answer || ''), responseMeta, sourceFootnoteMap);
 		        const sanitizedAnswer = this.sanitizeAnswer(answerWithFootnotes);
@@ -752,7 +748,7 @@ jQuery(document).ready(function($) {
 	    extractPlainTextFromHtml(html) {
 	        const container = document.createElement('div');
 	        container.innerHTML = String(html || '');
-	        return String(container.textContent || container.innerText || '').replace(/\s+/g, ' ').trim();
+	        return String(container.textContent || container.innerText || '').replaceAll(/\s+/g, ' ').trim();
 	    },
 
 	    buildCopyButton(text) {
@@ -771,7 +767,7 @@ jQuery(document).ready(function($) {
 	            $button.attr('aria-label', copied ? t('copied', 'Copied') : t('copyFailed', 'Could not copy'));
 	            $button.attr('title', copied ? t('copied', 'Copied') : t('copyFailed', 'Could not copy'));
 
-	            window.setTimeout(() => {
+	            globalThis.setTimeout(() => {
 	                $button.removeClass('is-copied');
 	                $button.attr('aria-label', t('copyAnswer', 'Copy answer'));
 	                $button.attr('title', t('copyAnswer', 'Copy answer'));
@@ -841,9 +837,9 @@ jQuery(document).ready(function($) {
 	                }
 
 	                const role = item.role === 'model' ? 'AI' : 'User';
-	                const content = item.role === 'model'
-	                    ? this.extractPlainTextFromHtml(String(item.content || ''))
-	                    : String(item.content || '').replace(/\s+/g, ' ').trim();
+		                const content = item.role === 'model'
+		                    ? this.extractPlainTextFromHtml(String(item.content || ''))
+		                    : String(item.content || '').replaceAll(/\s+/g, ' ').trim();
 
 	                return content ? `${role}: ${content}` : '';
 	            })
@@ -863,7 +859,7 @@ jQuery(document).ready(function($) {
 	        this.$copyConversationBtn.attr('aria-label', copied ? t('copied', 'Copied') : t('copyFailed', 'Could not copy'));
 	        this.$copyConversationBtn.attr('title', copied ? t('copied', 'Copied') : t('copyFailed', 'Could not copy'));
 
-	        window.setTimeout(() => {
+	        globalThis.setTimeout(() => {
 	            this.$copyConversationBtn.removeClass('is-copied');
 	            this.$copyConversationBtn.attr('aria-label', t('copyConversation', 'Copy conversation'));
 	            this.$copyConversationBtn.attr('title', t('copyConversation', 'Copy conversation'));
@@ -881,10 +877,14 @@ jQuery(document).ready(function($) {
 	                await navigator.clipboard.writeText(value);
 	                return true;
 	            } catch (error) {
-	                // Fall through to legacy copy path.
+	                console.debug('Clipboard API copy failed, falling back.', error);
 	            }
 	        }
 
+	        return this.copyTextToClipboardLegacy(value);
+	    },
+
+	    copyTextToClipboardLegacy(value) {
 	        const textarea = document.createElement('textarea');
 	        textarea.value = value;
 	        textarea.setAttribute('readonly', 'readonly');
@@ -893,15 +893,14 @@ jQuery(document).ready(function($) {
 	        document.body.appendChild(textarea);
 	        textarea.select();
 
-	        let copied = false;
 	        try {
-	            copied = document.execCommand('copy');
+	            textarea.setSelectionRange(0, textarea.value.length);
 	        } catch (error) {
-	            copied = false;
+	            console.debug('Preparing clipboard fallback failed.', error);
 	        }
 
-	        document.body.removeChild(textarea);
-	        return copied;
+	        textarea.remove();
+	        return false;
 	    },
 
 	    toggleResponseDetails($message) {
@@ -941,13 +940,14 @@ jQuery(document).ready(function($) {
 	    async loadConversationArchive() {
 	        try {
 	            const response = await this.requestFrontendConversation('geweb_get_frontend_conversations', {});
-	            const conversations = Array.isArray(response && response.data && response.data.conversations)
+	            const conversations = Array.isArray(response?.data?.conversations)
 	                ? response.data.conversations
 	                : [];
 	            this.conversationArchive = conversations
 	                .filter((entry) => entry && typeof entry === 'object')
 	                .map((entry) => this.normalizeStoredConversation(entry));
 	        } catch (error) {
+	            console.debug('Load conversation archive failed.', error);
 	            this.conversationArchive = [];
 	        }
 	    },
@@ -984,7 +984,7 @@ jQuery(document).ready(function($) {
 	        }
 
 	        const currentEntry = this.conversationArchive.find((item) => item.id === this.conversationId);
-	        const summary = currentEntry && currentEntry.summary
+	        const summary = currentEntry?.summary
 	            ? currentEntry.summary
 	            : this.buildConversationSummaryFromMessages(this.conversationHistory);
 
@@ -1021,15 +1021,15 @@ jQuery(document).ready(function($) {
 			sanitizeAnswer(html) {
 					// Wrap bare URLs in anchor tags
 					const urlRegex = /(?<!href=["'])(?<!src=["'])(https?:\/\/[^\s<>"']+)/g;
-					html = html.replace(urlRegex, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+					html = html.replaceAll(urlRegex, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
 
 					// Allow safe tags only
-					const allowed = ['p', 'br', 'b', 'strong', 'i', 'em', 'ul', 'ol', 'li', 'a', 'h1', 'h2', 'h3', 'sup'];
+	        const allowed = new Set(['p', 'br', 'b', 'strong', 'i', 'em', 'ul', 'ol', 'li', 'a', 'h1', 'h2', 'h3', 'sup']);
 					const div = document.createElement('div');
 					div.innerHTML = html;
 
 					div.querySelectorAll('*').forEach(el => {
-							if (!allowed.includes(el.tagName.toLowerCase())) {
+							if (!allowed.has(el.tagName.toLowerCase())) {
 									el.replaceWith(document.createTextNode(el.textContent));
 									return;
 							}
@@ -1090,13 +1090,12 @@ jQuery(document).ready(function($) {
 	    },
 
 	    buildConversationSummaryFromMessages(messages) {
-	        for (let index = 0; index < messages.length; index += 1) {
-	            const item = messages[index];
-	            if (!item || item.role !== 'user') {
+	        for (const item of messages) {
+	            if (item?.role !== 'user') {
 	                continue;
 	            }
 
-	            const text = String(item.content || '').replace(/\s+/g, ' ').trim();
+	            const text = String(item.content || '').replaceAll(/\s+/g, ' ').trim();
 	            if (!text) {
 	                continue;
 	            }
@@ -1125,10 +1124,10 @@ jQuery(document).ready(function($) {
 	    async renameCurrentConversation() {
 	        const currentId = this.ensureConversationId();
 	        const currentEntry = this.conversationArchive.find((item) => item.id === currentId);
-	        const currentSummary = currentEntry && currentEntry.summary
+	        const currentSummary = currentEntry?.summary
 	            ? currentEntry.summary
 	            : this.buildConversationSummaryFromMessages(this.conversationHistory);
-	        const nextSummary = window.prompt(t('renameConversation', 'Rename conversation'), currentSummary || t('untitledConversation', 'Untitled conversation'));
+	        const nextSummary = globalThis.prompt(t('renameConversation', 'Rename conversation'), currentSummary || t('untitledConversation', 'Untitled conversation'));
 
 	        if (typeof nextSummary !== 'string') {
 	            return;
@@ -1145,9 +1144,10 @@ jQuery(document).ready(function($) {
 	                    conversation_id: currentId,
 	                    summary: trimmedSummary
 	                });
-	            } catch (error) {
-	                return;
-	            }
+		            } catch (error) {
+		                console.debug('Rename conversation failed.', error);
+		                return;
+		            }
 	        }
 
 	        this.conversationArchive = this.conversationArchive.map((item) => item.id === currentId ? {
@@ -1167,7 +1167,7 @@ jQuery(document).ready(function($) {
 	            return;
 	        }
 
-	        if (!window.confirm(t('removeConversationConfirm', 'Remove this conversation from the current search context?'))) {
+	        if (!globalThis.confirm(t('removeConversationConfirm', 'Remove this conversation from the current search context?'))) {
 	            return;
 	        }
 
@@ -1176,9 +1176,10 @@ jQuery(document).ready(function($) {
 	                await this.requestFrontendConversation('geweb_frontend_delete_conversation', {
 	                    conversation_id: currentId
 	                });
-	            } catch (error) {
-	                return;
-	            }
+		            } catch (error) {
+		                console.debug('Delete conversation failed.', error);
+		                return;
+		            }
 	        }
 
 	        await this.loadConversationArchive();
@@ -1191,23 +1192,24 @@ jQuery(document).ready(function($) {
 
 	    async loadConversation(conversationId) {
 	        let entry = this.conversationArchive.find((item) => item.id === conversationId);
-	        if (!entry || !entry.messages.length) {
+	        if (!entry?.messages?.length) {
 	            try {
 	                const response = await this.requestFrontendConversation('geweb_get_frontend_conversation', {
 	                    conversation_id: conversationId
 	                });
-	                if (!(response && response.success && response.data && response.data.conversation)) {
-	                    this.conversationArchive = this.conversationArchive.filter((item) => item.id !== conversationId);
-	                    this.renderConversationOverview();
-	                    return;
+		                if (!(response?.success && response?.data?.conversation)) {
+		                    this.conversationArchive = this.conversationArchive.filter((item) => item.id !== conversationId);
+		                    this.renderConversationOverview();
+		                    return;
 	                }
 	                entry = this.normalizeStoredConversation(response.data.conversation);
 	                this.conversationArchive = this.conversationArchive.map((item) => item.id === entry.id ? entry : item);
 	                if (!this.conversationArchive.some((item) => item.id === entry.id)) {
 	                    this.conversationArchive.unshift(entry);
 	                }
-	            } catch (error) {
-	                this.conversationArchive = this.conversationArchive.filter((item) => item.id !== conversationId);
+		            } catch (error) {
+		                console.debug('Load conversation failed.', error);
+		                this.conversationArchive = this.conversationArchive.filter((item) => item.id !== conversationId);
 	                this.renderConversationOverview();
 	                this.renderConversationSummary();
 	                return;
@@ -1288,13 +1290,13 @@ jQuery(document).ready(function($) {
 	            !this.requestInFlight &&
 	            this.conversationHistory.length === 0
 	        ) {
-	            window.setTimeout(() => this.sendMessage(initialQuery), 0);
+	            globalThis.setTimeout(() => this.sendMessage(initialQuery), 0);
 	        }
 	    }
 	};
 
-	if (window.GewebAISearchSourceMethods && typeof window.GewebAISearchSourceMethods === 'object') {
-	    Object.assign(GewebAIChat, window.GewebAISearchSourceMethods);
+	if (globalThis.GewebAISearchSourceMethods && typeof globalThis.GewebAISearchSourceMethods === 'object') {
+	    Object.assign(GewebAIChat, globalThis.GewebAISearchSourceMethods);
 	}
 
 	GewebModal.init();
