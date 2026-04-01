@@ -107,11 +107,12 @@
                 entries.push({ label, value: text });
             };
 
-            pushEntry('Provider', meta.provider);
-            pushEntry('Model', meta.model_version || meta.model);
-            pushEntry('Prompt', prompt.name || prompt.scope);
-            pushEntry('Prompt scope', prompt.scope);
-            pushEntry('Prompt mode', prompt.mode);
+	            pushEntry('Provider', meta.provider);
+	            pushEntry('Model', meta.model_version || meta.model);
+	            pushEntry('Prompt name', prompt.name || prompt.scope);
+	            pushEntry('Prompt', prompt.text || prompt.preview);
+	            pushEntry('Prompt scope', prompt.scope);
+	            pushEntry('Prompt mode', prompt.mode);
             pushEntry('Response ID', meta.response_id);
             pushEntry('Finish', candidate.finish_reason || candidate.finish_message);
             if (usage.total_tokens) {
@@ -155,7 +156,7 @@
             });
         },
 
-        decorateAnswerWithGroundingFootnotes(answerHtml, meta) {
+        decorateAnswerWithGroundingFootnotes(answerHtml, meta, sourceFootnoteMap) {
             const html = String(answerHtml || '');
             if (!html) {
                 return '';
@@ -191,7 +192,8 @@
 
                 const existing = blockFootnotes.get(matchedBlock) || [];
                 indices.forEach((index) => {
-                    const footnote = index + 1;
+                    const localFootnote = index + 1;
+                    const footnote = Number(sourceFootnoteMap && sourceFootnoteMap[localFootnote]) || localFootnote;
                     if (!existing.includes(footnote)) {
                         existing.push(footnote);
                     }
@@ -314,14 +316,106 @@
             return text.length > 240 ? `${text.slice(0, 237)}...` : text;
         },
 
-        renderSources(sources, answerText, responseMeta) {
+        getSourceRegistryKey(source) {
+            if (!source || typeof source !== 'object') {
+                return '';
+            }
+
+            const normalizedUrl = this.normalizeManagedSourceUrl(source.url || '');
+            if (normalizedUrl) {
+                return `url:${normalizedUrl.toLowerCase()}`;
+            }
+
+            const title = String(source.title || '').trim().toLowerCase();
+            if (title) {
+                return `title:${title}`;
+            }
+
+            const snippet = String(source.snippet || '').replace(/\s+/g, ' ').trim().toLowerCase();
+            return snippet ? `snippet:${snippet}` : '';
+        },
+
+        buildConversationSourceRegistry() {
+            const registry = [];
+            const registryIndex = new Map();
+            const history = Array.isArray(this.conversationHistory) ? this.conversationHistory : [];
+
+            history.forEach((item, historyIndex) => {
+                if (!item || item.role !== 'model') {
+                    return;
+                }
+
+                const normalizedSources = this.normalizeSources(item.sources || [], item.content || '', item.meta || {});
+                normalizedSources.forEach((source) => {
+                    const key = this.getSourceRegistryKey(source);
+                    if (!key) {
+                        return;
+                    }
+
+                    if (!registryIndex.has(key)) {
+                        registryIndex.set(key, registry.length);
+                        registry.push({
+                            ...source,
+                            footnote: registry.length + 1,
+                            historyIndices: [historyIndex],
+                        });
+                        return;
+                    }
+
+                    const registryEntry = registry[registryIndex.get(key)];
+                    if (!registryEntry) {
+                        return;
+                    }
+
+                    if (!registryEntry.snippet && source.snippet) {
+                        registryEntry.snippet = source.snippet;
+                    }
+                    if (!registryEntry.title && source.title) {
+                        registryEntry.title = source.title;
+                    }
+                    if (!registryEntry.url && source.url) {
+                        registryEntry.url = source.url;
+                    }
+                    if (!registryEntry.historyIndices.includes(historyIndex)) {
+                        registryEntry.historyIndices.push(historyIndex);
+                    }
+                });
+            });
+
+            return registry;
+        },
+
+        getResponseSourceFootnoteMap(sources, answerText, responseMeta) {
+            const normalizedSources = this.normalizeSources(sources, answerText, responseMeta);
+            const registry = this.buildConversationSourceRegistry();
+            const registryMap = new Map();
+
+            registry.forEach((source) => {
+                const key = this.getSourceRegistryKey(source);
+                if (key) {
+                    registryMap.set(key, Number(source.footnote || 0));
+                }
+            });
+
+            return normalizedSources.reduce((map, source) => {
+                const localFootnote = Number(source.footnote || 0);
+                const key = this.getSourceRegistryKey(source);
+                const globalFootnote = key ? Number(registryMap.get(key) || 0) : 0;
+                if (localFootnote > 0 && globalFootnote > 0) {
+                    map[localFootnote] = globalFootnote;
+                }
+                return map;
+            }, {});
+        },
+
+        renderSources() {
             if (!this.$sourcesBox.length) {
                 return;
             }
 
             this.$sourcesBox.empty();
 
-            const normalizedSources = this.normalizeSources(sources, answerText, responseMeta);
+            const normalizedSources = this.buildConversationSourceRegistry();
 
             if (!normalizedSources.length) {
                 this.$sourcesBox.append($('<p class="geweb-ai-empty-panel"></p>').text(t('noSourcesYet', 'No source links yet.')));

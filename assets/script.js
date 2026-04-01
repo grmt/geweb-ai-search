@@ -383,14 +383,17 @@ jQuery(document).ready(function($) {
 
 	};
 
-	const GewebAIChat = {
-	    $textarea: $('#geweb-ai-query-display'),
-	    $submitBtn: $('#geweb-ask-ai-submit'),
-	    $modelSelector: $('#geweb-ai-model-selector'),
-	    $temporaryPromptToggle: $('#geweb-ai-toggle-temp-prompt'),
-	    $temporaryPromptWrap: $('#geweb-ai-temporary-prompt-wrap'),
-	    $temporaryPrompt: $('#geweb-ai-temporary-prompt'),
-	    $answerBox: $('.answer-box'),
+		const GewebAIChat = {
+		    $textarea: $('#geweb-ai-query-display'),
+		    $submitBtn: $('#geweb-ask-ai-submit'),
+		    $modelSelector: $('#geweb-ai-model-selector'),
+		    $settingsToggle: $('#geweb-ai-toggle-temp-settings'),
+		    $settingsPanel: $('#geweb-ai-temporary-settings-panel'),
+		    $resetSettingsBtn: $('#geweb-ai-reset-temp-settings'),
+		    $currentModelDisplay: $('#geweb-ai-current-model-display'),
+		    $currentPromptDisplay: $('#geweb-ai-current-prompt-display'),
+		    $temporaryPrompt: $('#geweb-ai-temporary-prompt'),
+		    $answerBox: $('.answer-box'),
 	    $conversationOverview: $('#geweb-ai-conversation-overview'),
 	    $sourcesBox: $('#geweb-ai-sources'),
 	    $currentConversationSummary: $('#geweb-ai-current-conversation-summary'),
@@ -402,36 +405,46 @@ jQuery(document).ready(function($) {
 	    conversationId: '',
 	    requestInFlight: false,
 	    compactedConversation: false,
-	    conversationArchive: [],
-	    sourceReferenceCache: {},
+		    conversationArchive: [],
+		    sourceReferenceCache: {},
 
-	    init() {
-	        if (!this.$textarea.length) return;
+		    init() {
+		        if (!this.$textarea.length) return;
 
-	        this.$textarea.on('input', () => this.toggleSubmitButton());
-	        this.$submitBtn.on('click', () => this.sendMessage());
-	        this.$temporaryPromptToggle.on('click', () => this.toggleTemporaryPrompt());
-	        this.$copyConversationBtn.on('click', () => { void this.copyCurrentConversation(); });
-	        this.$renameConversationBtn.on('click', () => { void this.renameCurrentConversation(); });
-	        this.$deleteConversationBtn.on('click', () => { void this.deleteCurrentConversation(); });
-	        this.$newConversationBtn.on('click', () => this.createNewConversation(true));
-	        this.$textarea.on('keydown', (e) => {
-	            if (e.key === 'Enter' && !e.shiftKey) {
-	                e.preventDefault();
+		        this.$textarea.on('input', () => this.toggleSubmitButton());
+		        this.$submitBtn.on('click', () => this.sendMessage());
+		        this.$settingsToggle.on('click', () => this.toggleTemporarySettings());
+		        this.$resetSettingsBtn.on('click', () => this.resetTemporarySettings(true));
+		        this.$modelSelector.on('change', () => this.handleTemporaryModelChange());
+		        this.$temporaryPrompt.on('input', () => this.updateTemporarySettingsSummary());
+		        this.$copyConversationBtn.on('click', () => { void this.copyCurrentConversation(); });
+		        this.$renameConversationBtn.on('click', () => { void this.renameCurrentConversation(); });
+		        this.$deleteConversationBtn.on('click', () => { void this.deleteCurrentConversation(); });
+		        this.$newConversationBtn.on('click', () => this.createNewConversation(true));
+		        $(document).on('click', (event) => this.handleDocumentClick(event));
+		        this.$textarea.on('keydown', (e) => {
+		            if (e.key === 'Enter' && !e.shiftKey) {
+		                e.preventDefault();
 	                if (!this.$submitBtn.prop('disabled')) {
 	                    this.sendMessage();
 	                }
 	            }
-	        });
-	        void this.bootstrap();
-	    },
+		        });
+		        $(document).on('keydown', (event) => {
+		            if (event.key === 'Escape') {
+		                this.toggleTemporarySettings(false);
+		            }
+		        });
+		        this.resetTemporarySettings();
+		        void this.bootstrap();
+		    },
 
 	    async bootstrap() {
 	        await this.loadConversationArchive();
 	        await this.applyFrontendRequestState();
 	        this.renderConversationOverview();
 	        this.renderConversationSummary();
-	        this.renderSources(this.getLatestSources(), this.getLatestAnswerText(), this.getLatestResponseMeta());
+	        this.renderSources();
 	        this.toggleSubmitButton();
 	    },
 
@@ -455,38 +468,151 @@ jQuery(document).ready(function($) {
 	        return trimmedQuery.split(/\s+/).length > 1;
 	    },
 
-	    getSelectedModel() {
-	        if (!this.$modelSelector.length) {
-	            return String(geweb_aisearch.selected_model || '').trim();
-	        }
+		    getSelectedModel() {
+		        if (!this.$modelSelector.length) {
+		            return String(geweb_aisearch.selected_model || '').trim();
+		        }
 
-	        return String(this.$modelSelector.val() || geweb_aisearch.selected_model || '').trim();
-	    },
+		        return String(this.$modelSelector.val() || geweb_aisearch.selected_model || '').trim();
+		    },
+
+		    getPromptDescriptors() {
+		        return geweb_aisearch.prompt_descriptors && typeof geweb_aisearch.prompt_descriptors === 'object'
+		            ? geweb_aisearch.prompt_descriptors
+		            : {};
+		    },
+
+		    getPromptDescriptor(model) {
+		        const descriptors = this.getPromptDescriptors();
+		        const resolvedModel = String(model || geweb_aisearch.selected_model || '').trim();
+		        const fallbackDescriptor = descriptors[geweb_aisearch.selected_model] || descriptors[''] || {};
+		        const descriptor = descriptors[resolvedModel] || fallbackDescriptor || {};
+
+		        return {
+		            name: String(descriptor.name || t('temporaryPrompt', 'Temporary prompt')).trim(),
+		            instruction: String(descriptor.instruction || '').trim(),
+		        };
+		    },
 
 	    getTemporaryPrompt() {
 	        if (!this.$temporaryPrompt.length) {
 	            return '';
 	        }
 
-	        return String(this.$temporaryPrompt.val() || '').trim();
+		        const promptValue = String(this.$temporaryPrompt.val() || '').trim();
+		        const basePrompt = String(this.$temporaryPrompt.attr('data-base-prompt') || '').trim();
+		        if (promptValue === '' || promptValue === basePrompt) {
+		            return '';
+		        }
+
+	        return promptValue;
 	    },
 
-	    toggleTemporaryPrompt(forceState) {
-	        if (!this.$temporaryPromptWrap.length || !this.$temporaryPromptToggle.length) {
-	            return;
+	    getAjaxErrorMessage(xhr, fallbackMessage) {
+	        const responseJsonMessage = xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message
+	            ? String(xhr.responseJSON.data.message).trim()
+	            : '';
+	        if (responseJsonMessage) {
+	            return responseJsonMessage;
 	        }
 
-	        const shouldOpen = typeof forceState === 'boolean'
-	            ? forceState
-	            : this.$temporaryPromptWrap.prop('hidden');
-
-	        this.$temporaryPromptWrap.prop('hidden', !shouldOpen);
-	        this.$temporaryPromptToggle.attr('aria-expanded', shouldOpen ? 'true' : 'false');
-
-	        if (shouldOpen && this.$temporaryPrompt.length) {
-	            this.$temporaryPrompt.trigger('focus');
+	        const rawResponseText = xhr && typeof xhr.responseText === 'string'
+	            ? String(xhr.responseText).trim()
+	            : '';
+	        if (rawResponseText) {
+	            const plainText = $('<div></div>').html(rawResponseText).text().replace(/\s+/g, ' ').trim();
+	            if (plainText) {
+	                return plainText.length > 220 ? `${plainText.slice(0, 217)}...` : plainText;
+	            }
 	        }
+
+	        return fallbackMessage;
 	    },
+
+		    setTemporaryPromptBase(descriptor) {
+		        if (!this.$temporaryPrompt.length) {
+		            return;
+		        }
+
+		        this.$temporaryPrompt.attr('data-base-prompt', String(descriptor.instruction || ''));
+		        this.$temporaryPrompt.attr('data-base-name', String(descriptor.name || ''));
+		    },
+
+		    updateTemporarySettingsSummary() {
+		        const selectedModel = this.getSelectedModel();
+		        const baseDescriptor = this.getPromptDescriptor(selectedModel);
+		        const temporaryPrompt = String(this.$temporaryPrompt.val() || '').trim();
+		        const basePrompt = String(this.$temporaryPrompt.attr('data-base-prompt') || '').trim();
+		        const promptDescriptor = temporaryPrompt !== '' && temporaryPrompt !== basePrompt
+		            ? {
+		                name: t('temporaryPrompt', 'Temporary prompt'),
+		                instruction: temporaryPrompt,
+		            }
+		            : baseDescriptor;
+
+		        if (this.$currentModelDisplay.length) {
+		            this.$currentModelDisplay.text(selectedModel);
+		        }
+
+		        if (this.$currentPromptDisplay.length) {
+		            this.$currentPromptDisplay.text(promptDescriptor.name || t('composerPromptLabel', 'Prompt'));
+		            this.$currentPromptDisplay.attr('title', promptDescriptor.instruction || '');
+		            this.$currentPromptDisplay.attr('aria-label', `${t('composerPromptLabel', 'Prompt')}: ${promptDescriptor.name || ''}`);
+		        }
+		    },
+
+		    handleTemporaryModelChange() {
+		        const descriptor = this.getPromptDescriptor(this.getSelectedModel());
+		        this.setTemporaryPromptBase(descriptor);
+		        if (this.$temporaryPrompt.length) {
+		            this.$temporaryPrompt.val(descriptor.instruction || '');
+		        }
+		        this.updateTemporarySettingsSummary();
+		    },
+
+		    resetTemporarySettings(shouldFocusPrompt) {
+		        const defaultModel = String(geweb_aisearch.selected_model || '').trim();
+		        if (this.$modelSelector.length) {
+		            this.$modelSelector.val(defaultModel);
+		        }
+		        this.handleTemporaryModelChange();
+		        if (shouldFocusPrompt && this.$temporaryPrompt.length) {
+		            this.$temporaryPrompt.trigger('focus');
+		        }
+		    },
+
+		    toggleTemporarySettings(forceState) {
+		        if (!this.$settingsPanel.length || !this.$settingsToggle.length) {
+		            return;
+		        }
+
+		        const shouldOpen = typeof forceState === 'boolean'
+		            ? forceState
+		            : this.$settingsPanel.prop('hidden');
+
+		        this.$settingsPanel.prop('hidden', !shouldOpen);
+		        this.$settingsToggle.attr('aria-expanded', shouldOpen ? 'true' : 'false');
+
+		        if (shouldOpen && this.$temporaryPrompt.length) {
+		            this.$temporaryPrompt.trigger('focus');
+		        }
+		    },
+
+		    handleDocumentClick(event) {
+		        if (!this.$settingsPanel.length || this.$settingsPanel.prop('hidden')) {
+		            return;
+		        }
+
+		        const $target = $(event.target);
+		        if (
+		            $target.closest('#geweb-ai-temporary-settings-panel').length ||
+		            $target.closest('#geweb-ai-toggle-temp-settings').length
+		        ) {
+		            return;
+		        }
+
+		        this.toggleTemporarySettings(false);
+		    },
 
 	    async sendMessage(prefilledMessage) {
 	        const message = typeof prefilledMessage === 'string'
@@ -498,7 +624,7 @@ jQuery(document).ready(function($) {
 	        this.conversationHistory.push({ role: 'user', content: message });
 	        this.appendMessage(message, 'user');
 	        this.renderConversationSummary();
-	        this.renderSources([], '', {});
+	        this.renderSources();
 
 	        this.$textarea.val('');
 	        this.requestInFlight = true;
@@ -518,9 +644,9 @@ jQuery(document).ready(function($) {
 	            return;
 	        }
 
-	        $.ajax({
-	            url: geweb_aisearch.ajax_url,
-	            type: 'POST',
+		        $.ajax({
+		            url: geweb_aisearch.ajax_url,
+		            type: 'POST',
 		            data: {
 		                action: 'geweb_ai_chat',
 		                nonce: geweb_aisearch.search_nonce,
@@ -533,9 +659,11 @@ jQuery(document).ready(function($) {
 		                }]
 		            },
 		            success: (response) => this.handleResponse(response, $loader),
-	            error: () => this.handleError($loader)
-	        });
-	    },
+		            error: (xhr) => this.handleError($loader, xhr)
+		        });
+		        this.resetTemporarySettings();
+		        this.toggleTemporarySettings(false);
+		    },
 
 		async handleResponse(response, $loader) {
 		    $loader.remove();
@@ -553,7 +681,7 @@ jQuery(document).ready(function($) {
 		            this.appendSystemNote(t('earlierTrimmed', 'Earlier messages were trimmed to keep the conversation context compact.'));
 		        }
 		        this.appendMessage(response.data, 'ai');
-		        this.renderSources(response.data.sources || [], response.data.answer || '', response.data.meta || {});
+		        this.renderSources();
 		        this.persistConversation();
 		        await this.loadConversationArchive();
 		        this.renderConversationOverview();
@@ -561,19 +689,13 @@ jQuery(document).ready(function($) {
 			    } else {
 			        this.appendMessage({ answer: t('answerError', 'Error: Unable to get response'), sources: [] }, 'ai');
 			    }
-		        if (this.$temporaryPrompt.length) {
-		            this.$temporaryPrompt.val('');
-		        }
-		        if (this.$temporaryPromptWrap.length) {
-		            this.toggleTemporaryPrompt(false);
-		        }
-		        this.toggleSubmitButton();
-			},
+			        this.toggleSubmitButton();
+				},
 
-		handleError($loader) {
+		handleError($loader, xhr) {
 		    $loader.remove();
 		    this.requestInFlight = false;
-		    this.appendMessage({ answer: t('connectionError', 'Connection error. Please try again.'), sources: [] }, 'ai');
+		    this.appendMessage({ answer: this.getAjaxErrorMessage(xhr, t('connectionError', 'Connection error. Please try again.')), sources: [] }, 'ai');
 	        this.toggleSubmitButton();
 		},
 
@@ -584,7 +706,8 @@ jQuery(document).ready(function($) {
 		    } else {
 		        const $container = $('<div class="ai-message"></div>');
 		        const responseMeta = text && text.meta && typeof text.meta === 'object' ? text.meta : {};
-		        const answerWithFootnotes = this.decorateAnswerWithGroundingFootnotes(String(text.answer || ''), responseMeta);
+		        const sourceFootnoteMap = this.getResponseSourceFootnoteMap(text.sources || [], text.answer || '', responseMeta);
+		        const answerWithFootnotes = this.decorateAnswerWithGroundingFootnotes(String(text.answer || ''), responseMeta, sourceFootnoteMap);
 		        const sanitizedAnswer = this.sanitizeAnswer(answerWithFootnotes);
 		        const $content = $('<div class="geweb-ai-message-content"></div>').html(sanitizedAnswer);
 		        const plainText = this.extractPlainTextFromHtml(sanitizedAnswer);
@@ -939,7 +1062,7 @@ jQuery(document).ready(function($) {
 	        this.conversationArchive = [];
 	        this.renderConversationOverview();
 	        this.renderConversationSummary();
-	        this.renderSources([], '', {});
+	        this.renderSources();
 	    },
 
 	    normalizeStoredConversation(entry) {
@@ -1121,7 +1244,7 @@ jQuery(document).ready(function($) {
 
 	        this.renderConversationOverview();
 	        this.renderConversationSummary();
-	        this.renderSources(this.getLatestSources(), this.getLatestAnswerText(), this.getLatestResponseMeta());
+	        this.renderSources();
 	        this.toggleSubmitButton();
 	    },
 
@@ -1133,7 +1256,7 @@ jQuery(document).ready(function($) {
 	        this.$answerBox.empty();
 	        this.renderConversationOverview();
 	        this.renderConversationSummary();
-	        this.renderSources([], '', {});
+	        this.renderSources();
 	        this.toggleSubmitButton();
 
 	        if (shouldFocus) {
