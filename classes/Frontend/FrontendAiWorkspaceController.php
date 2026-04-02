@@ -40,6 +40,8 @@ class FrontendAiWorkspaceController {
 
     public function enqueueScripts(): void {
         $provider = ProviderFactory::make();
+        $locale = function_exists('determine_locale') ? (string) determine_locale() : get_locale();
+        $searchWithAiLabel = $this->getSearchWithAiLabel($locale);
         $frontendModelConfig = ($this->getFrontendAiChatModelConfig)($provider);
         $models = is_array($frontendModelConfig['models'] ?? null) ? $frontendModelConfig['models'] : [];
         $selectedModel = is_string($frontendModelConfig['selected_model'] ?? null) ? $frontendModelConfig['selected_model'] : '';
@@ -90,6 +92,7 @@ class FrontendAiWorkspaceController {
             'i18n' => [
                 'openAiSearch' => __('Open AI Search', 'geweb-ai-search'),
                 'askAi' => __('Ask AI', 'geweb-ai-search'),
+                'searchWithAi' => $searchWithAiLabel,
                 'thinking' => __('Thinking...', 'geweb-ai-search'),
                 'couldNotStart' => __('Could not start the AI search. Please try again.', 'geweb-ai-search'),
                 'connectionError' => __('Connection error. Please try again.', 'geweb-ai-search'),
@@ -98,37 +101,59 @@ class FrontendAiWorkspaceController {
                 'clickAnswerForDetails' => __('Click the answer to show response details.', 'geweb-ai-search'),
                 'hideDetails' => __('Hide details', 'geweb-ai-search'),
                 'showDetails' => __('Show details', 'geweb-ai-search'),
-                'earlierTrimmed' => __('Earlier messages were trimmed to keep the conversation context compact.', 'geweb-ai-search'),
+                'earlierTrimmed' => __('Earlier messages were trimmed to keep the chat context compact.', 'geweb-ai-search'),
                 'noChatsYet' => __('No chats yet.', 'geweb-ai-search'),
                 'copyAnswer' => __('Copy answer', 'geweb-ai-search'),
-                'copyConversation' => __('Copy conversation', 'geweb-ai-search'),
-                'temporaryPrompt' => __('Temporary prompt', 'geweb-ai-search'),
+                'copyConversation' => __('Copy chat', 'geweb-ai-search'),
+                'temporaryPrompt' => __('Temporary chat prompt', 'geweb-ai-search'),
+                'temporaryPromptActive' => __('Temporary prompt', 'geweb-ai-search'),
+                'temporaryModelActive' => __('Temporary model', 'geweb-ai-search'),
+                'temporaryPromptPrefix' => __('Temporary override of', 'geweb-ai-search'),
                 'temporaryPromptPlaceholder' => __('Optional prompt override for this question only...', 'geweb-ai-search'),
                 'toggleTemporaryPrompt' => __('Toggle temporary prompt', 'geweb-ai-search'),
                 'composerSettings' => __('Settings', 'geweb-ai-search'),
                 'composerSettingsTitle' => __('Next question settings', 'geweb-ai-search'),
                 'composerNextMessageOnly' => __('Applies to the next question only.', 'geweb-ai-search'),
+                'composerAppliesNextQuestions' => __('Applies to the next questions until you reset it.', 'geweb-ai-search'),
                 'composerReset' => __('Reset', 'geweb-ai-search'),
+                'composerClose' => __('Close settings', 'geweb-ai-search'),
+                'composerUseDefaultModel' => __('Use default model', 'geweb-ai-search'),
+                'composerUseDefaultPrompt' => __('Use default prompt', 'geweb-ai-search'),
+                'composerEditPrompt' => __('Edit prompt', 'geweb-ai-search'),
+                'composerHidePromptEditor' => __('Hide prompt editor', 'geweb-ai-search'),
+                'composerTemporaryOverride' => __('Defaults overridden', 'geweb-ai-search'),
                 'composerPromptLabel' => __('Prompt', 'geweb-ai-search'),
                 'composerModelLabel' => __('Model', 'geweb-ai-search'),
-                'composerPromptPreview' => __('Hover to preview the full prompt.', 'geweb-ai-search'),
                 'copied' => __('Copied', 'geweb-ai-search'),
                 'copyFailed' => __('Could not copy', 'geweb-ai-search'),
                 'savedChat' => __('Saved chat', 'geweb-ai-search'),
-                'untitledConversation' => __('Untitled conversation', 'geweb-ai-search'),
+                'untitledConversation' => __('Untitled chat', 'geweb-ai-search'),
                 'noSourcesYet' => __('No source links yet.', 'geweb-ai-search'),
-                'renameConversation' => __('Rename conversation', 'geweb-ai-search'),
-                'removeConversationConfirm' => __('Remove this conversation from the current search context?', 'geweb-ai-search'),
+                'renameConversation' => __('Rename chat', 'geweb-ai-search'),
+                'removeConversationConfirm' => __('Remove this chat from the current search context?', 'geweb-ai-search'),
                 'mentionedInAnswer' => __('Mentioned in answer', 'geweb-ai-search'),
                 'newChat' => __('New chat', 'geweb-ai-search'),
                 'linksToPages' => __('Links to pages and documents used in the answer.', 'geweb-ai-search'),
                 'showResults' => __('Show results', 'geweb-ai-search'),
                 'hideResults' => __('Hide results', 'geweb-ai-search'),
                 'modelLabel' => __('Model', 'geweb-ai-search'),
-                'manageConversations' => __('Manage conversations', 'geweb-ai-search'),
+                'manageConversations' => __('Manage chats', 'geweb-ai-search'),
                 'searchResultsIntro' => __('Use your normal site search above to update these WordPress results without leaving the AI workspace.', 'geweb-ai-search'),
             ],
         ]);
+    }
+
+    private function getSearchWithAiLabel(string $locale): string {
+        $normalizedLocale = strtolower(str_replace('-', '_', $locale));
+        if (str_starts_with($normalizedLocale, 'nl')) {
+            return 'Zoeken met AI';
+        }
+
+        if (str_starts_with($normalizedLocale, 'en_gb') || str_starts_with($normalizedLocale, 'en_us') || str_starts_with($normalizedLocale, 'en')) {
+            return 'AI search';
+        }
+
+        return __('AI search', 'geweb-ai-search');
     }
 
     /**
@@ -229,106 +254,128 @@ class FrontendAiWorkspaceController {
                 <aside class="geweb-ai-sidebar" aria-label="<?php echo esc_attr__('Chat panel', 'geweb-ai-search'); ?>">
                     <div class="geweb-ai-overview-header">
                         <div class="geweb-ai-panel-heading">
-                            <div class="geweb-ai-panel-title geweb-ai-panel-title--inline"><?php echo esc_html__('Chat', 'geweb-ai-search'); ?></div>
-                            <div class="geweb-ai-panel-heading-actions geweb-ai-panel-heading-actions--conversation">
-                                <button type="button" class="button button-small geweb-ai-new-conversation geweb-ai-overview-action-button geweb-ai-overview-action-button--icon-first">
-                                    <span class="geweb-ai-overview-action-icon" aria-hidden="true">+</span>
-                                    <span class="geweb-ai-overview-action-label"><?php echo esc_html__('New', 'geweb-ai-search'); ?></span>
-                                </button>
-                                <?php if ($showManageLink && current_user_can('manage_options')): ?>
-                                    <a class="button button-small geweb-ai-overview-action-button geweb-ai-overview-action-button--icon-first" href="<?php echo esc_url(($this->getTabUrl)('conversations')); ?>">
-                                        <span class="geweb-ai-overview-action-icon" aria-hidden="true">⚙</span>
-                                        <span class="geweb-ai-overview-action-label"><?php echo esc_html__('Manage', 'geweb-ai-search'); ?></span>
-                                    </a>
-                                <?php endif; ?>
+                            <div class="geweb-ai-panel-heading-main">
+                                <div class="geweb-ai-panel-title geweb-ai-panel-title--inline"><?php echo esc_html__('Chat', 'geweb-ai-search'); ?></div>
+                                <div class="geweb-ai-panel-heading-actions geweb-ai-panel-heading-actions--conversation">
+                                    <button type="button" class="button button-small geweb-ai-new-conversation geweb-ai-overview-action-button geweb-ai-overview-action-button--icon-first" aria-label="<?php echo esc_attr__('New chat', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('New chat', 'geweb-ai-search'); ?>">
+                                        <span class="geweb-ai-overview-action-icon" aria-hidden="true">+</span>
+                                        <span class="geweb-ai-overview-action-label"><?php echo esc_html__('New', 'geweb-ai-search'); ?></span>
+                                    </button>
+                                    <?php if ($showManageLink && current_user_can('manage_options')): ?>
+                                        <a class="button button-small geweb-ai-overview-action-button geweb-ai-overview-action-button--icon-first" href="<?php echo esc_url(($this->getTabUrl)('conversations')); ?>" aria-label="<?php echo esc_attr__('Manage chats', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Manage chats', 'geweb-ai-search'); ?>">
+                                            <span class="geweb-ai-overview-action-icon" aria-hidden="true">⚙</span>
+                                            <span class="geweb-ai-overview-action-label"><?php echo esc_html__('Manage', 'geweb-ai-search'); ?></span>
+                                        </a>
+                                    <?php endif; ?>
+                                </div>
                             </div>
-                            <button type="button" class="button button-small geweb-ai-panel-collapse" data-panel-toggle="left" aria-expanded="true" aria-label="<?php echo esc_attr__('Collapse conversations panel', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Collapse conversations panel', 'geweb-ai-search'); ?>">
+                            <button type="button" class="button button-small geweb-ai-panel-collapse" data-panel-toggle="left" aria-expanded="true" aria-label="<?php echo esc_attr__('Collapse chats panel', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Collapse chats panel', 'geweb-ai-search'); ?>">
                                 <span class="geweb-ai-panel-collapse-icon" aria-hidden="true">◀</span>
                             </button>
                         </div>
                     </div>
                     <div class="geweb-ai-current-conversation">
-                        <div class="geweb-ai-current-conversation-label"><?php echo esc_html__('Current conversation', 'geweb-ai-search'); ?></div>
-                        <div id="geweb-ai-current-conversation-summary" class="geweb-ai-current-conversation-summary"><?php echo esc_html__('Untitled conversation', 'geweb-ai-search'); ?></div>
-                        <div class="geweb-ai-current-conversation-actions">
-                            <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-secondary-button--icon-first" id="geweb-ai-copy-conversation" aria-label="<?php echo esc_attr__('Copy conversation', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Copy conversation', 'geweb-ai-search'); ?>">
-                                <span class="geweb-ai-overview-action-icon" aria-hidden="true">⧉</span>
-                                <span class="geweb-ai-overview-action-label"><?php echo esc_html__('Copy', 'geweb-ai-search'); ?></span>
-                            </button>
-                            <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-secondary-button--icon-first" id="geweb-ai-rename-conversation" aria-label="<?php echo esc_attr__('Rename conversation', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Rename conversation', 'geweb-ai-search'); ?>">
-                                <span class="geweb-ai-overview-action-icon" aria-hidden="true">✎</span>
-                                <span class="geweb-ai-overview-action-label"><?php echo esc_html__('Rename', 'geweb-ai-search'); ?></span>
-                            </button>
-                            <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-secondary-button--icon-first" id="geweb-ai-delete-conversation" aria-label="<?php echo esc_attr__('Remove conversation', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Remove conversation', 'geweb-ai-search'); ?>">
-                                <span class="geweb-ai-overview-action-icon" aria-hidden="true">−</span>
-                                <span class="geweb-ai-overview-action-label"><?php echo esc_html__('Remove', 'geweb-ai-search'); ?></span>
-                            </button>
+                        <div class="geweb-ai-current-conversation-header">
+                            <div class="geweb-ai-current-conversation-label"><?php echo esc_html__('Current chat', 'geweb-ai-search'); ?></div>
+                            <div class="geweb-ai-current-conversation-actions">
+                                <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-secondary-button--icon-first geweb-ai-current-conversation-action" id="geweb-ai-copy-conversation" aria-label="<?php echo esc_attr__('Copy chat', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Copy chat', 'geweb-ai-search'); ?>">
+                                    <span class="geweb-ai-overview-action-icon" aria-hidden="true">⧉</span>
+                                    <span class="geweb-ai-overview-action-label"><?php echo esc_html__('Copy', 'geweb-ai-search'); ?></span>
+                                </button>
+                                <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-secondary-button--icon-first geweb-ai-current-conversation-action" id="geweb-ai-rename-conversation" aria-label="<?php echo esc_attr__('Rename chat', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Rename chat', 'geweb-ai-search'); ?>">
+                                    <span class="geweb-ai-overview-action-icon" aria-hidden="true">✎</span>
+                                    <span class="geweb-ai-overview-action-label"><?php echo esc_html__('Rename', 'geweb-ai-search'); ?></span>
+                                </button>
+                                <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-secondary-button--icon-first geweb-ai-current-conversation-action" id="geweb-ai-delete-conversation" aria-label="<?php echo esc_attr__('Remove chat', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Remove chat', 'geweb-ai-search'); ?>">
+                                    <span class="geweb-ai-overview-action-icon" aria-hidden="true">−</span>
+                                    <span class="geweb-ai-overview-action-label"><?php echo esc_html__('Remove', 'geweb-ai-search'); ?></span>
+                                </button>
+                            </div>
                         </div>
+                        <div id="geweb-ai-current-conversation-summary" class="geweb-ai-current-conversation-summary"><?php echo esc_html__('Untitled chat', 'geweb-ai-search'); ?></div>
                     </div>
                     <div id="geweb-ai-conversation-overview" class="geweb-ai-conversation-overview"></div>
                 </aside>
-                <button type="button" class="button button-small geweb-ai-panel-collapse geweb-ai-panel-reopen geweb-ai-panel-reopen--left" data-panel-toggle="left" aria-expanded="true" aria-label="<?php echo esc_attr__('Expand conversations panel', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Expand conversations panel', 'geweb-ai-search'); ?>">
+                <button type="button" class="button button-small geweb-ai-panel-collapse geweb-ai-panel-reopen geweb-ai-panel-reopen--left" data-panel-toggle="left" aria-expanded="true" aria-label="<?php echo esc_attr__('Expand chats panel', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Expand chats panel', 'geweb-ai-search'); ?>">
                     <span class="geweb-ai-panel-collapse-icon" aria-hidden="true">▶</span>
                 </button>
-                <div class="geweb-ai-pane-resizer geweb-ai-pane-resizer--left" data-resize-target="left" aria-orientation="vertical" aria-label="<?php echo esc_attr__('Resize conversation panel', 'geweb-ai-search'); ?>"></div>
+                <div class="geweb-ai-pane-resizer geweb-ai-pane-resizer--left" data-resize-target="left" aria-orientation="vertical" aria-label="<?php echo esc_attr__('Resize chats panel', 'geweb-ai-search'); ?>"></div>
                 <div class="geweb-ai-main-panel">
                     <div class="answer-box"></div>
                     <div class="question-box">
                         <div class="geweb-ai-question-toolbar">
                             <div class="geweb-ai-question-summary" aria-live="polite">
                                 <span class="geweb-ai-question-summary-item">
-                                    <span class="geweb-ai-question-summary-label"><?php echo esc_html__('Model', 'geweb-ai-search'); ?></span>
+                                    <span class="geweb-ai-question-summary-label"><?php echo esc_html__('Model:', 'geweb-ai-search'); ?></span>
                                     <span id="geweb-ai-current-model-display" class="geweb-ai-question-summary-value"><?php echo esc_html($selectedModel); ?></span>
                                 </span>
                                 <span class="geweb-ai-question-summary-item">
-                                    <span class="geweb-ai-question-summary-label"><?php echo esc_html__('Prompt', 'geweb-ai-search'); ?></span>
+                                    <span class="geweb-ai-question-summary-label"><?php echo esc_html__('Prompt:', 'geweb-ai-search'); ?></span>
                                     <span id="geweb-ai-current-prompt-display" class="geweb-ai-question-summary-value geweb-ai-question-summary-value--prompt" title="<?php echo esc_attr($currentPromptInstruction); ?>"><?php echo esc_html($currentPromptName); ?></span>
                                 </span>
                             </div>
-                            <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-secondary-button--icon-first" id="geweb-ai-toggle-temp-settings" aria-expanded="false" aria-controls="geweb-ai-temporary-settings-panel" title="<?php echo esc_attr__('Next question settings', 'geweb-ai-search'); ?>">
+                            <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-secondary-button--icon-only geweb-ai-question-settings-button" id="geweb-ai-toggle-temp-settings" aria-expanded="false" aria-controls="geweb-ai-temporary-settings-panel" aria-label="<?php echo esc_attr__('Next question settings', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Next question settings', 'geweb-ai-search'); ?>">
                                 <span class="geweb-ai-overview-action-icon" aria-hidden="true">⚙</span>
-                                <span class="geweb-ai-overview-action-label"><?php echo esc_html__('Settings', 'geweb-ai-search'); ?></span>
                             </button>
                         </div>
                         <div class="geweb-ai-temporary-settings-panel" id="geweb-ai-temporary-settings-panel" hidden>
                             <div class="geweb-ai-temporary-settings-header">
-                                <div class="geweb-ai-temporary-settings-title"><?php echo esc_html__('Next question settings', 'geweb-ai-search'); ?></div>
-                                <button type="button" class="button button-small geweb-ai-secondary-button" id="geweb-ai-reset-temp-settings"><?php echo esc_html__('Reset', 'geweb-ai-search'); ?></button>
+                                <div class="geweb-ai-temporary-settings-heading">
+                                    <div class="geweb-ai-temporary-settings-title"><?php echo esc_html__('Next question settings', 'geweb-ai-search'); ?></div>
+                                    <p class="geweb-ai-temporary-settings-note"><?php echo esc_html__('Applies to the next questions until you reset it.', 'geweb-ai-search'); ?></p>
+                                </div>
+                                <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-secondary-button--icon-only geweb-ai-temporary-settings-close" id="geweb-ai-close-temp-settings" aria-label="<?php echo esc_attr__('Close settings', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Close settings', 'geweb-ai-search'); ?>">×</button>
                             </div>
-                            <p class="geweb-ai-temporary-settings-note"><?php echo esc_html__('Applies to the next question only.', 'geweb-ai-search'); ?></p>
                             <?php if (!empty($models)): ?>
-                                <label for="geweb-ai-model-selector" class="geweb-ai-model-selector-label"><?php echo esc_html__('Model', 'geweb-ai-search'); ?></label>
-                                <select id="geweb-ai-model-selector" class="geweb-ai-model-selector">
-                                    <?php foreach ($models as $model): ?>
-                                        <option value="<?php echo esc_attr($model); ?>" <?php selected($selectedModel, $model); ?>><?php echo esc_html($model); ?></option>
-                                    <?php endforeach; ?>
-                                </select>
+                                <div class="geweb-ai-temporary-settings-row">
+                                    <label for="geweb-ai-model-selector" class="geweb-ai-model-selector-label"><?php echo esc_html__('Model', 'geweb-ai-search'); ?></label>
+                                    <div class="geweb-ai-temporary-settings-controls">
+                                        <select id="geweb-ai-model-selector" class="geweb-ai-model-selector" disabled>
+                                            <?php foreach ($models as $model): ?>
+                                                <option value="<?php echo esc_attr($model); ?>" <?php selected($selectedModel, $model); ?>><?php echo esc_html($model); ?></option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                        <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-temporary-reset-button geweb-ai-temporary-inline-action" id="geweb-ai-reset-temp-model"><?php echo esc_html__('Use default model', 'geweb-ai-search'); ?></button>
+                                    </div>
+                                </div>
                             <?php endif; ?>
-                            <label for="geweb-ai-temporary-prompt" class="geweb-ai-model-selector-label"><?php echo esc_html__('Prompt', 'geweb-ai-search'); ?></label>
-                            <textarea id="geweb-ai-temporary-prompt" class="geweb-ai-temporary-prompt" placeholder="<?php echo esc_attr__('Optional prompt override for this question only...', 'geweb-ai-search'); ?>"><?php echo esc_textarea($currentPromptInstruction); ?></textarea>
-                            <p class="geweb-ai-temporary-settings-hint"><?php echo esc_html__('Hover the prompt label above to preview the full prompt.', 'geweb-ai-search'); ?></p>
+                            <div class="geweb-ai-temporary-settings-row">
+                                <label for="geweb-ai-temporary-prompt" class="geweb-ai-model-selector-label"><?php echo esc_html__('Prompt', 'geweb-ai-search'); ?></label>
+                                <div class="geweb-ai-temporary-settings-controls geweb-ai-temporary-settings-controls--prompt">
+                                    <div id="geweb-ai-temporary-prompt-summary" class="geweb-ai-temporary-prompt-summary"><?php echo esc_html($currentPromptName); ?></div>
+                                    <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-temporary-inline-action" id="geweb-ai-toggle-prompt-editor"><?php echo esc_html__('Edit prompt', 'geweb-ai-search'); ?></button>
+                                    <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-temporary-reset-button geweb-ai-temporary-inline-action" id="geweb-ai-reset-temp-prompt"><?php echo esc_html__('Use default prompt', 'geweb-ai-search'); ?></button>
+                                </div>
+                            </div>
+                            <div class="geweb-ai-temporary-prompt-editor" id="geweb-ai-temporary-prompt-editor" hidden>
+                                <textarea id="geweb-ai-temporary-prompt" class="geweb-ai-temporary-prompt" placeholder="<?php echo esc_attr__('Optional prompt override for this question only...', 'geweb-ai-search'); ?>" disabled><?php echo esc_textarea($currentPromptInstruction); ?></textarea>
+                            </div>
                         </div>
-                        <textarea id="geweb-ai-query-display" placeholder="<?php echo esc_attr(apply_filters('geweb_aisearch_ai_textarea_placeholder', 'Ask AI a question...')); ?>"></textarea>
-                        <button id="geweb-ask-ai-submit" class="btn" type="submit" disabled aria-label="<?php echo esc_attr__('Send AI question', 'geweb-ai-search'); ?>"></button>
+                        <div class="geweb-ai-question-input-row">
+                            <textarea id="geweb-ai-query-display" placeholder="<?php echo esc_attr(apply_filters('geweb_aisearch_ai_textarea_placeholder', 'Ask AI a question...')); ?>"></textarea>
+                            <button id="geweb-ask-ai-submit" class="btn" type="submit" disabled aria-label="<?php echo esc_attr__('Send AI question', 'geweb-ai-search'); ?>"></button>
+                        </div>
                     </div>
                 </div>
                 <div class="geweb-ai-pane-resizer geweb-ai-pane-resizer--right" data-resize-target="right" aria-orientation="vertical" aria-label="<?php echo esc_attr__('Resize sources panel', 'geweb-ai-search'); ?>"></div>
                 <aside class="geweb-ai-sources-panel" aria-label="<?php echo esc_attr__('Source references panel', 'geweb-ai-search'); ?>">
                     <div class="geweb-ai-panel-heading">
-                        <div class="geweb-ai-panel-title"><?php echo esc_html__('Source references', 'geweb-ai-search'); ?></div>
-                        <div class="geweb-ai-panel-heading-actions">
-                            <?php if (current_user_can('manage_options')): ?>
-                                <a class="button button-small geweb-ai-overview-action-button geweb-ai-overview-action-button--icon-first" href="<?php echo esc_url(($this->getTabUrl)('documents')); ?>">
-                                    <span class="geweb-ai-overview-action-icon" aria-hidden="true">⚙</span>
-                                    <span class="geweb-ai-overview-action-label"><?php echo esc_html__('Manage', 'geweb-ai-search'); ?></span>
-                                </a>
-                            <?php endif; ?>
-                            <button type="button" class="button button-small geweb-ai-panel-collapse" data-panel-toggle="right" aria-expanded="true" aria-label="<?php echo esc_attr__('Collapse sources panel', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Collapse sources panel', 'geweb-ai-search'); ?>">
-                                <span class="geweb-ai-panel-collapse-icon" aria-hidden="true">▶</span>
-                            </button>
+                        <div class="geweb-ai-panel-heading-main">
+                            <div class="geweb-ai-panel-title"><?php echo esc_html__('Source references', 'geweb-ai-search'); ?></div>
+                            <div class="geweb-ai-panel-heading-actions">
+                                <?php if (current_user_can('manage_options')): ?>
+                                    <a class="button button-small geweb-ai-overview-action-button geweb-ai-overview-action-button--icon-first" href="<?php echo esc_url(($this->getTabUrl)('documents')); ?>" aria-label="<?php echo esc_attr__('Manage source references', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Manage source references', 'geweb-ai-search'); ?>">
+                                        <span class="geweb-ai-overview-action-icon" aria-hidden="true">⚙</span>
+                                        <span class="geweb-ai-overview-action-label"><?php echo esc_html__('Manage', 'geweb-ai-search'); ?></span>
+                                    </a>
+                                <?php endif; ?>
+                            </div>
                         </div>
+                        <button type="button" class="button button-small geweb-ai-panel-collapse" data-panel-toggle="right" aria-expanded="true" aria-label="<?php echo esc_attr__('Collapse sources panel', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Collapse sources panel', 'geweb-ai-search'); ?>">
+                            <span class="geweb-ai-panel-collapse-icon" aria-hidden="true">▶</span>
+                        </button>
                     </div>
-                    <p class="geweb-ai-sources-help"><?php echo esc_html__('Pages, posts, and documents referenced by the current answer or restored conversation.', 'geweb-ai-search'); ?></p>
+                    <p class="geweb-ai-sources-help"><?php echo esc_html__('Pages, posts, and documents referenced by the current answer or restored chat.', 'geweb-ai-search'); ?></p>
                     <div id="geweb-ai-sources" class="geweb-ai-sources"></div>
                 </aside>
                 <button type="button" class="button button-small geweb-ai-panel-collapse geweb-ai-panel-reopen geweb-ai-panel-reopen--right" data-panel-toggle="right" aria-expanded="true" aria-label="<?php echo esc_attr__('Expand sources panel', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Expand sources panel', 'geweb-ai-search'); ?>">
@@ -367,8 +414,18 @@ class FrontendAiWorkspaceController {
         ?>
         <section class="geweb-ai-search-results-panel">
             <div class="geweb-ai-search-results-header">
-                <div class="geweb-ai-panel-heading">
+                <div class="geweb-ai-panel-heading geweb-ai-panel-heading--search-results">
                     <div class="geweb-ai-panel-title geweb-ai-panel-title--inline"><?php echo esc_html__('Search Results', 'geweb-ai-search'); ?></div>
+                    <?php if ($query !== ''): ?>
+                        <button
+                            type="button"
+                            class="geweb-ai-search-results-info"
+                            aria-label="<?php echo esc_attr__('These are the regular WordPress search results for the current query.', 'geweb-ai-search'); ?>"
+                            title="<?php echo esc_attr__('These are the regular WordPress search results for the current query.', 'geweb-ai-search'); ?>"
+                        >
+                            <span class="geweb-ai-search-results-info-icon" aria-hidden="true">i</span>
+                        </button>
+                    <?php endif; ?>
                     <button type="button" class="button button-small geweb-ai-panel-collapse" data-panel-toggle="search" aria-expanded="<?php echo $initialHeight > 0 ? 'true' : 'false'; ?>" aria-label="<?php echo esc_attr($initialHeight > 0 ? __('Collapse classic search results', 'geweb-ai-search') : __('Expand classic search results', 'geweb-ai-search')); ?>" title="<?php echo esc_attr($initialHeight > 0 ? __('Collapse classic search results', 'geweb-ai-search') : __('Expand classic search results', 'geweb-ai-search')); ?>">
                         <span class="geweb-ai-panel-collapse-icon" aria-hidden="true"><?php echo $initialHeight > 0 ? '▴' : '▾'; ?></span>
                     </button>
@@ -391,7 +448,6 @@ class FrontendAiWorkspaceController {
                         'post__not_in' => array_filter([FrontendAiContext::getFrontendAiPageId()]),
                     ]);
                     ?>
-                    <p class="geweb-ai-search-results-intro"><?php echo esc_html__('These are the regular WordPress search results for the current query.', 'geweb-ai-search'); ?></p>
                     <?php if ($searchQuery->have_posts()): ?>
                         <ul class="geweb-ai-search-results-list">
                             <?php while ($searchQuery->have_posts()): $searchQuery->the_post(); ?>

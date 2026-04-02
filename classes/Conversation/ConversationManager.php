@@ -71,6 +71,57 @@ class ConversationManager {
     }
 
     /**
+     * @param string $conversationId
+     * @param array<int,array<string,mixed>> $messages
+     * @param string $summary
+     * @param bool $compacted
+     * @return array<string,mixed>
+     */
+    public function saveFrontendConversation(string $conversationId, array $messages, string $summary = '', bool $compacted = false): array {
+        $conversationId = trim($conversationId);
+        if ($conversationId === '') {
+            $conversationId = 'geweb-ai-' . wp_generate_password(12, false, false);
+        }
+
+        $normalizedMessages = $this->normalizeConversationMessages($messages);
+        $normalizedSummary = trim($summary);
+        if ($normalizedSummary === '') {
+            $normalizedSummary = $this->buildConversationSummary($normalizedMessages);
+        }
+
+        $conversations = $this->getConversationOption();
+        $existing = isset($conversations[$conversationId]) && is_array($conversations[$conversationId])
+            ? $conversations[$conversationId]
+            : [];
+        $now = time();
+
+        $conversation = [
+            'id' => $conversationId,
+            'summary' => $normalizedSummary !== '' ? $normalizedSummary : 'Untitled conversation',
+            'started_at' => (int) ($existing['started_at'] ?? $now),
+            'last_used_at' => $now,
+            'provider' => (string) ($existing['provider'] ?? ''),
+            'model' => (string) ($existing['model'] ?? ''),
+            'request_count' => (int) ($existing['request_count'] ?? 0),
+            'input_tokens' => (int) ($existing['input_tokens'] ?? 0),
+            'output_tokens' => (int) ($existing['output_tokens'] ?? 0),
+            'total_tokens' => (int) ($existing['total_tokens'] ?? 0),
+            'estimated_cost_usd' => (float) ($existing['estimated_cost_usd'] ?? 0),
+            'messages' => $normalizedMessages,
+            'context_summary' => $compacted ? '__frontend_compacted__' : '',
+        ];
+
+        $conversations[$conversationId] = $conversation;
+        uasort($conversations, static function (array $a, array $b): int {
+            return ((int) ($b['last_used_at'] ?? 0)) <=> ((int) ($a['last_used_at'] ?? 0));
+        });
+
+        update_option(self::OPTION_CONVERSATIONS, array_slice($conversations, 0, self::DEFAULT_CONVERSATION_LIMIT, true), false);
+
+        return $conversation;
+    }
+
+    /**
      * @param array<int,array<string,mixed>> $messages
      * @return array{role:string,content:string}|null
      */
@@ -359,11 +410,14 @@ class ConversationManager {
      * @return array<string,mixed>
      */
     private function exportConversationSummaryForFrontend(array $conversation): array {
+        $messages = isset($conversation['messages']) && is_array($conversation['messages']) ? $conversation['messages'] : [];
+
         return [
             'id' => (string) ($conversation['id'] ?? ''),
             'summary' => trim((string) ($conversation['summary'] ?? '')) !== '' ? (string) $conversation['summary'] : 'Untitled conversation',
             'savedAt' => (int) (($conversation['last_used_at'] ?? $conversation['started_at'] ?? time()) * 1000),
             'compacted' => trim((string) ($conversation['context_summary'] ?? '')) !== '',
+            'firstUserMessage' => $this->extractFirstUserMessageText($messages),
         ];
     }
 
@@ -385,6 +439,22 @@ class ConversationManager {
      * @return string
      */
     private function buildConversationSummary(array $messages): string {
+        $firstUserMessage = $this->extractFirstUserMessageText($messages);
+        if ($firstUserMessage === '') {
+            return 'Untitled conversation';
+        }
+
+        if (function_exists('mb_strimwidth')) {
+            return mb_strimwidth($firstUserMessage, 0, 120, '...');
+        }
+
+        return strlen($firstUserMessage) > 120 ? substr($firstUserMessage, 0, 117) . '...' : $firstUserMessage;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $messages
+     */
+    private function extractFirstUserMessageText(array $messages): string {
         foreach ($messages as $message) {
             if (!is_array($message)) {
                 continue;
@@ -397,15 +467,9 @@ class ConversationManager {
             }
 
             $normalized = preg_replace(self::REGEX_WHITESPACE, ' ', $content);
-            $normalized = is_string($normalized) ? trim($normalized) : $content;
-
-            if (function_exists('mb_strimwidth')) {
-                return mb_strimwidth($normalized, 0, 120, '...');
-            }
-
-            return strlen($normalized) > 120 ? substr($normalized, 0, 117) . '...' : $normalized;
+            return is_string($normalized) ? trim($normalized) : $content;
         }
 
-        return 'Untitled conversation';
+        return '';
     }
 }

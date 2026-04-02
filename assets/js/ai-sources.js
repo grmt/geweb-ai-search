@@ -61,6 +61,59 @@
     }
 
     globalThis.GewebAISearchSourceMethods = {
+        getSourceDestination(url, matchPhrase) {
+            const normalizedUrl = this.normalizeManagedSourceUrl(url);
+            if (!normalizedUrl) {
+                return null;
+            }
+
+            const phrase = String(matchPhrase || '').trim();
+            const parsed = safeParseUrl(normalizedUrl);
+            if (!parsed) {
+                return null;
+            }
+
+            const pathname = parsed.pathname.toLowerCase();
+            const documentExtensionMatch = /\.([a-z0-9]{2,8})$/i.exec(pathname);
+            const documentExtensions = new Set(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'csv', 'rtf']);
+            const isDocument = !!(documentExtensionMatch && documentExtensions.has(String(documentExtensionMatch[1] || '').toLowerCase()));
+
+            if (isDocument) {
+                return {
+                    url: phrase ? `${normalizedUrl}#search=${encodeURIComponent(phrase)}` : normalizedUrl,
+                    target: '_blank',
+                };
+            }
+
+            if (parsed.hash) {
+                parsed.searchParams.delete('geweb_ai_match');
+                return {
+                    url: parsed.toString(),
+                    target: '_self',
+                };
+            }
+
+            if (phrase) {
+                parsed.searchParams.set('geweb_ai_match', phrase);
+            } else {
+                parsed.searchParams.delete('geweb_ai_match');
+            }
+
+            return {
+                url: parsed.toString(),
+                target: '_self',
+            };
+        },
+
+        openSourceDestination(url, matchPhrase) {
+            const destination = this.getSourceDestination(url, matchPhrase);
+            if (!destination) {
+                return;
+            }
+
+            globalThis.open(destination.url, destination.target, destination.target === '_blank' ? 'noopener,noreferrer' : undefined);
+        },
+
         buildResponseDetails(meta) {
             const normalizedMeta = normalizeObject(meta);
             if (!Object.keys(normalizedMeta).length) {
@@ -68,52 +121,132 @@
             }
 
             const $details = $('<div class="geweb-ai-response-details"></div>');
-            $details.append($('<div class="geweb-ai-response-details-title"></div>').text(t('responseDetails', 'Response details')));
+            const $header = $('<div class="geweb-ai-response-details-header"></div>');
+            $header.append($('<div class="geweb-ai-response-details-title"></div>').text(t('responseDetails', 'Response details')));
+            $header.append(
+                $('<button type="button" class="geweb-ai-response-details-close" aria-label="Close details" title="Close details"></button>')
+                    .append($('<span aria-hidden="true">×</span>'))
+            );
+            $details.append($header);
+            let hasContentSection = false;
 
             const summaryEntries = this.buildCompactResponseMetaEntries(normalizedMeta);
             if (summaryEntries.length) {
-                const $list = $('<dl class="geweb-ai-response-details-list"></dl>');
-                summaryEntries.forEach((entry) => {
-                    $list.append($('<dt></dt>').text(entry.label));
-                    $list.append($('<dd></dd>').text(entry.value));
-                });
-                $details.append($list);
+                $details.append(this.buildResponseDetailsSection(
+                    t('responseMetaTitle', 'Response metadata'),
+                    this.buildResponseDetailsList(summaryEntries),
+                    true
+                ));
+                hasContentSection = true;
             }
 
             const grounding = this.getGroundingMetadata(normalizedMeta);
             const groundingChunks = this.getGroundingChunks(grounding);
             if (groundingChunks.length) {
                 const $section = $('<div class="geweb-ai-grounding-section"></div>');
-                $section.append($('<div class="geweb-ai-grounding-section-title"></div>').text('Grounding chunks'));
                 const $chunkList = $('<ol class="geweb-ai-grounding-chunk-list"></ol>');
                 groundingChunks.forEach((chunk) => {
                     const $item = $('<li></li>');
-                    $item.append($('<div class="geweb-ai-grounding-chunk-label"></div>').text(
+                    const matchPhrase = this.extractContextMatchPhrase(chunk.rawText || chunk.text || '');
+                    const $label = $('<div class="geweb-ai-grounding-chunk-label"></div>').text(
                         this.getPreferredSourceLabel(chunk.title, chunk.url || '')
-                    ));
+                    );
+                    $item.append($label);
                     if (chunk.text) {
-                        $item.append($('<div class="geweb-ai-grounding-chunk-text"></div>').text(chunk.text));
+                        const $text = $('<div class="geweb-ai-grounding-chunk-text"></div>').html(
+                            this.highlightMatchPhraseInHtml(
+                                this.renderFormattedChunkHtml(chunk.rawText || chunk.text),
+                                matchPhrase
+                            )
+                        );
+                        if (chunk.url) {
+                            $item.addClass('geweb-ai-grounding-chunk-item--link');
+                            $item.attr('tabindex', '0');
+                            $item.attr('role', 'link');
+                            $item.attr('title', matchPhrase ? `Open at first match: ${matchPhrase}` : 'Open source');
+                            $item.on('click', () => this.openSourceDestination(chunk.url, matchPhrase));
+                            $item.on('keydown', (event) => {
+                                if (event.key === 'Enter' || event.key === ' ') {
+                                    event.preventDefault();
+                                    this.openSourceDestination(chunk.url, matchPhrase);
+                                }
+                            });
+                        }
+                        $item.append($text);
                     }
                     $chunkList.append($item);
                 });
                 $section.append($chunkList);
-                $details.append($section);
+                $details.append(this.buildResponseDetailsSection(
+                    `${t('groundingChunksTitle', 'Grounding chunks')} (${groundingChunks.length})`,
+                    $section,
+                    true
+                ));
+                hasContentSection = true;
             }
 
-            if (!$details.children().length) {
+            if (!hasContentSection) {
                 const entries = this.flattenResponseMeta(normalizedMeta);
                 if (!entries.length) {
                     return null;
                 }
-                const $list = $('<dl class="geweb-ai-response-details-list"></dl>');
-                entries.forEach((entry) => {
-                    $list.append($('<dt></dt>').text(entry.label));
-                    $list.append($('<dd></dd>').text(entry.value));
-                });
-                $details.append($list);
+                $details.append(this.buildResponseDetailsSection(
+                    t('responseMetaTitle', 'Response metadata'),
+                    this.buildResponseDetailsList(entries),
+                    true
+                ));
             }
 
             return $details;
+        },
+
+        buildResponseDetailsSection(title, $content, isOpen) {
+            const $section = $('<details class="geweb-ai-response-details-section"></details>');
+            if (isOpen) {
+                $section.attr('open', 'open');
+            }
+
+            const $summary = $('<summary class="geweb-ai-response-details-section-summary"></summary>');
+            $summary.append($('<span class="geweb-ai-response-details-section-title"></span>').text(title));
+            $section.append($summary);
+            $section.append($('<div class="geweb-ai-response-details-section-body"></div>').append($content));
+            return $section;
+        },
+
+        buildResponseDetailsList(entries) {
+            const $list = $('<dl class="geweb-ai-response-details-list"></dl>');
+            entries.forEach((entry) => {
+                const explanation = this.getResponseDetailsExplanation(entry.label);
+                const $row = $('<div class="geweb-ai-response-details-row"></div>');
+                const $term = $('<dt></dt>').text(entry.label);
+                const $value = $('<dd></dd>').text(entry.value);
+                if (explanation) {
+                    $term.attr('title', explanation);
+                    $value.attr('title', explanation);
+                }
+                $row.append($term, $value);
+                $list.append($row);
+            });
+            return $list;
+        },
+
+        getResponseDetailsExplanation(label) {
+            const explanations = {
+                'Provider': 'The AI service that produced this answer, for example Google Gemini. This helps explain which backend handled the request and where provider-specific response metadata comes from.',
+                'Model': 'The exact model variant that generated the answer. Different models can behave differently in speed, style, context handling, and citation quality, so this tells you which one was actually used.',
+                'Prompt name': 'The human-readable name of the prompt configuration that was active for this answer. If you used a one-off override in the chat settings, this may describe that temporary override instead of a saved default prompt.',
+                'Prompt': 'The effective instruction text that was sent along with your question. This is the prompt the model actually received after prompt selection and any temporary override were applied.',
+                'Prompt scope': 'Where the effective prompt came from. For example, it may be a global default prompt, a model-specific prompt, or a temporary prompt override for just this one question.',
+                'Prompt mode': 'How the selected prompt was applied. For example, a base/default mode means the normal prompt variant was used, while an override mode means a temporary or replacement instruction took precedence.',
+                'Response ID': 'The provider-specific identifier for this generated response. This can be useful for debugging, tracing provider logs, or comparing repeated runs of the same question.',
+                'Finish': 'Why the model stopped generating text. A normal value such as STOP usually means the answer finished naturally, while other values can hint at truncation, limits, or provider-side interruption.',
+                'Tokens': 'The total token usage reported for this answer. This is a rough measure of how much prompt and response text the model processed, and it often correlates with cost and context size.',
+                'Estimated cost': 'A best-effort estimate of the cost of this response based on the reported model usage. Treat it as approximate rather than exact billing.',
+                'Grounding chunks': 'How many retrieved source chunks were attached to the answer generation step. More chunks usually means the model had more candidate evidence available from your indexed content.',
+                'Grounding supports': 'How many provider support references linked parts of the answer back to retrieved grounding chunks. This can help indicate how much of the answer was explicitly tied to retrieved evidence.'
+            };
+
+            return explanations[String(label || '').trim()] || '';
         },
 
         buildCompactResponseMetaEntries(meta) {
@@ -170,15 +303,322 @@
             const chunks = Array.isArray(grounding?.groundingChunks) ? grounding.groundingChunks : [];
             return chunks.map((chunk) => {
                 const context = normalizeObject(chunk?.retrievedContext);
+                const rawText = String(context.text || '');
                 return {
                     title: String(context.title || ''),
-                    text: this.formatMetaValue(String(context.text || '')),
+                    text: this.formatMetaValue(rawText),
+                    rawText: rawText,
                     url: String(context.uri || context.url || ''),
                 };
             });
         },
 
-        decorateAnswerWithGroundingFootnotes(answerHtml, meta, sourceFootnoteMap) {
+        escapeHtml(text) {
+            return String(text || '')
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#39;');
+        },
+
+        decodeHtmlEntities(text) {
+            const parser = document.createElement('textarea');
+            parser.innerHTML = String(text || '');
+            return parser.value;
+        },
+
+        stripHtmlAndMarkdown(text) {
+            const htmlContainer = document.createElement('div');
+            htmlContainer.innerHTML = String(text || '');
+            const withoutHtml = String(htmlContainer.textContent || htmlContainer.innerText || '');
+            return withoutHtml
+                .replaceAll(/!\[[^\]]*]\(([^)]+)\)/g, ' ')
+                .replaceAll(/\[([^\]]+)]\(([^)]+)\)/g, '$1')
+                .replaceAll(/[*_~`>#-]+/g, ' ')
+                .replaceAll(/\s+/g, ' ')
+                .trim();
+        },
+
+        extractContextMatchPhrase(text) {
+            const normalized = this.stripHtmlAndMarkdown(this.decodeHtmlEntities(text));
+            if (!normalized) {
+                return '';
+            }
+
+            return normalized.split(/\s+/).slice(0, 5).join(' ');
+        },
+
+        isDocumentLikeTitle(title) {
+            return /^.+\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|csv|rtf)$/i.test(String(title || '').trim());
+        },
+
+        extractDocumentLabelFromTitle(title) {
+            const normalizedTitle = String(title || '').trim();
+            if (!normalizedTitle) {
+                return '';
+            }
+
+            const prefixedDocumentMatch = /^(\d+)-(.+\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|csv|rtf))$/i.exec(normalizedTitle);
+            if (prefixedDocumentMatch?.[2]) {
+                return String(prefixedDocumentMatch[2]).trim();
+            }
+
+            return this.isDocumentLikeTitle(normalizedTitle) ? normalizedTitle : '';
+        },
+
+        normalizeDocumentContextText(text) {
+            const normalized = String(text || '').replaceAll(/\r\n?/g, '\n').trim();
+            if (!normalized) {
+                return '';
+            }
+
+            const protectedBreak = '\uE000';
+            const startsNewBlock = (line) => {
+                const trimmed = String(line || '').trim();
+                if (!trimmed) {
+                    return true;
+                }
+
+                return (
+                    /^(#{1,6})\s+/.test(trimmed) ||
+                    /^[-*]\s+/.test(trimmed) ||
+                    /^\d+\.\s+/.test(trimmed) ||
+                    /^---+$/.test(trimmed) ||
+                    /^\|.+\|$/.test(trimmed) ||
+                    /^\*\*[^*]+\*\*:?$/.test(trimmed) ||
+                    /^[A-Z][A-Z\s/&-]{3,}:?$/.test(trimmed)
+                );
+            };
+            const endsLikeWrappedLine = (line) => {
+                const trimmed = String(line || '').trim();
+                if (!trimmed) {
+                    return false;
+                }
+
+                return !/[.!?;:]$/.test(trimmed);
+            };
+            const startsLikeContinuation = (line) => {
+                const trimmed = String(line || '').trim();
+                if (!trimmed) {
+                    return false;
+                }
+
+                return /^[a-zà-ÿ(€\d"'“‘]/i.test(trimmed);
+            };
+
+            const lines = normalized.split('\n');
+            const rebuilt = [];
+
+            lines.forEach((line, index) => {
+                const trimmedLine = String(line || '').trim();
+                if (!trimmedLine) {
+                    rebuilt.push(protectedBreak);
+                    return;
+                }
+
+                if (!rebuilt.length) {
+                    rebuilt.push(trimmedLine);
+                    return;
+                }
+
+                const previous = rebuilt.at(-1);
+                const nextOriginal = lines[index + 1] || '';
+                const shouldJoin =
+                    previous !== protectedBreak &&
+                    !startsNewBlock(trimmedLine) &&
+                    endsLikeWrappedLine(previous) &&
+                    startsLikeContinuation(trimmedLine) &&
+                    !startsNewBlock(nextOriginal);
+
+                if (shouldJoin) {
+                    rebuilt[rebuilt.length - 1] = `${String(previous).trim()} ${trimmedLine}`;
+                    return;
+                }
+
+                rebuilt.push(trimmedLine);
+            });
+
+            return rebuilt
+                .join('\n')
+                .replaceAll(new RegExp(String.raw`${protectedBreak}\n*`, 'g'), '\n')
+                .replaceAll(/\n{2,}/g, '\n')
+                .replaceAll(/[ \t]{2,}/g, ' ')
+                .replaceAll(/\s+\n/g, '\n')
+                .trim();
+        },
+
+        renderFormattedChunkHtml(text) {
+            const sourceText = String(text || '').trim();
+            if (!sourceText) {
+                return '';
+            }
+
+            if (/<[a-z!/][^>]*>/i.test(sourceText)) {
+                return this.sanitizeChunkHtml(sourceText);
+            }
+
+            return this.renderMarkdownChunkHtml(sourceText);
+        },
+
+        normalizeChunkDisplayText(text) {
+            return String(text || '')
+                .replaceAll(/\\([*_`[\]])/g, '$1')
+                .replaceAll(/\\EUR\b/gi, 'EUR')
+                .replaceAll(/(?:^|[\s(])EUR(?=\s*\d)/g, (match) => match.replace('EUR', '€'))
+                .replaceAll(/(\d)\n(?=\d)/g, '$1 ')
+                .replaceAll(/([^\s])\n(?=[^\s#>*-])/g, '$1 ')
+                .replaceAll(/\n(?=[a-zà-ÿ])/gi, ' ')
+                .replaceAll(/\s+\|/g, ' |')
+                .replaceAll(/\|\s+/g, '| ')
+                .replaceAll(/\s{2,}/g, ' ');
+        },
+
+        highlightMatchPhraseInHtml(html, matchPhrase) {
+            const phrase = String(matchPhrase || '').trim();
+            if (!html || !phrase) {
+                return html;
+            }
+
+            const container = document.createElement('div');
+            container.innerHTML = String(html || '');
+            const normalizedPhrase = phrase.toLowerCase();
+            const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+            let matchedNode = null;
+
+            /* eslint-disable no-cond-assign */
+            while ((matchedNode = walker.nextNode())) {
+                const rawText = String(matchedNode.textContent || '');
+                const matchIndex = rawText.toLowerCase().indexOf(normalizedPhrase);
+                if (matchIndex < 0) {
+                    continue;
+                }
+
+                const range = document.createRange();
+                range.setStart(matchedNode, matchIndex);
+                range.setEnd(matchedNode, matchIndex + phrase.length);
+                const highlight = document.createElement('mark');
+                highlight.className = 'geweb-ai-inline-match';
+                range.surroundContents(highlight);
+                break;
+            }
+            /* eslint-enable no-cond-assign */
+
+            return container.innerHTML;
+        },
+
+        sanitizeChunkHtml(html) {
+            const allowed = new Set(['p', 'br', 'b', 'strong', 'i', 'em', 'ul', 'ol', 'li', 'a', 'code', 'pre']);
+            const container = document.createElement('div');
+            container.innerHTML = String(html || '');
+            container.querySelectorAll('*').forEach((element) => {
+                const tagName = element.tagName.toLowerCase();
+                if (!allowed.has(tagName)) {
+                    element.replaceWith(document.createTextNode(String(element.textContent || '')));
+                    return;
+                }
+
+                Array.from(element.attributes).forEach((attribute) => {
+                    if (tagName === 'a' && attribute.name === 'href') {
+                        if (!/^https?:\/\//i.test(attribute.value)) {
+                            element.removeAttribute('href');
+                        }
+                        return;
+                    }
+
+                    if (!['href', 'target', 'rel'].includes(attribute.name)) {
+                        element.removeAttribute(attribute.name);
+                    }
+                });
+
+                if (tagName === 'a') {
+                    element.setAttribute('target', '_blank');
+                    element.setAttribute('rel', 'noopener noreferrer');
+                }
+            });
+
+            return container.innerHTML;
+        },
+
+        renderMarkdownChunkHtml(text) {
+            const escaped = this.escapeHtml(
+                this.normalizeChunkMarkdownText(
+                    this.normalizeChunkDisplayText(this.decodeHtmlEntities(text))
+                )
+            );
+            const lines = escaped.split(/\r?\n/);
+            const parts = [];
+            let listItems = [];
+
+            const flushList = () => {
+                if (!listItems.length) {
+                    return;
+                }
+
+                parts.push(`<ul>${listItems.join('')}</ul>`);
+                listItems = [];
+            };
+
+            lines.forEach((line) => {
+                const trimmed = line.trim();
+                if (!trimmed) {
+                    flushList();
+                    return;
+                }
+
+                const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
+                if (headingMatch) {
+                    flushList();
+                    const level = Math.min(6, headingMatch[1].length);
+                    parts.push(`<h${level}>${this.applyInlineMarkdown(headingMatch[2])}</h${level}>`);
+                    return;
+                }
+
+                if (/^-{3,}$/.test(trimmed)) {
+                    flushList();
+                    parts.push('<hr>');
+                    return;
+                }
+
+                const listMatch = trimmed.match(/^[-*]\s+(.+)$/);
+                if (listMatch) {
+                    listItems.push(`<li>${this.applyInlineMarkdown(listMatch[1])}</li>`);
+                    return;
+                }
+
+                flushList();
+                parts.push(`<p>${this.applyInlineMarkdown(trimmed)}</p>`);
+            });
+
+            flushList();
+            return parts.join('');
+        },
+
+        applyInlineMarkdown(text) {
+            return String(text || '')
+                .replaceAll(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                .replaceAll(/__([^_]+)__/g, '<strong>$1</strong>')
+                .replaceAll(/(^|[\s(])\*([^*]+)\*(?=[\s).,!?;:]|$)/g, '$1<em>$2</em>')
+                .replaceAll(/(^|[\s(])_([^_]+)_(?=[\s).,!?;:]|$)/g, '$1<em>$2</em>')
+                .replaceAll(/`([^`]+)`/g, '<code>$1</code>')
+                .replaceAll(/(?:^|[\s(])EUR(?=\s*\d)/g, (match) => match.replace('EUR', '€'))
+                .replaceAll(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+                .replaceAll(/\[([^\]]+)\]\((#[^)]+)\)/g, '<a href="$2">$1</a>');
+        },
+
+        normalizeChunkMarkdownText(text) {
+            return String(text || '')
+                .replaceAll(/\r\n?/g, '\n')
+                .replaceAll(/\s+---\s+/g, '\n---\n')
+                .replaceAll(/\s+(#{1,6}\s+)/g, '\n$1')
+                .replaceAll(/(\[[^\]]+]\([^)]+\))(?=[A-Z0-9#])/g, '$1\n')
+                .replaceAll(/(\d+\.\s+[^\n]+)(?=\d+\.\s+)/g, '$1\n')
+                .replaceAll(/([a-z0-9])(\[[^\]]+]\([^)]+\))/gi, '$1 $2')
+                .replaceAll(/\n{3,}/g, '\n\n')
+                .trim();
+        },
+
+        decorateAnswerWithGroundingFootnotes(answerHtml, meta, sourceFootnoteMap, sources) {
             const html = String(answerHtml || '');
             if (!html) {
                 return '';
@@ -187,14 +627,29 @@
             const grounding = this.getGroundingMetadata(meta);
             const supports = Array.isArray(grounding?.groundingSupports) ? grounding.groundingSupports : [];
             if (!supports.length) {
-                return html;
+                return this.appendFallbackFootnoteGroup(html, this.getFallbackFootnoteNumbers(sourceFootnoteMap, sources));
             }
 
             const container = document.createElement('div');
             container.innerHTML = html;
             const blocks = Array.from(container.querySelectorAll('p, li')).filter((node) => String(node.textContent || '').trim() !== '');
             if (!blocks.length) {
-                return html;
+                const allFootnotes = supports.reduce((accumulator, support) => {
+                    const indices = Array.isArray(support?.groundingChunkIndices)
+                        ? support.groundingChunkIndices.filter((value) => Number.isInteger(value) && value >= 0)
+                        : [];
+                    indices.forEach((index) => {
+                        const localFootnote = index + 1;
+                        const footnote = Number(sourceFootnoteMap?.[localFootnote]) || localFootnote;
+                        if (!accumulator.includes(footnote)) {
+                            accumulator.push(footnote);
+                        }
+                    });
+                    return accumulator;
+                }, []).sort((a, b) => a - b);
+
+                this.appendFallbackFootnoteMarker(container, allFootnotes);
+                return container.innerHTML;
             }
 
             const blockFootnotes = new Map();
@@ -229,10 +684,66 @@
                 }
                 const marker = document.createElement('span');
                 marker.className = 'geweb-ai-footnote-group';
-                marker.innerHTML = footnotes.map((number) => `<sup class="geweb-ai-footnote-ref" data-footnote="${number}" title="Show source reference ${number}">[${number}]</sup>`).join('');
+                marker.innerHTML = footnotes.map((number) => `<sup class="geweb-ai-footnote-ref" data-footnote="${number}">[${number}]</sup>`).join('');
                 block.appendChild(marker);
             });
 
+            if (!blockFootnotes.size) {
+                const allFootnotes = supports.reduce((accumulator, support) => {
+                    const indices = Array.isArray(support?.groundingChunkIndices)
+                        ? support.groundingChunkIndices.filter((value) => Number.isInteger(value) && value >= 0)
+                        : [];
+                    indices.forEach((index) => {
+                        const localFootnote = index + 1;
+                        const footnote = Number(sourceFootnoteMap?.[localFootnote]) || localFootnote;
+                        if (!accumulator.includes(footnote)) {
+                            accumulator.push(footnote);
+                        }
+                    });
+                    return accumulator;
+                }, []).sort((a, b) => a - b);
+
+                this.appendFallbackFootnoteMarker(container, allFootnotes);
+            }
+
+            return container.innerHTML;
+        },
+
+        getFallbackFootnoteNumbers(sourceFootnoteMap, sources) {
+            const mappedFootnotes = Object.values(sourceFootnoteMap || {})
+                .map((value) => Number(value || 0))
+                .filter((value) => Number.isInteger(value) && value > 0);
+
+            if (mappedFootnotes.length) {
+                return [...new Set(mappedFootnotes)].sort((a, b) => a - b);
+            }
+
+            const sourceFootnotes = (Array.isArray(sources) ? sources : [])
+                .map((source, index) => Number(source?.footnote || 0) || (index + 1))
+                .filter((value) => Number.isInteger(value) && value > 0);
+
+            return [...new Set(sourceFootnotes)].sort((a, b) => a - b);
+        },
+
+        appendFallbackFootnoteMarker(container, footnotes) {
+            if (!container || !Array.isArray(footnotes) || !footnotes.length) {
+                return;
+            }
+
+            const marker = document.createElement('p');
+            marker.className = 'geweb-ai-footnote-group geweb-ai-footnote-group--fallback';
+            marker.innerHTML = footnotes.map((number) => `<sup class="geweb-ai-footnote-ref" data-footnote="${number}">[${number}]</sup>`).join('');
+            container.appendChild(marker);
+        },
+
+        appendFallbackFootnoteGroup(html, footnotes) {
+            if (!Array.isArray(footnotes) || !footnotes.length) {
+                return html;
+            }
+
+            const container = document.createElement('div');
+            container.innerHTML = html;
+            this.appendFallbackFootnoteMarker(container, footnotes);
             return container.innerHTML;
         },
 
@@ -380,6 +891,7 @@
                             ...source,
                             footnote: registry.length + 1,
                             historyIndices: [historyIndex],
+                            contexts: this.buildSourceContexts(source),
                         });
                         return;
                     }
@@ -401,10 +913,66 @@
                     if (!registryEntry.historyIndices.includes(historyIndex)) {
                         registryEntry.historyIndices.push(historyIndex);
                     }
+                    registryEntry.contexts = this.mergeSourceContexts(registryEntry.contexts, this.buildSourceContexts(source));
                 });
             });
 
             return registry;
+        },
+
+        buildSourceContexts(source) {
+            if (Array.isArray(source?.contexts) && source.contexts.length) {
+                return source.contexts
+                    .filter((context) => context && typeof context === 'object')
+                    .map((context) => {
+                        const title = String(context.title || source?.title || '').trim();
+                        const documentLabel = String(context.documentLabel || source?.documentLabel || this.extractDocumentLabelFromTitle(title)).trim();
+                        const rawText = String(context.text || context.snippet || '').trim();
+                        const text = documentLabel ? this.normalizeDocumentContextText(rawText) : rawText;
+                        const url = String(context.url || source?.documentUrl || source?.url || '').trim();
+
+                        return {
+                            title,
+                            text,
+                            matchPhrase: this.extractContextMatchPhrase(text),
+                            url,
+                            documentLabel,
+                        };
+                    })
+                    .filter((context) => context.title || context.text || context.url);
+            }
+
+            const snippet = String(source?.snippet || '').trim();
+            if (!snippet) {
+                return [];
+            }
+
+            const documentLabel = String(source?.documentLabel || this.extractDocumentLabelFromTitle(source?.title || '')).trim();
+            const text = documentLabel ? this.normalizeDocumentContextText(snippet) : snippet;
+            return [{
+                title: String(source?.title || '').trim(),
+                text,
+                matchPhrase: this.extractContextMatchPhrase(text),
+                url: String(source?.documentUrl || source?.url || '').trim(),
+                documentLabel,
+            }];
+        },
+
+        mergeSourceContexts(existingContexts, nextContexts) {
+            const merged = Array.isArray(existingContexts) ? existingContexts.slice() : [];
+            const seen = new Set(merged.map((context) => `${String(context?.title || '')}||${String(context?.text || '')}||${String(context?.url || '')}`));
+
+            (Array.isArray(nextContexts) ? nextContexts : []).forEach((context) => {
+                const key = `${String(context?.title || '')}||${String(context?.text || '')}||${String(context?.url || '')}`;
+                if (!key.trim() || seen.has(key)) {
+                    return;
+                }
+
+                seen.add(key);
+                merged.push(context);
+            });
+
+            return merged;
         },
 
         getResponseSourceFootnoteMap(sources, answerText, responseMeta) {
@@ -446,49 +1014,227 @@
 
             const $list = $('<ol class="geweb-ai-source-list"></ol>');
             normalizedSources.forEach((source) => {
-                const title = this.getPreferredSourceLabel(source.title, source.url);
-                const url = source.url;
-                const $item = $('<li></li>');
-                const $itemHeader = $('<div class="geweb-ai-source-item-header"></div>');
-                const $toggle = $('<button type="button" class="geweb-ai-source-link geweb-ai-source-toggle"></button>');
-                const $label = $('<span class="geweb-ai-source-link-label"></span>').text(title);
-                const footnote = Number(source.footnote || 0);
-                const snippet = String(source.snippet || '').trim();
-                const sourceLabel = title || url || `Source ${footnote || ''}`.trim();
-
-                $toggle.attr('aria-label', `Show context for ${sourceLabel}`);
-                $toggle.append($label);
-
-                if (url) {
-                    $item.attr('data-source-url', url);
-                    const $openLink = $('<a class="geweb-ai-source-open" rel="noopener noreferrer"></a>');
-                    $openLink.attr('href', url);
-                    $openLink.attr('aria-label', `Open source ${sourceLabel}`);
-                    $openLink.attr('title', `Open source ${sourceLabel}`);
-                    $openLink.text('Open');
-                    $itemHeader.append($openLink);
-                }
-
-                if (footnote > 0) {
-                    $item.attr('data-source-footnote', `${footnote}`);
-                }
-
-                $toggle.on('click', (event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    this.activateSourceReferenceItem($item);
-                });
-
-                $itemHeader.prepend($toggle);
-                $item.append($itemHeader);
-                if (snippet) {
-                    $item.append($('<div class="geweb-ai-source-snippet"></div>').text(snippet));
-                }
-                $list.append($item);
+                $list.append(this.buildSourceListItem(source));
             });
 
             this.$sourcesBox.append($list);
             this.hydrateResolvedSourceReferences($list, normalizedSources);
+        },
+
+        buildSourceListItem(source) {
+            const title = this.getPreferredSourceLabel(source.title, source.url);
+            const url = source.url;
+            const footnote = Number(source.footnote || 0);
+            const snippet = String(source.snippet || '').trim();
+            const contexts = Array.isArray(source.contexts) ? source.contexts : [];
+            const previewSnippet = snippet || String(contexts[0]?.text || '').trim();
+            const sourceLabel = title || url || `Source ${footnote || ''}`.trim();
+            const referenceHint = this.getManagedSourceReferenceHint(url);
+            const firstMatchPhrase = contexts[0]?.matchPhrase || '';
+            const $item = $('<li></li>');
+            const $itemHeader = $('<div class="geweb-ai-source-item-header"></div>');
+            const $toggle = $('<button type="button" class="geweb-ai-source-link geweb-ai-source-toggle"></button>');
+
+            $toggle.attr('aria-label', `Show context for ${sourceLabel}`);
+            $toggle.append($('<span class="geweb-ai-source-link-label"></span>').text(title));
+            if (referenceHint) {
+                $toggle.append($('<span class="geweb-ai-source-link-hint"></span>').text(referenceHint));
+            }
+            this.applySourceItemAttributes($item, { footnote, title, snippet, previewSnippet, url, contexts });
+            this.bindSourceToggleInteractions($toggle, $item, url, firstMatchPhrase);
+            $itemHeader.prepend($toggle);
+            $item.append($itemHeader);
+
+            const $details = this.buildSourceDetails(url, contexts, previewSnippet, referenceHint, $item);
+            if ($details.children().length) {
+                $item.append($details);
+            }
+
+            return $item;
+        },
+
+        applySourceItemAttributes($item, sourceInfo) {
+            const { footnote, title, snippet, previewSnippet, url, contexts } = sourceInfo;
+            if (footnote > 0) {
+                $item.attr('data-source-footnote', `${footnote}`);
+            }
+            if (title) {
+                $item.attr('data-source-title', title);
+            }
+            if (snippet) {
+                $item.attr('data-source-snippet', snippet);
+            }
+            if (!snippet && previewSnippet) {
+                $item.attr('data-source-snippet', previewSnippet);
+            }
+            if (url) {
+                $item.attr('data-source-url', url);
+            }
+            if (contexts.length) {
+                $item.attr('data-source-context-count', `${contexts.length}`);
+                $item.attr('data-source-match-phrases', JSON.stringify(contexts.map((context) => String(context?.matchPhrase || '')).filter(Boolean)));
+            }
+        },
+
+        bindSourceToggleInteractions($toggle, $item, url, matchPhrase) {
+            const activateSource = (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                this.activateSourceReferenceItem($item);
+            };
+
+            const previewSource = () => {
+                this.previewSourceReferenceItem($item);
+            };
+
+            const clearPreview = (event) => {
+                const relatedTarget = event?.relatedTarget;
+                if (relatedTarget && $item.get(0)?.contains?.(relatedTarget)) {
+                    return;
+                }
+
+                this.clearSourceReferencePreview($item);
+            };
+
+            const handleSourceToggle = (event) => {
+                if ($item.hasClass('is-active') && url) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    this.openSourceDestination(url, matchPhrase);
+                    return;
+                }
+
+                activateSource(event);
+            };
+
+            $toggle.on('mouseenter focus', previewSource);
+            $toggle.on('click', handleSourceToggle);
+            $toggle.on('keydown', (event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') {
+                    return;
+                }
+
+                handleSourceToggle(event);
+            });
+
+            $item.on('mouseenter focusin', previewSource);
+            $item.on('mouseleave focusout', clearPreview);
+        },
+
+        buildSourceDetails(url, contexts, previewSnippet, referenceHint, $sourceItem) {
+            const $details = $('<div class="geweb-ai-source-details"></div>');
+            const $detailsHeader = $('<div class="geweb-ai-source-details-header"></div>');
+            const $closeButton = $('<button type="button" class="geweb-ai-source-details-close" aria-label="Close source context" title="Close source context"></button>');
+            $closeButton.append($('<span aria-hidden="true">×</span>'));
+            $closeButton.on('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                this.deactivateSourceReferenceItems();
+            });
+            $detailsHeader.append($closeButton);
+            $details.append($detailsHeader);
+
+            const $contexts = contexts.length > 1
+                ? this.buildSourceContextList(url, contexts, $sourceItem)
+                : this.buildSingleSourceSnippet(url, contexts[0], previewSnippet, $sourceItem);
+
+            if ($contexts) {
+                $details.append($contexts);
+            };
+
+            return $details;
+        },
+
+        buildSourceContextList(url, contexts, $sourceItem) {
+            const $contextList = $('<ol class="geweb-ai-source-context-list"></ol>');
+            contexts.forEach((context, contextIndex) => {
+                const $contextItem = this.buildSourceContextItem(url, context, contextIndex, $sourceItem);
+                if ($contextItem) {
+                    $contextList.append($contextItem);
+                }
+            });
+
+            return $contextList.children().length ? $contextList : null;
+        },
+
+        buildSourceContextItem(url, context, contextIndex, $sourceItem) {
+            const contextText = String(context?.text || '').trim();
+            if (!contextText) {
+                return null;
+            }
+
+            const matchPhrase = String(context?.matchPhrase || '');
+            const targetUrl = String(context?.url || url || '').trim();
+            const documentLabel = String(context?.documentLabel || '').trim();
+            const $contextItem = $('<li class="geweb-ai-source-context-item"></li>');
+            $contextItem.append($('<div class="geweb-ai-source-context-label"></div>').text(`${t('groundingContextTitle', 'Context')} ${contextIndex + 1}`));
+            if (documentLabel) {
+                $contextItem.append($('<div class="geweb-ai-source-context-document"></div>').text(documentLabel));
+            }
+            if (matchPhrase) {
+                $contextItem.attr('data-source-match-phrase', matchPhrase);
+            }
+
+            this.bindSourceContentInteraction($contextItem, targetUrl, matchPhrase, $sourceItem);
+            $contextItem.append($('<div class="geweb-ai-source-snippet"></div>').html(
+                this.highlightMatchPhraseInHtml(this.renderFormattedChunkHtml(contextText), matchPhrase)
+            ));
+            return $contextItem;
+        },
+
+        buildSingleSourceSnippet(url, context, previewSnippet, $sourceItem) {
+            const snippetText = String(context?.text || previewSnippet || '').trim();
+            if (!snippetText) {
+                return null;
+            }
+
+            const matchPhrase = String(context?.matchPhrase || '');
+            const targetUrl = String(context?.url || url || '').trim();
+            const documentLabel = String(context?.documentLabel || '').trim();
+            const $wrapper = $('<div class="geweb-ai-source-single-context"></div>');
+            if (documentLabel) {
+                $wrapper.append($('<div class="geweb-ai-source-context-document"></div>').text(documentLabel));
+            }
+            const $snippet = $('<div class="geweb-ai-source-snippet"></div>').html(
+                this.highlightMatchPhraseInHtml(this.renderFormattedChunkHtml(snippetText), matchPhrase)
+            );
+            if (matchPhrase) {
+                $snippet.attr('data-source-match-phrase', matchPhrase);
+            }
+
+            this.bindSourceContentInteraction($snippet, targetUrl, matchPhrase, $sourceItem);
+            $wrapper.append($snippet);
+            return $wrapper;
+        },
+
+        bindSourceContentInteraction($element, url, matchPhrase, $sourceItem) {
+            if (!url) {
+                return;
+            }
+
+            const activateOrOpen = (event) => {
+                if (!$sourceItem?.length || !$sourceItem.hasClass('is-active')) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if ($sourceItem?.length) {
+                        this.activateSourceReferenceItem($sourceItem);
+                    }
+                    return;
+                }
+
+                this.openSourceDestination(url, matchPhrase);
+            };
+
+            $element.attr('tabindex', '0');
+            $element.attr('role', 'link');
+            $element.attr('title', matchPhrase ? `Open at first match: ${matchPhrase}` : 'Open source');
+            $element.on('click', activateOrOpen);
+            $element.on('keydown', (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    activateOrOpen(event);
+                }
+            });
         },
 
         async hydrateResolvedSourceReferences($list, sources) {
@@ -530,30 +1276,52 @@
             }
 
             $list.find('li[data-source-url]').each((_, item) => {
-                const $item = $(item);
-                const originalUrl = String($item.attr('data-source-url') || '').trim();
-                const reference = originalUrl ? this.sourceReferenceCache[originalUrl] : null;
-                if (!reference || typeof reference !== 'object') {
-                    return;
-                }
-
-                const nextUrl = String(reference.url || originalUrl).trim();
-                const nextLabel = String(reference.label || reference.title || '').trim();
-                const $label = $item.find('.geweb-ai-source-link-label').first();
-                if (!$label.length) {
-                    return;
-                }
-
-                if (nextLabel) {
-                    $label.text(nextLabel);
-                }
-                if (nextUrl) {
-                    const $openLink = $item.find('.geweb-ai-source-open').first();
-                    if ($openLink.length) {
-                        $openLink.attr('href', nextUrl);
-                    }
-                }
+                this.hydrateResolvedSourceReferenceItem($(item));
             });
+        },
+
+        hydrateResolvedSourceReferenceItem($item) {
+            const originalUrl = String($item.attr('data-source-url') || '').trim();
+            const reference = originalUrl ? this.sourceReferenceCache[originalUrl] : null;
+            if (!reference || typeof reference !== 'object') {
+                return;
+            }
+
+            const nextUrl = String(reference.url || originalUrl).trim();
+            const nextLabel = String(reference.label || reference.title || '').trim();
+            const $label = $item.find('.geweb-ai-source-link-label').first();
+            if (!$label.length) {
+                return;
+            }
+
+            if (nextLabel) {
+                $label.text(nextLabel);
+                $item.attr('data-source-title', nextLabel);
+            }
+            if (!nextUrl) {
+                return;
+            }
+
+            const nextHint = this.getManagedSourceReferenceHint(nextUrl);
+            $item.attr('data-source-url', nextUrl);
+            this.hydrateResolvedSourceReferenceHint($item, nextHint);
+        },
+
+        hydrateResolvedSourceReferenceHint($item, nextHint) {
+            const $hint = $item.find('.geweb-ai-source-link-hint').first();
+            if (!nextHint) {
+                $hint.remove();
+                return;
+            }
+
+            if ($hint.length) {
+                $hint.text(nextHint);
+                return;
+            }
+
+            $item.find('.geweb-ai-source-link-label').after(
+                $('<span class="geweb-ai-source-link-hint"></span>').text(nextHint)
+            );
         },
 
         normalizeSources(sources, answerText, responseMeta) {
@@ -609,20 +1377,61 @@
             return chunks.reduce((accumulator, chunk, index) => {
                 const inferredUrl = this.findManagedUrlForGroundingChunk(chunk, explicitSources, answerText);
                 const normalizedUrl = this.normalizeManagedSourceUrl(inferredUrl);
+                const documentInfo = this.resolveGroundingChunkDocumentInfo(chunk, explicitSources);
                 const dedupeKey = normalizedUrl || `chunk:${index}:${String(chunk.title || '').trim()}`;
                 if (!dedupeKey || seen.has(dedupeKey.toLowerCase())) {
                     return accumulator;
                 }
 
                 seen.add(dedupeKey.toLowerCase());
+                const rawContextText = String(chunk.rawText || chunk.text || '');
+                const contextText = documentInfo.documentLabel
+                    ? this.normalizeDocumentContextText(rawContextText)
+                    : rawContextText;
                 accumulator.push({
                     title: chunk.title || `Source ${index + 1}`,
                     url: normalizedUrl,
+                    documentUrl: documentInfo.documentUrl,
+                    documentLabel: documentInfo.documentLabel,
                     snippet: chunk.text || '',
                     footnote: index + 1,
+                    contexts: [{
+                        title: chunk.title || `Source ${index + 1}`,
+                        text: contextText,
+                        matchPhrase: this.extractContextMatchPhrase(contextText),
+                        url: documentInfo.documentUrl || normalizedUrl,
+                        documentLabel: documentInfo.documentLabel,
+                    }],
                 });
                 return accumulator;
             }, []);
+        },
+
+        resolveGroundingChunkDocumentInfo(chunk, sources) {
+            const title = String(chunk?.title || '').trim();
+            const documentLabel = this.extractDocumentLabelFromTitle(title);
+            if (!documentLabel) {
+                return { documentLabel: '', documentUrl: '' };
+            }
+
+            const explicitSources = Array.isArray(sources) ? sources : [];
+            for (const source of explicitSources) {
+                const sourceUrl = this.normalizeManagedSourceUrl(source?.url || '');
+                const sourceTitle = String(source?.title || '').trim();
+                if (!sourceUrl) {
+                    continue;
+                }
+
+                if (sourceTitle && sourceTitle.toLowerCase() === documentLabel.toLowerCase()) {
+                    return { documentLabel, documentUrl: sourceUrl };
+                }
+
+                if (sourceUrl.toLowerCase().includes(`/${documentLabel.toLowerCase()}`)) {
+                    return { documentLabel, documentUrl: sourceUrl };
+                }
+            }
+
+            return { documentLabel, documentUrl: '' };
         },
 
         findManagedUrlForGroundingChunk(chunk, sources, answerText) {
@@ -661,11 +1470,20 @@
         },
 
         buildManagedDocumentUrlFromTitle(title) {
-            if (!/^\d+\.md$/i.test(title)) {
+            const normalizedTitle = String(title || '').trim();
+            const pageIdFromMarkdown = /^\d+\.md$/i.test(normalizedTitle)
+                ? normalizedTitle.replace(/\.md$/i, '')
+                : '';
+            const pageIdFromPrefixedDocument = pageIdFromMarkdown === ''
+                ? (/^(\d+)-.+\.[a-z0-9]{2,8}$/i.exec(normalizedTitle)?.[1] || '')
+                : '';
+            const pageId = pageIdFromMarkdown || pageIdFromPrefixedDocument;
+
+            if (!pageId) {
                 return '';
             }
 
-            return `${String(getAiSearchConfig().site_url || globalThis.location?.origin || '').replace(TRAILING_SLASH_REGEX, '')}/?p=${title.replace(/\.md$/i, '')}`;
+            return `${String(getAiSearchConfig().site_url || globalThis.location?.origin || '').replace(TRAILING_SLASH_REGEX, '')}/?p=${pageId}`;
         },
 
         findManagedUrlMentionedInAnswer(title, answerText) {
@@ -691,10 +1509,23 @@
                 return;
             }
 
+            this.ensureSourcesPanelVisible();
             this.activateSourceReferenceItem($target);
             const element = $target.get(0);
             if (element && typeof element.scrollIntoView === 'function') {
                 element.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
+        },
+
+        ensureSourcesPanelVisible() {
+            const workspace = this.$sourcesBox.closest('.geweb-ai-workspace').get(0);
+            if (!workspace?.classList.contains('is-right-collapsed')) {
+                return;
+            }
+
+            workspace.classList.remove('is-right-collapsed');
+            if (globalThis.GewebAIModal && typeof globalThis.GewebAIModal.syncPanelCollapseButtons === 'function') {
+                globalThis.GewebAIModal.syncPanelCollapseButtons();
             }
         },
 
@@ -704,8 +1535,36 @@
             }
 
             const $items = this.$sourcesBox.find('li');
-            $items.removeClass('is-active');
+            $items.removeClass('is-active is-preview');
             $target.addClass('is-active');
+        },
+
+        previewSourceReferenceItem($target) {
+            if (!$target?.length || !this.$sourcesBox.length) {
+                return;
+            }
+
+            const $items = this.$sourcesBox.find('li').not('.is-active');
+            $items.removeClass('is-preview');
+            if (!$target.hasClass('is-active')) {
+                $target.addClass('is-preview');
+            }
+        },
+
+        clearSourceReferencePreview($target) {
+            if (!$target?.length || !$target.hasClass('is-preview') || $target.hasClass('is-active')) {
+                return;
+            }
+
+            $target.removeClass('is-preview');
+        },
+
+        deactivateSourceReferenceItems() {
+            if (!this.$sourcesBox.length) {
+                return;
+            }
+
+            this.$sourcesBox.find('li').removeClass('is-active is-preview');
         },
 
         extractSourcesFromMeta(responseMeta, seen) {
@@ -885,10 +1744,25 @@
 
             const postId = parsed.searchParams.get('p');
             if (postId) {
-                return `post ${postId}`;
+                return `page ${postId}`;
             }
 
             return parsed.search.replace(/^\?/, '');
+        },
+
+        getManagedSourceReferenceHint(url) {
+            const normalizedUrl = this.normalizeManagedSourceUrl(url);
+            if (!normalizedUrl) {
+                return '';
+            }
+
+            const parsed = safeParseUrl(normalizedUrl);
+            if (!parsed) {
+                return '';
+            }
+
+            const pageId = parsed.searchParams.get('page_id') || parsed.searchParams.get('p');
+            return pageId ? `page ${pageId}` : '';
         },
 
         normalizeManagedSourceUrl(url) {

@@ -48,6 +48,8 @@ class WP {
         add_action('wp_ajax_nopriv_geweb_get_frontend_conversations', [$conversationAjaxController, 'ajaxGetFrontendConversations']);
         add_action('wp_ajax_geweb_get_frontend_conversation', [$conversationAjaxController, 'ajaxGetFrontendConversation']);
         add_action('wp_ajax_nopriv_geweb_get_frontend_conversation', [$conversationAjaxController, 'ajaxGetFrontendConversation']);
+        add_action('wp_ajax_geweb_save_frontend_conversation', [$conversationAjaxController, 'ajaxSaveFrontendConversation']);
+        add_action('wp_ajax_nopriv_geweb_save_frontend_conversation', [$conversationAjaxController, 'ajaxSaveFrontendConversation']);
         add_action('wp_ajax_geweb_resolve_source_references', [$sourceReferenceAjaxController, 'ajaxResolveSourceReferences']);
         add_action('wp_ajax_nopriv_geweb_resolve_source_references', [$sourceReferenceAjaxController, 'ajaxResolveSourceReferences']);
         add_action('wp_ajax_geweb_frontend_rename_conversation', [$conversationAjaxController, 'ajaxFrontendRenameConversation']);

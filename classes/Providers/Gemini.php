@@ -1058,9 +1058,10 @@ class Gemini implements AIProviderInterface {
         $promptOverride = is_string($promptOverride) ? trim($promptOverride) : '';
         if ($promptOverride !== '') {
             $baseInstruction = $this->getBasePromptDescriptor($resolvedModel);
+            $baseName = trim((string) ($baseInstruction['name'] ?? ''));
             return [
                 'instruction' => $promptOverride,
-                'name' => 'Temporary prompt',
+                'name' => $baseName !== '' ? ('Temporary override of ' . $baseName) : 'Temporary prompt override',
                 'scope' => 'temporary',
                 'is_model_specific' => false,
                 'is_custom' => true,

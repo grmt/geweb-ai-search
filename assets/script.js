@@ -12,6 +12,78 @@ function getLocalConversationArchiveLimit() {
 	return Number.isFinite(value) && value >= 1 ? value : 12;
 }
 
+function normalizeInlineMatchText(text) {
+	return String(text || '').replaceAll(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function highlightFirstPageMatch() {
+	const currentUrl = globalThis.location?.href;
+	if (!currentUrl) {
+		return;
+	}
+
+	let phrase = '';
+	try {
+		const url = new URL(currentUrl, globalThis.location.origin);
+		phrase = String(url.searchParams.get('geweb_ai_match') || '').trim();
+	} catch (error) {
+		console.debug('Reading geweb_ai_match failed.', error);
+		return;
+	}
+
+	if (!phrase) {
+		return;
+	}
+
+	const candidates = [];
+	const words = phrase.split(/\s+/).filter(Boolean);
+	for (let length = Math.min(5, words.length); length >= 1; length -= 1) {
+		candidates.push(words.slice(0, length).join(' '));
+	}
+
+	const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+		acceptNode(node) {
+			const parent = node.parentElement;
+			if (!parent || ['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEXTAREA'].includes(parent.tagName)) {
+				return NodeFilter.FILTER_REJECT;
+			}
+
+			return normalizeInlineMatchText(node.textContent).length ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+		}
+	});
+
+	let matchedNode = null;
+	let matchedPhrase = '';
+	/* eslint-disable no-cond-assign */
+	while ((matchedNode = walker.nextNode())) {
+		const rawText = String(matchedNode.textContent || '');
+		const normalizedText = normalizeInlineMatchText(rawText);
+		matchedPhrase = candidates.find((candidate) => normalizedText.includes(normalizeInlineMatchText(candidate))) || '';
+		if (!matchedPhrase) {
+			continue;
+		}
+
+		const matchIndex = rawText.toLowerCase().indexOf(matchedPhrase.toLowerCase());
+		if (matchIndex < 0) {
+			continue;
+		}
+
+		const range = document.createRange();
+		range.setStart(matchedNode, matchIndex);
+		range.setEnd(matchedNode, matchIndex + matchedPhrase.length);
+		const highlight = document.createElement('mark');
+		highlight.className = 'geweb-ai-inline-match';
+		range.surroundContents(highlight);
+		if (typeof highlight.scrollIntoView === 'function') {
+			globalThis.setTimeout(() => {
+				highlight.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			}, 120);
+		}
+		return;
+	}
+	/* eslint-enable no-cond-assign */
+}
+
 jQuery(document).ready(function($) {
 	let nonceRequest = null;
 
@@ -83,6 +155,26 @@ jQuery(document).ready(function($) {
 	        return url.toString();
 	    },
 
+	    resolveQueryText(rawQuery) {
+	        const directQuery = String(rawQuery || '').trim();
+	        if (directQuery !== '') {
+	            return directQuery;
+	        }
+
+	        const currentUrl = globalThis.location?.href;
+	        if (!currentUrl) {
+	            return '';
+	        }
+
+	        try {
+	            const url = new URL(currentUrl, globalThis.location?.origin);
+	            return String(url.searchParams.get('s') || url.searchParams.get('geweb_ai_query') || '').trim();
+	        } catch (error) {
+	            console.debug('Resolving query text from URL failed.', error);
+	            return '';
+	        }
+	    },
+
 	    injectAIButtons() {
 	        if (this.isPageView()) {
 	            return;
@@ -110,16 +202,14 @@ jQuery(document).ready(function($) {
 	                return;
 	            }
 
-	            const inheritedClasses = (($searchButton.attr('class') || '').trim() || 'basic-button').split(/\s+/).filter(Boolean);
-
 	            if (geweb_aisearch.frontend_ai_interface === 'fullscreen') {
-	                const buttonClasses = ['geweb-ai-page-trigger'].concat(inheritedClasses).join(' ');
-	                const $button = $(`<button type="button" class="${buttonClasses}"></button>`);
+	                const buttonClasses = ['geweb-ai-page-trigger'].join(' ');
+	                const $button = $(`<button type="button" class="${buttonClasses}"><span class="geweb-ai-trigger-label" aria-hidden="true">AI</span></button>`);
 	                $button.attr('aria-label', t('openAiSearch', 'Open AI Search'));
 	                this.matchTriggerButtonSize($button, $searchButton);
 	                $button.on('click', () => {
-	                    const query = $input.val().trim();
-	                    globalThis.location.href = this.buildFrontendAiPageUrl(query, GewebAIChat.getPreferredConversationId());
+	                    const query = this.resolveQueryText($input.val());
+		                    globalThis.location.href = this.buildFrontendAiPageUrl(query, GewebAIChat.getTargetConversationIdForQuery(query));
 	                });
 
 	                $form.addClass('geweb-ai-search-form');
@@ -132,12 +222,12 @@ jQuery(document).ready(function($) {
 	                return;
 	            }
 
-	            const buttonClasses = ['geweb-ai-trigger', 'geweb-ai-trigger--icon'].concat(inheritedClasses).join(' ');
-	            const askAiLabel = this.escapeAttr(t('askAi', 'Ask AI'));
-	            const $button = $(`<button type="button" class="${buttonClasses}" aria-label="${askAiLabel}"></button>`);
+	            const buttonClasses = ['geweb-ai-trigger', 'geweb-ai-trigger--text'].join(' ');
+	            const searchWithAiLabel = this.escapeHtml(t('searchWithAi', 'AI search'));
+	            const $button = $(`<button type="button" class="${buttonClasses}" aria-label="${this.escapeAttr(searchWithAiLabel)}"><span class="geweb-ai-trigger-label">${searchWithAiLabel}</span></button>`);
 	            this.matchTriggerButtonSize($button, $searchButton);
 	            $button.on('click', () => {
-	                const query = $input.val().trim();
+	                const query = this.resolveQueryText($input.val());
 	                this.openAI(query);
 	            });
 
@@ -148,7 +238,8 @@ jQuery(document).ready(function($) {
 	    },
 
 	    openAI(query) {
-	        const trimmedQuery = (query || '').trim();
+		        const trimmedQuery = (query || '').trim();
+		        GewebAIChat.prepareChatForQuery(trimmedQuery);
 	        $('#geweb-ai-query-display').val(GewebAIChat.shouldAutoSubmitQuery(trimmedQuery) ? trimmedQuery : '');
 	        GewebAIChat.toggleSubmitButton();
 	        document.body.classList.add('no-scroll');
@@ -172,15 +263,20 @@ jQuery(document).ready(function($) {
 	        const width = $referenceButton.outerWidth();
 	        const height = $referenceButton.outerHeight();
 
-	        if (Number.isFinite(width) && width > 0) {
-	            $button.css({
-	                width: `${width}px`,
-	                minWidth: `${width}px`,
-	            });
+	        if (Number.isFinite(width) && width > 0 && !$button.hasClass('geweb-ai-trigger--text')) {
+	            const element = $button.get(0);
+	            if (element?.style) {
+	                element.style.setProperty('width', `${width}px`, 'important');
+	                element.style.setProperty('min-width', `${width}px`, 'important');
+	                element.style.setProperty('max-width', `${width}px`, 'important');
+	            }
 	        }
 
 	        if (Number.isFinite(height) && height > 0) {
-	            $button.css('height', `${height}px`);
+	            const element = $button.get(0);
+	            if (element?.style) {
+	                element.style.setProperty('height', `${height}px`, 'important');
+	            }
 	        }
 	    },
 
@@ -214,10 +310,218 @@ jQuery(document).ready(function($) {
 	        }
 	
 	        document.body.classList.add('geweb-ai-page', 'geweb-ai-page-open');
+	        this.initPageHeightPersistence();
+	        this.ensurePageResizeHandle();
 	        this.bindFrontendHeaderSearch();
 	        this.bindWorkspacePaneResizers();
 	        this.bindPanelCollapseButtons();
 	        this.syncPanelCollapseButtons();
+	    },
+
+	    getPageViewHeightStorageKey() {
+	        const pathname = globalThis.location?.pathname || 'default';
+	        return `geweb_ai_page_height:${pathname}`;
+	    },
+
+	    getPageViewMinHeight() {
+	        return 360;
+	    },
+
+	    getPageViewViewportHeight() {
+	        return Math.max(this.getPageViewMinHeight(), globalThis.innerHeight || this.getPageViewMinHeight());
+	    },
+
+	    getPageViewMaxHeight() {
+	        const viewportHeight = this.getPageViewViewportHeight();
+	        return Math.max(this.getPageViewMinHeight(), viewportHeight + 720);
+	    },
+
+	    clampPageViewHeight(rawHeight) {
+	        const height = Number(rawHeight);
+	        if (!Number.isFinite(height) || height <= 0) {
+	            return null;
+	        }
+
+	        return Math.max(this.getPageViewMinHeight(), Math.min(this.getPageViewMaxHeight(), Math.round(height)));
+	    },
+
+	    readStoredPageViewHeight() {
+	        if (!globalThis.localStorage) {
+	            return null;
+	        }
+
+	        try {
+	            return this.clampPageViewHeight(globalThis.localStorage.getItem(this.getPageViewHeightStorageKey()));
+	        } catch (error) {
+	            console.debug('Reading stored AI page height failed.', error);
+	            return null;
+	        }
+	    },
+
+	    persistPageViewHeight(rawHeight) {
+	        if (!globalThis.localStorage) {
+	            return;
+	        }
+
+	        const height = this.clampPageViewHeight(rawHeight);
+	        if (!height) {
+	            return;
+	        }
+
+	        try {
+	            globalThis.localStorage.setItem(this.getPageViewHeightStorageKey(), String(height));
+	        } catch (error) {
+	            console.debug('Saving stored AI page height failed.', error);
+	        }
+	    },
+
+	    clearStoredPageViewHeight() {
+	        if (!globalThis.localStorage) {
+	            return;
+	        }
+
+	        try {
+	            globalThis.localStorage.removeItem(this.getPageViewHeightStorageKey());
+	        } catch (error) {
+	            console.debug('Clearing stored AI page height failed.', error);
+	        }
+	    },
+
+	    applyPageViewHeight(rawHeight, options = {}) {
+	        const height = this.clampPageViewHeight(rawHeight);
+	        if (!height || !this.ai) {
+	            return;
+	        }
+
+	        this.ai.style.height = `${height}px`;
+
+	        if (options.persist !== false) {
+	            this.persistPageViewHeight(height);
+	        }
+	    },
+
+	    syncPageViewHeightToViewport() {
+	        if (!this.isPageView() || !this.ai) {
+	            return;
+	        }
+
+	        const currentHeight = this.ai.getBoundingClientRect().height;
+	        const viewportHeight = this.getPageViewViewportHeight();
+	        const hasStoredHeight = this.readStoredPageViewHeight() !== null;
+	        const hasExplicitHeight = Boolean(this.ai.style.height);
+
+	        if (!hasStoredHeight && !hasExplicitHeight) {
+	            return;
+	        }
+
+	        if (currentHeight >= viewportHeight - 2 && !hasStoredHeight) {
+	            this.ai.style.height = `${viewportHeight}px`;
+	            return;
+	        }
+
+	        this.applyPageViewHeight(currentHeight, { persist: hasStoredHeight || hasExplicitHeight });
+	    },
+
+	    initPageHeightPersistence() {
+	        if (!this.ai || this.ai.dataset.gewebAiPageHeightBound === '1') {
+	            return;
+	        }
+
+	        this.ai.dataset.gewebAiPageHeightBound = '1';
+
+	        const storedHeight = this.readStoredPageViewHeight();
+	        if (storedHeight) {
+	            this.applyPageViewHeight(storedHeight, { persist: false });
+	        }
+
+	        if (typeof globalThis.ResizeObserver === 'function') {
+	            const observer = new globalThis.ResizeObserver((entries) => {
+	                const nextHeight = entries[0]?.contentRect?.height;
+	                const viewportHeight = this.getPageViewViewportHeight();
+	                const shouldPersist = Boolean(this.ai?.style?.height) || (Number.isFinite(nextHeight) && nextHeight < viewportHeight - 4);
+
+	                if (!shouldPersist) {
+	                    return;
+	                }
+
+	                this.persistPageViewHeight(nextHeight);
+	            });
+
+	            observer.observe(this.ai);
+	        }
+
+	        globalThis.addEventListener('resize', () => {
+	            this.syncPageViewHeightToViewport();
+	        });
+	    },
+
+	    ensurePageResizeHandle() {
+	        if (!this.ai || this.ai.querySelector('.geweb-ai-page-resize-handle')) {
+	            return;
+	        }
+
+	        const handle = document.createElement('button');
+	        handle.type = 'button';
+	        handle.className = 'geweb-ai-page-resize-handle';
+	        handle.setAttribute('aria-label', 'Resize AI search window');
+	        handle.setAttribute('title', 'Drag to resize the AI search window');
+	        handle.innerHTML = '<span class="geweb-ai-page-resize-handle-bar" aria-hidden="true"></span>';
+	        this.ai.appendChild(handle);
+	        this.bindPageResizeHandle(handle);
+	    },
+
+	    bindPageResizeHandle(handle) {
+	        if (!handle || handle.dataset.gewebAiResizeBound === '1') {
+	            return;
+	        }
+
+	        handle.dataset.gewebAiResizeBound = '1';
+
+	        const stopResize = () => {
+	            document.body.classList.remove('geweb-ai-page-resizing');
+	            handle.classList.remove('is-active');
+	            globalThis.removeEventListener('pointermove', onPointerMove);
+	            globalThis.removeEventListener('pointerup', stopResize);
+	            globalThis.removeEventListener('pointercancel', stopResize);
+	        };
+
+	        const onPointerMove = (event) => {
+	            if (!this.ai) {
+	                return;
+	            }
+
+	            const deltaY = Number(event.clientY) - startY;
+	            this.applyPageViewHeight(startHeight + deltaY);
+	        };
+
+	        let startY = 0;
+	        let startHeight = 0;
+
+	        handle.addEventListener('pointerdown', (event) => {
+	            if (!this.ai) {
+	                return;
+	            }
+
+	            event.preventDefault();
+	            startY = Number(event.clientY);
+	            startHeight = this.ai.getBoundingClientRect().height;
+	            document.body.classList.add('geweb-ai-page-resizing');
+	            handle.classList.add('is-active');
+	            globalThis.addEventListener('pointermove', onPointerMove);
+	            globalThis.addEventListener('pointerup', stopResize);
+	            globalThis.addEventListener('pointercancel', stopResize);
+	        });
+
+	        handle.addEventListener('dblclick', (event) => {
+	            if (!this.ai) {
+	                return;
+	            }
+
+	            event.preventDefault();
+	            this.clearStoredPageViewHeight();
+	            this.ai.style.height = '';
+	            this.applyPageViewHeight(this.getPageViewViewportHeight(), { persist: false });
+	        });
 	    },
 
 	    bindWorkspacePaneResizers() {
@@ -229,7 +533,7 @@ jQuery(document).ready(function($) {
 	        const minLeft = 180;
 	        const maxLeft = 420;
 	        const minRight = 220;
-	        const maxRight = 420;
+	        const maxRight = 640;
 	        const minMain = 420;
 
 	        const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -244,17 +548,48 @@ jQuery(document).ready(function($) {
 	                const maxAllowed = Math.min(maxLeft, totalWidth - minRight - minMain - 32);
 	                const nextWidth = clamp(rawWidth, minLeft, Math.max(minLeft, maxAllowed));
 	                workspace.style.setProperty('--geweb-ai-left-pane-width', `${Math.round(nextWidth)}px`);
+	                workspace.dataset.gewebAiLeftPaneRatio = String(nextWidth / totalWidth);
 	                return;
 	            }
 
 	            const maxAllowed = Math.min(maxRight, totalWidth - minLeft - minMain - 32);
 	            const nextWidth = clamp(rawWidth, minRight, Math.max(minRight, maxAllowed));
 	            workspace.style.setProperty('--geweb-ai-right-pane-width', `${Math.round(nextWidth)}px`);
+	            workspace.dataset.gewebAiRightPaneRatio = String(nextWidth / totalWidth);
 	        };
+
+	        this.syncWorkspacePaneWidths(workspace, setPaneWidth);
+	        this.bindWorkspacePaneResizeSync(workspace, setPaneWidth);
 
 	        workspace.querySelectorAll('.geweb-ai-pane-resizer').forEach((handle) => {
 	            this.bindWorkspacePaneResizeHandle(handle, workspace, setPaneWidth);
 	        });
+	    },
+
+	    bindWorkspacePaneResizeSync(workspace, setPaneWidth) {
+	        if (workspace.dataset.gewebAiResizeSyncBound === '1') {
+	            return;
+	        }
+
+	        workspace.dataset.gewebAiResizeSyncBound = '1';
+	        globalThis.addEventListener('resize', () => {
+	            this.syncWorkspacePaneWidths(workspace, setPaneWidth);
+	        });
+	    },
+
+	    syncWorkspacePaneWidths(workspace, setPaneWidth) {
+	        const totalWidth = workspace.getBoundingClientRect().width;
+	        if (!totalWidth) {
+	            return;
+	        }
+
+	        const leftRatio = Number(workspace.dataset.gewebAiLeftPaneRatio);
+	        const rightRatio = Number(workspace.dataset.gewebAiRightPaneRatio);
+	        const leftWidth = Number.parseFloat(getComputedStyle(workspace).getPropertyValue('--geweb-ai-left-pane-width'));
+	        const rightWidth = Number.parseFloat(getComputedStyle(workspace).getPropertyValue('--geweb-ai-right-pane-width'));
+
+	        setPaneWidth('left', Number.isFinite(leftRatio) && leftRatio > 0 ? leftRatio * totalWidth : leftWidth);
+	        setPaneWidth('right', Number.isFinite(rightRatio) && rightRatio > 0 ? rightRatio * totalWidth : rightWidth);
 	    },
 
 	    bindWorkspacePaneResizeHandle(handle, workspace, setPaneWidth) {
@@ -327,12 +662,12 @@ jQuery(document).ready(function($) {
 	            $button.find('.geweb-ai-panel-collapse-icon').text(icon);
 	        };
 
-	        applyButtonState(
-	            $(this.ai).find('.geweb-ai-panel-collapse[data-panel-toggle="left"]'),
-	            !leftCollapsed,
-	            leftCollapsed ? '▶' : '◀',
-	            leftCollapsed ? 'Expand conversations panel' : 'Collapse conversations panel'
-	        );
+		        applyButtonState(
+		            $(this.ai).find('.geweb-ai-panel-collapse[data-panel-toggle="left"]'),
+		            !leftCollapsed,
+		            leftCollapsed ? '▶' : '◀',
+		            leftCollapsed ? 'Expand chats panel' : 'Collapse chats panel'
+		        );
 	        applyButtonState(
 	            $(this.ai).find('.geweb-ai-panel-collapse[data-panel-toggle="right"]'),
 	            !rightCollapsed,
@@ -367,7 +702,7 @@ jQuery(document).ready(function($) {
 	            $form.on('submit', (event) => {
 	                event.preventDefault();
 	                const query = String($input.val() || '').trim();
-	                globalThis.location.href = this.buildFrontendAiPageUrl(query, GewebAIChat.getPreferredConversationId());
+		                globalThis.location.href = this.buildFrontendAiPageUrl(query, GewebAIChat.getTargetConversationIdForQuery(query));
 	            });
 	        });
 	    },
@@ -385,8 +720,14 @@ jQuery(document).ready(function($) {
 		    $settingsToggle: $('#geweb-ai-toggle-temp-settings'),
 		    $settingsPanel: $('#geweb-ai-temporary-settings-panel'),
 		    $resetSettingsBtn: $('#geweb-ai-reset-temp-settings'),
+		    $resetModelBtn: $('#geweb-ai-reset-temp-model'),
+		    $resetPromptBtn: $('#geweb-ai-reset-temp-prompt'),
+		    $closeSettingsBtn: $('#geweb-ai-close-temp-settings'),
 		    $currentModelDisplay: $('#geweb-ai-current-model-display'),
 		    $currentPromptDisplay: $('#geweb-ai-current-prompt-display'),
+		    $temporaryPromptSummary: $('#geweb-ai-temporary-prompt-summary'),
+		    $temporaryPromptEditor: $('#geweb-ai-temporary-prompt-editor'),
+		    $togglePromptEditorBtn: $('#geweb-ai-toggle-prompt-editor'),
 		    $temporaryPrompt: $('#geweb-ai-temporary-prompt'),
 		    $answerBox: $('.answer-box'),
 	    $conversationOverview: $('#geweb-ai-conversation-overview'),
@@ -395,12 +736,14 @@ jQuery(document).ready(function($) {
 	    $copyConversationBtn: $('#geweb-ai-copy-conversation'),
 	    $renameConversationBtn: $('#geweb-ai-rename-conversation'),
 	    $deleteConversationBtn: $('#geweb-ai-delete-conversation'),
-	    $newConversationBtn: $('.geweb-ai-new-conversation'),
+		    $newConversationBtn: $('.geweb-ai-new-conversation'),
 	    conversationHistory: [],
 	    conversationId: '',
 	    requestInFlight: false,
 	    compactedConversation: false,
 		    conversationArchive: [],
+		    conversationOverviewPageSize: 10,
+		    conversationOverviewRenderedCount: 0,
 		    sourceReferenceCache: {},
 
 		    init() {
@@ -409,38 +752,73 @@ jQuery(document).ready(function($) {
 		        this.$textarea.on('input', () => this.toggleSubmitButton());
 		        this.$submitBtn.on('click', () => this.sendMessage());
 		        this.$settingsToggle.on('click', () => this.toggleTemporarySettings());
+		        this.$closeSettingsBtn.on('click', () => this.toggleTemporarySettings(false));
 		        this.$resetSettingsBtn.on('click', () => this.resetTemporarySettings(true));
+		        this.$resetModelBtn.on('click', () => this.resetTemporaryModel(true));
+		        this.$resetPromptBtn.on('click', () => this.resetTemporaryPrompt(true));
+		        this.$togglePromptEditorBtn.on('click', () => this.toggleTemporaryPromptEditor());
 		        this.$modelSelector.on('change', () => this.handleTemporaryModelChange());
 		        this.$temporaryPrompt.on('input', () => this.updateTemporarySettingsSummary());
 		        this.$copyConversationBtn.on('click', () => { void this.copyCurrentConversation(); });
 		        this.$renameConversationBtn.on('click', () => { void this.renameCurrentConversation(); });
 		        this.$deleteConversationBtn.on('click', () => { void this.deleteCurrentConversation(); });
 		        this.$newConversationBtn.on('click', () => this.createNewConversation(true));
-		        $(document).on('click', (event) => this.handleDocumentClick(event));
-		        this.$textarea.on('keydown', (e) => {
-		            if (e.key === 'Enter' && !e.shiftKey) {
-		                e.preventDefault();
-	                if (!this.$submitBtn.prop('disabled')) {
-	                    this.sendMessage();
-	                }
-	            }
+		        this.$conversationOverview.on('click', (event) => {
+		            event.stopPropagation();
+		            this.toggleConversationOverviewScrollActive();
 		        });
+		        this.$conversationOverview.on('mouseleave', () => this.setConversationOverviewScrollActive(false));
+		        this.$answerBox.on('click', (event) => {
+		            event.stopPropagation();
+		            this.toggleAnswerBoxScrollActive();
+		        });
+		        this.$answerBox.on('mouseleave', () => this.setAnswerBoxScrollActive(false));
+		        this.$conversationOverview.on('scroll', () => this.handleConversationOverviewScroll());
+		        $(document).on('click', (event) => this.handleDocumentClick(event));
+		        document.addEventListener('scroll', () => this.hideFootnotePreview(), true);
+		        this.$textarea.on('keydown', (event) => this.handleQuestionBoxKeydown(event));
+		        this.$textarea.on('beforeinput', (event) => this.handleQuestionBoxBeforeInput(event));
+		        globalThis.addEventListener('pageshow', (event) => this.handlePageShow(event));
 		        $(document).on('keydown', (event) => {
 		            if (event.key === 'Escape') {
 		                this.toggleTemporarySettings(false);
 		            }
 		        });
 		        this.resetTemporarySettings();
+		        this.updateTemporarySettingsAvailability(false);
 		        void this.bootstrap();
 		    },
 
 	    async bootstrap() {
+	        this.hydrateFromStoredChatState();
 	        await this.loadConversationArchive();
-	        await this.applyFrontendRequestState();
+	        try {
+	            await this.applyFrontendRequestState();
+	        } catch (error) {
+	            console.debug('Applying frontend request state failed.', error);
+	        }
 	        this.renderConversationOverview();
 	        this.renderConversationSummary();
 	        this.renderSources();
 	        this.toggleSubmitButton();
+	        this.syncStoredChatState();
+	    },
+
+	    isBackForwardNavigation(event) {
+	        if (event?.persisted) {
+	            return true;
+	        }
+
+	        const navigationEntry = globalThis.performance?.getEntriesByType?.('navigation')?.[0];
+	        return navigationEntry?.type === 'back_forward';
+	    },
+
+	    handlePageShow(event) {
+	        if (!geweb_aisearch.is_frontend_ai_page || !this.isBackForwardNavigation(event)) {
+	            return;
+	        }
+
+	        void this.bootstrap();
 	    },
 
 	    toggleSubmitButton() {
@@ -448,9 +826,113 @@ jQuery(document).ready(function($) {
 	        this.$submitBtn.prop('disabled', !hasText || this.requestInFlight);
 	    },
 
+	    scrollElementIntoView(element) {
+	        if (!element || typeof element.scrollIntoView !== 'function') {
+	            return;
+	        }
+
+	        globalThis.setTimeout(() => {
+	            element.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+	        }, 0);
+	    },
+
 	    focusInput() {
 	        if (this.$textarea.length) {
 	            this.$textarea.trigger('focus');
+	        }
+	    },
+
+	    setConversationOverviewScrollActive(isActive) {
+	        if (!this.$conversationOverview.length) {
+	            return;
+	        }
+
+	        this.$conversationOverview.toggleClass('is-scroll-active', !!isActive);
+	    },
+
+	    setAnswerBoxScrollActive(isActive) {
+	        if (!this.$answerBox.length) {
+	            return;
+	        }
+
+	        this.$answerBox.toggleClass('is-scroll-active', !!isActive);
+	    },
+
+	    toggleConversationOverviewScrollActive() {
+	        if (!this.$conversationOverview.length) {
+	            return;
+	        }
+
+	        this.setConversationOverviewScrollActive(!this.$conversationOverview.hasClass('is-scroll-active'));
+	    },
+
+	    toggleAnswerBoxScrollActive() {
+	        if (!this.$answerBox.length) {
+	            return;
+	        }
+
+	        this.setAnswerBoxScrollActive(!this.$answerBox.hasClass('is-scroll-active'));
+	    },
+
+	    submitQuestionBoxFromKeyboard(event) {
+	        if (event) {
+	            event.preventDefault();
+	            event.stopPropagation();
+	        }
+
+	        if (this.$submitBtn.prop('disabled')) {
+	            return;
+	        }
+
+	        void this.sendMessage();
+	    },
+
+	    handleQuestionBoxKeydown(event) {
+	        const isEnterKey = event.key === 'Enter' || event.keyCode === 13 || event.which === 13;
+	        if (event.isComposing || !isEnterKey || event.shiftKey) {
+	            return;
+	        }
+
+	        this.submitQuestionBoxFromKeyboard(event);
+	    },
+
+	    handleQuestionBoxBeforeInput(event) {
+	        const originalEvent = event.originalEvent;
+	        const inputType = originalEvent?.inputType || event.inputType || '';
+	        if (inputType !== 'insertLineBreak') {
+	            return;
+	        }
+
+	        if (originalEvent?.shiftKey || event.shiftKey) {
+	            return;
+	        }
+
+	        this.submitQuestionBoxFromKeyboard(event);
+	    },
+
+	    syncFrontendPageConversationState() {
+	        if (!geweb_aisearch.is_frontend_ai_page || !globalThis.history?.replaceState) {
+	            return;
+	        }
+
+	        const currentUrl = globalThis.location?.href;
+	        if (!currentUrl) {
+	            return;
+	        }
+
+	        try {
+	            const url = new URL(currentUrl, globalThis.location.origin);
+	            const conversationId = String(this.conversationId || '').trim();
+	            if (conversationId) {
+	                url.searchParams.set('geweb_ai_conversation', conversationId);
+	            } else {
+	                url.searchParams.delete('geweb_ai_conversation');
+	            }
+
+	            geweb_aisearch.frontend_ai_conversation_id = conversationId;
+	            globalThis.history.replaceState({}, '', url.toString());
+	        } catch (error) {
+	            console.debug('Syncing frontend page conversation state failed.', error);
 	        }
 	    },
 
@@ -461,6 +943,115 @@ jQuery(document).ready(function($) {
 	        }
 
 	        return trimmedQuery.split(/\s+/).length > 1;
+	    },
+
+	    normalizeChatMatchText(text) {
+	        return String(text || '').replaceAll(/\s+/g, ' ').trim().toLowerCase();
+	    },
+
+	    getFirstUserMessageFromMessages(messages) {
+	        const list = Array.isArray(messages) ? messages : [];
+	        for (const item of list) {
+	            if (item?.role !== 'user') {
+	                continue;
+	            }
+
+	            const content = String(item.content || '').trim();
+	            if (content) {
+	                return content;
+	            }
+	        }
+
+	        return '';
+	    },
+
+	    findMatchingConversationEntry(query) {
+	        const normalizedQuery = this.normalizeChatMatchText(query);
+	        if (!normalizedQuery) {
+	            return null;
+	        }
+
+	        return this.conversationArchive.find((entry) => {
+	            const normalizedSummary = this.normalizeChatMatchText(entry?.summary || '');
+	            if (normalizedSummary && normalizedSummary === normalizedQuery) {
+	                return true;
+	            }
+
+	            const firstQuestion = String(entry?.firstUserMessage || '').trim() || this.getFirstUserMessageFromMessages(entry?.messages);
+	            return firstQuestion !== '' && this.normalizeChatMatchText(firstQuestion) === normalizedQuery;
+	        }) || null;
+	    },
+
+	    getTargetConversationIdForQuery(query) {
+	        const trimmedQuery = String(query || '').trim();
+	        if (!this.shouldAutoSubmitQuery(trimmedQuery)) {
+	            return this.getPreferredConversationId();
+	        }
+
+	        const matchingEntry = this.findMatchingConversationEntry(trimmedQuery);
+	        return matchingEntry?.id || '';
+	    },
+
+	    applyConversationEntry(entry) {
+	        if (!entry || !Array.isArray(entry.messages)) {
+	            return;
+	        }
+
+	        this.conversationId = entry.id;
+	        this.conversationHistory = entry.messages.map((item) => ({
+	            role: item.role,
+	            content: item.content,
+	            sources: Array.isArray(item.sources) ? item.sources : [],
+	            meta: item.meta && typeof item.meta === 'object' ? item.meta : {}
+	        }));
+	        this.compactedConversation = !!entry.compacted;
+	        this.requestInFlight = false;
+	        this.$answerBox.empty();
+
+	        if (this.compactedConversation) {
+	            this.appendSystemNote(t('earlierTrimmed', 'Earlier messages were trimmed to keep the chat context compact.'));
+	        }
+
+	        this.conversationHistory.forEach((item) => {
+	            if (item.role === 'model') {
+	                this.appendMessage({
+	                    answer: item.content,
+	                    sources: item.sources || [],
+	                    meta: item.meta || {}
+	                }, 'ai');
+	                return;
+	            }
+
+	            this.appendMessage(item.content, 'user');
+	        });
+
+	        this.renderConversationOverview();
+	        this.renderConversationSummary();
+	        this.renderSources();
+	        this.toggleSubmitButton();
+	        this.syncFrontendPageConversationState();
+	    },
+
+	    prepareChatForQuery(query) {
+	        const trimmedQuery = String(query || '').trim();
+	        if (!this.shouldAutoSubmitQuery(trimmedQuery)) {
+	            return;
+	        }
+
+	        const targetConversationId = this.getTargetConversationIdForQuery(trimmedQuery);
+	        if (!targetConversationId) {
+	            this.createNewConversation(false);
+	            return;
+	        }
+
+	        if (targetConversationId === this.conversationId) {
+	            return;
+	        }
+
+	        const matchingEntry = this.conversationArchive.find((entry) => entry.id === targetConversationId);
+	        if (matchingEntry?.messages?.length) {
+	            this.applyConversationEntry(matchingEntry);
+	        }
 	    },
 
 		    getSelectedModel() {
@@ -483,10 +1074,10 @@ jQuery(document).ready(function($) {
 		        const fallbackDescriptor = descriptors[geweb_aisearch.selected_model] || descriptors[''] || {};
 		        const descriptor = descriptors[resolvedModel] || fallbackDescriptor || {};
 
-		        return {
-		            name: String(descriptor.name || t('temporaryPrompt', 'Temporary prompt')).trim(),
-		            instruction: String(descriptor.instruction || '').trim(),
-		        };
+			        return {
+			            name: String(descriptor.name || t('temporaryPrompt', 'Temporary chat prompt')).trim(),
+			            instruction: String(descriptor.instruction || '').trim(),
+			        };
 		    },
 
 	    getTemporaryPrompt() {
@@ -538,21 +1129,40 @@ jQuery(document).ready(function($) {
 		        const baseDescriptor = this.getPromptDescriptor(selectedModel);
 		        const temporaryPrompt = String(this.$temporaryPrompt.val() || '').trim();
 		        const basePrompt = String(this.$temporaryPrompt.attr('data-base-prompt') || '').trim();
+		        const basePromptName = String(baseDescriptor.name || '').trim() || t('composerPromptLabel', 'Prompt');
+		        const defaultModel = String(geweb_aisearch.selected_model || '').trim();
+		        const hasTemporaryModel = selectedModel !== '' && selectedModel !== defaultModel;
+		        const hasTemporaryPrompt = temporaryPrompt !== '' && temporaryPrompt !== basePrompt;
 		        const promptDescriptor = temporaryPrompt !== '' && temporaryPrompt !== basePrompt
 		            ? {
-		                name: t('temporaryPrompt', 'Temporary prompt'),
+		                name: `${t('temporaryPromptActive', 'Temporary prompt')} · ${t('composerTemporaryOverride', 'Defaults overridden')}`,
 		                instruction: temporaryPrompt,
 		            }
 		            : baseDescriptor;
 
 		        if (this.$currentModelDisplay.length) {
-		            this.$currentModelDisplay.text(selectedModel);
+		            this.$currentModelDisplay.text(
+		                hasTemporaryModel
+		                    ? `${t('temporaryModelActive', 'Temporary model')} · ${selectedModel}`
+		                    : selectedModel
+		            );
 		        }
 
 		        if (this.$currentPromptDisplay.length) {
 		            this.$currentPromptDisplay.text(promptDescriptor.name || t('composerPromptLabel', 'Prompt'));
 		            this.$currentPromptDisplay.attr('title', promptDescriptor.instruction || '');
 		            this.$currentPromptDisplay.attr('aria-label', `${t('composerPromptLabel', 'Prompt')}: ${promptDescriptor.name || ''}`);
+		        }
+		        if (this.$temporaryPromptSummary.length) {
+		            this.$temporaryPromptSummary.text(promptDescriptor.name || basePromptName);
+		            this.$temporaryPromptSummary.attr('title', promptDescriptor.instruction || '');
+		        }
+
+		        if (this.$resetModelBtn.length) {
+		            this.$resetModelBtn.prop('disabled', !hasTemporaryModel);
+		        }
+		        if (this.$resetPromptBtn.length) {
+		            this.$resetPromptBtn.prop('disabled', !hasTemporaryPrompt);
 		        }
 		    },
 
@@ -576,6 +1186,73 @@ jQuery(document).ready(function($) {
 		        }
 		    },
 
+		    resetTemporaryModel(shouldFocusPrompt) {
+		        const defaultModel = String(geweb_aisearch.selected_model || '').trim();
+		        if (this.$modelSelector.length) {
+		            this.$modelSelector.val(defaultModel);
+		        }
+		        this.handleTemporaryModelChange();
+		        if (shouldFocusPrompt && this.$temporaryPrompt.length) {
+		            this.$temporaryPrompt.trigger('focus');
+		        }
+		    },
+
+		    resetTemporaryPrompt(shouldFocusPrompt) {
+		        const descriptor = this.getPromptDescriptor(this.getSelectedModel());
+		        if (this.$temporaryPrompt.length) {
+		            this.$temporaryPrompt.val(descriptor.instruction || '');
+		        }
+		        this.updateTemporarySettingsSummary();
+		        if (shouldFocusPrompt && this.$temporaryPrompt.length) {
+		            this.$temporaryPrompt.trigger('focus');
+		        }
+		    },
+
+		    toggleTemporaryPromptEditor(forceState) {
+		        if (!this.$temporaryPromptEditor.length) {
+		            return;
+		        }
+
+		        const shouldOpen = typeof forceState === 'boolean'
+		            ? forceState
+		            : this.$temporaryPromptEditor.prop('hidden');
+
+		        this.$temporaryPromptEditor.prop('hidden', !shouldOpen);
+
+		        if (this.$togglePromptEditorBtn.length) {
+		            this.$togglePromptEditorBtn.text(
+		                shouldOpen
+		                    ? t('composerHidePromptEditor', 'Hide prompt editor')
+		                    : t('composerEditPrompt', 'Edit prompt')
+		            );
+		        }
+
+		        if (shouldOpen && this.$temporaryPrompt.length) {
+		            this.$temporaryPrompt.trigger('focus');
+		        }
+		    },
+
+		    updateTemporarySettingsAvailability(isEnabled) {
+		        if (this.$modelSelector.length) {
+		            this.$modelSelector.prop('disabled', !isEnabled);
+		        }
+		        if (this.$temporaryPrompt.length) {
+		            this.$temporaryPrompt.prop('disabled', !isEnabled);
+		        }
+		        if (this.$togglePromptEditorBtn.length) {
+		            this.$togglePromptEditorBtn.prop('disabled', !isEnabled);
+		        }
+		        if (this.$resetSettingsBtn.length) {
+		            this.$resetSettingsBtn.prop('disabled', !isEnabled);
+		        }
+		        if (this.$resetModelBtn.length) {
+		            this.$resetModelBtn.prop('disabled', !isEnabled || this.$resetModelBtn.prop('disabled'));
+		        }
+		        if (this.$resetPromptBtn.length) {
+		            this.$resetPromptBtn.prop('disabled', !isEnabled || this.$resetPromptBtn.prop('disabled'));
+		        }
+		    },
+
 		    toggleTemporarySettings(forceState) {
 		        if (!this.$settingsPanel.length || !this.$settingsToggle.length) {
 		            return;
@@ -587,18 +1264,32 @@ jQuery(document).ready(function($) {
 
 		        this.$settingsPanel.prop('hidden', !shouldOpen);
 		        this.$settingsToggle.attr('aria-expanded', shouldOpen ? 'true' : 'false');
+		        this.$settingsToggle.attr('title', shouldOpen ? t('composerClose', 'Close settings') : t('composerSettingsTitle', 'Next question settings'));
+		        this.updateTemporarySettingsAvailability(shouldOpen);
 
-		        if (shouldOpen && this.$temporaryPrompt.length) {
-		            this.$temporaryPrompt.trigger('focus');
+		        if (!shouldOpen) {
+		            this.toggleTemporaryPromptEditor(false);
 		        }
 		    },
 
 		    handleDocumentClick(event) {
+		        this.hideFootnotePreview();
+		        const $target = $(event.target);
+
+		        if (this.$conversationOverview.length) {
+		            const clickedInsideOverview = $target.closest('#geweb-ai-conversation-overview').length > 0;
+		            this.setConversationOverviewScrollActive(clickedInsideOverview);
+		        }
+
+		        if (this.$answerBox.length) {
+		            const clickedInsideAnswerBox = $target.closest('.answer-box').length > 0;
+		            this.setAnswerBoxScrollActive(clickedInsideAnswerBox);
+		        }
+
 		        if (!this.$settingsPanel.length || this.$settingsPanel.prop('hidden')) {
 		            return;
 		        }
 
-		        const $target = $(event.target);
 		        if (
 		            $target.closest('#geweb-ai-temporary-settings-panel').length ||
 		            $target.closest('#geweb-ai-toggle-temp-settings').length
@@ -674,11 +1365,11 @@ jQuery(document).ready(function($) {
 		            meta: response.data?.meta && typeof response.data.meta === 'object' ? response.data.meta : {}
 		        });
 		        if (!compactedBeforeAppend && this.compactedConversation) {
-		            this.appendSystemNote(t('earlierTrimmed', 'Earlier messages were trimmed to keep the conversation context compact.'));
+		            this.appendSystemNote(t('earlierTrimmed', 'Earlier messages were trimmed to keep the chat context compact.'));
 		        }
 		        this.appendMessage(response.data, 'ai');
 		        this.renderSources();
-		        this.persistConversation();
+		        await this.persistConversation();
 		        await this.loadConversationArchive();
 		        this.renderConversationOverview();
 		        this.renderConversationSummary();
@@ -696,16 +1387,23 @@ jQuery(document).ready(function($) {
 		},
 
 		appendMessage(text, type) {
-		    if (type === 'user') {
+	        if (type === 'user') {
 		        const $msg = $(`<p class="user-message">${this.escapeHtml(text)}</p>`);
 		        this.$answerBox.append($msg);
+		        this.scrollElementIntoView($msg.get(0));
 		    } else {
 		        const $container = $('<div class="ai-message"></div>');
 		        const responseMeta = text?.meta && typeof text.meta === 'object' ? text.meta : {};
 		        const sourceFootnoteMap = this.getResponseSourceFootnoteMap(text.sources || [], text.answer || '', responseMeta);
-		        const answerWithFootnotes = this.decorateAnswerWithGroundingFootnotes(String(text.answer || ''), responseMeta, sourceFootnoteMap);
+		        const answerWithFootnotes = this.decorateAnswerWithGroundingFootnotes(String(text.answer || ''), responseMeta, sourceFootnoteMap, text.sources || []);
 		        const sanitizedAnswer = this.sanitizeAnswer(answerWithFootnotes);
 		        const $content = $('<div class="geweb-ai-message-content"></div>').html(sanitizedAnswer);
+		        if (!$content.find('.geweb-ai-footnote-ref').length) {
+		            const fallbackFootnotes = this.getFallbackFootnoteNumbers(sourceFootnoteMap, text.sources || []);
+		            if (fallbackFootnotes.length) {
+		                $content.append($(this.appendFallbackFootnoteGroup('', fallbackFootnotes)));
+		            }
+		        }
 		        const plainText = this.extractPlainTextFromHtml(sanitizedAnswer);
 		        const $copyButton = this.buildCopyButton(plainText);
 		        const $details = this.buildResponseDetails(responseMeta);
@@ -715,18 +1413,30 @@ jQuery(document).ready(function($) {
 		            $messageActions.append($copyButton);
 		        }
 
-		        if ($details) {
+		        if ($content.find('.geweb-ai-footnote-ref').length) {
 		            this.bindFootnoteInteractions($content);
+		        }
+
+		        if ($details) {
+		            $details.find('.geweb-ai-response-details-close').on('click', (event) => {
+		                event.preventDefault();
+		                event.stopPropagation();
+		                this.toggleResponseDetails($container);
+		                $detailsButton.attr('aria-expanded', 'false');
+		                $detailsButton.attr('title', t('showDetails', 'Show details'));
+		                $detailsButton.find('.geweb-ai-message-action-label').text(t('showDetails', 'Show details'));
+		            });
 		            const $detailsButton = $('<button type="button" class="geweb-ai-message-details-toggle"></button>');
 		            $detailsButton.attr('aria-expanded', 'false');
 		            $detailsButton.attr('title', t('showDetails', 'Show details'));
-		            $detailsButton.text(t('showDetails', 'Show details'));
+		            $detailsButton.append($('<span class="geweb-ai-message-action-icon geweb-ai-message-action-icon--details" aria-hidden="true">ⓘ</span>'));
+		            $detailsButton.append($('<span class="geweb-ai-message-action-label"></span>').text(t('showDetails', 'Show details')));
 		            $detailsButton.on('click', () => {
 		                this.toggleResponseDetails($container);
 		                const expanded = $details.hasClass('is-open');
 		                $detailsButton.attr('aria-expanded', expanded ? 'true' : 'false');
 		                $detailsButton.attr('title', expanded ? t('hideDetails', 'Hide details') : t('showDetails', 'Show details'));
-		                $detailsButton.text(expanded ? t('hideDetails', 'Hide details') : t('showDetails', 'Show details'));
+		                $detailsButton.find('.geweb-ai-message-action-label').text(expanded ? t('hideDetails', 'Hide details') : t('showDetails', 'Show details'));
 		            });
 		            $messageActions.append($detailsButton);
 		        }
@@ -740,6 +1450,7 @@ jQuery(document).ready(function($) {
 		        }
 
 		        this.$answerBox.append($container);
+		        this.scrollElementIntoView($container.get(0));
 		    }
 
 		    this.scrollToBottom();
@@ -761,6 +1472,7 @@ jQuery(document).ready(function($) {
 	        $button.attr('aria-label', t('copyAnswer', 'Copy answer'));
 	        $button.attr('title', t('copyAnswer', 'Copy answer'));
 	        $button.append($('<span class="geweb-ai-copy-answer-icon" aria-hidden="true">⧉</span>'));
+	        $button.append($('<span class="geweb-ai-message-action-label"></span>').text(t('copyAnswer', 'Copy answer')));
 	        $button.on('click', async () => {
 	            const copied = await this.copyTextToClipboard(plainText);
 	            $button.toggleClass('is-copied', copied);
@@ -796,10 +1508,16 @@ jQuery(document).ready(function($) {
 	        });
 
 	        $footnotes.on('mouseenter focus', (event) => {
-	            const footnote = Number($(event.currentTarget).attr('data-footnote') || 0);
+	            const $footnote = $(event.currentTarget);
+	            const footnote = Number($footnote.attr('data-footnote') || 0);
 	            if (footnote > 0) {
 	                this.highlightSourceReference(footnote);
+	                this.showFootnotePreview($footnote, footnote);
 	            }
+	        });
+
+	        $footnotes.on('mouseleave blur', () => {
+	            this.hideFootnotePreview();
 	        });
 
 	        $footnotes.on('click', (event) => {
@@ -808,6 +1526,7 @@ jQuery(document).ready(function($) {
 	            const footnote = Number($(event.currentTarget).attr('data-footnote') || 0);
 	            if (footnote > 0) {
 	                this.highlightSourceReference(footnote);
+	                this.hideFootnotePreview();
 	            }
 	        });
 
@@ -821,8 +1540,67 @@ jQuery(document).ready(function($) {
 	            const footnote = Number($(event.currentTarget).attr('data-footnote') || 0);
 	            if (footnote > 0) {
 	                this.highlightSourceReference(footnote);
+	                this.hideFootnotePreview();
 	            }
 	        });
+	    },
+
+	    getSourceReferenceItem(footnote) {
+	        if (!this.$sourcesBox.length || footnote <= 0) {
+	            return $();
+	        }
+
+	        return this.$sourcesBox.find(`[data-source-footnote="${footnote}"]`).first();
+	    },
+
+	    showFootnotePreview($footnote, footnote) {
+	        const $sourceItem = this.getSourceReferenceItem(footnote);
+	        if (!$footnote?.length || !$sourceItem.length) {
+	            this.hideFootnotePreview();
+	            return;
+	        }
+
+	        const title = String($sourceItem.attr('data-source-title') || '').trim();
+	        const snippet = String($sourceItem.attr('data-source-snippet') || '').trim();
+	        const path = String($sourceItem.attr('data-source-path') || '').trim();
+	        const contextCount = Number($sourceItem.attr('data-source-context-count') || 0);
+	        if (!title && !snippet && !path) {
+	            this.hideFootnotePreview();
+	            return;
+	        }
+
+	        if (!this.$footnotePreview?.length) {
+	            this.$footnotePreview = $('<div class="geweb-ai-footnote-preview" role="tooltip"></div>');
+	            $('body').append(this.$footnotePreview);
+	        }
+
+	        this.$footnotePreview.empty();
+	        if (title) {
+	            this.$footnotePreview.append($('<div class="geweb-ai-footnote-preview-title"></div>').text(title));
+	        }
+	        if (path) {
+	            this.$footnotePreview.append($('<div class="geweb-ai-footnote-preview-meta"></div>').text(path));
+	        }
+	        if (contextCount > 1) {
+	            this.$footnotePreview.append($('<div class="geweb-ai-footnote-preview-meta"></div>').text(`${contextCount} contexts`));
+	        }
+	        if (snippet) {
+	            this.$footnotePreview.append($('<div class="geweb-ai-footnote-preview-snippet"></div>').text(snippet));
+	        }
+
+	        const rect = $footnote.get(0).getBoundingClientRect();
+	        const top = globalThis.scrollY + rect.bottom + 8;
+	        const left = globalThis.scrollX + rect.left;
+	        this.$footnotePreview.css({
+	            top: `${top}px`,
+	            left: `${left}px`,
+	        }).addClass('is-visible');
+	    },
+
+	    hideFootnotePreview() {
+	        if (this.$footnotePreview?.length) {
+	            this.$footnotePreview.removeClass('is-visible');
+	        }
 	    },
 
 	    buildCurrentConversationClipboardText() {
@@ -861,8 +1639,8 @@ jQuery(document).ready(function($) {
 
 	        globalThis.setTimeout(() => {
 	            this.$copyConversationBtn.removeClass('is-copied');
-	            this.$copyConversationBtn.attr('aria-label', t('copyConversation', 'Copy conversation'));
-	            this.$copyConversationBtn.attr('title', t('copyConversation', 'Copy conversation'));
+	            this.$copyConversationBtn.attr('aria-label', t('copyConversation', 'Copy chat'));
+	            this.$copyConversationBtn.attr('title', t('copyConversation', 'Copy chat'));
 	        }, 1600);
 	    },
 
@@ -913,14 +1691,45 @@ jQuery(document).ready(function($) {
 	        const shouldShow = !$details.hasClass('is-open');
 	        $details.toggleClass('is-open', shouldShow);
 	        $content.attr('aria-expanded', shouldShow ? 'true' : 'false');
+	        if (shouldShow) {
+	            const detailsElement = $details.get(0);
+	            if (detailsElement && typeof detailsElement.scrollIntoView === 'function') {
+	                globalThis.setTimeout(() => {
+	                    detailsElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+	                }, 0);
+	            }
+	        }
 	    },
 
 	    scrollToBottom() {
 	        this.$answerBox[0].scrollTop = this.$answerBox[0].scrollHeight;
 	    },
 
-	    persistConversation() {
-	        this.upsertCurrentConversationInArchive();
+	    async persistConversation() {
+	        const entry = this.upsertCurrentConversationInArchive();
+	        if (!entry) {
+	            return;
+	        }
+
+	        try {
+	            const response = await this.requestFrontendConversation('geweb_save_frontend_conversation', {
+	                conversation_id: entry.id,
+	                summary: entry.summary,
+	                compacted: entry.compacted ? '1' : '0',
+	                messages: entry.messages
+	            });
+	            const savedConversation = response?.success ? response?.data?.conversation : null;
+	            if (savedConversation && typeof savedConversation === 'object') {
+	                const normalized = this.normalizeStoredConversation(savedConversation);
+	                this.conversationArchive = this.conversationArchive.filter((item) => item.id !== normalized.id);
+	                this.conversationArchive.unshift(normalized);
+	            }
+	        } catch (error) {
+	            console.debug('Persist conversation failed.', error);
+	        }
+
+	        this.syncFrontendPageConversationState();
+	        this.syncStoredChatState();
 	    },
 
 	    async requestFrontendConversation(action, data) {
@@ -939,16 +1748,23 @@ jQuery(document).ready(function($) {
 
 	    async loadConversationArchive() {
 	        try {
+	            const existingArchiveById = new Map(this.conversationArchive.map((entry) => [entry.id, entry]));
 	            const response = await this.requestFrontendConversation('geweb_get_frontend_conversations', {});
 	            const conversations = Array.isArray(response?.data?.conversations)
 	                ? response.data.conversations
 	                : [];
 	            this.conversationArchive = conversations
 	                .filter((entry) => entry && typeof entry === 'object')
-	                .map((entry) => this.normalizeStoredConversation(entry));
+	                .map((entry) => {
+	                    const normalizedEntry = this.normalizeStoredConversation(entry);
+	                    const existingEntry = existingArchiveById.get(normalizedEntry.id);
+	                    if (existingEntry?.messages?.length) {
+	                        normalizedEntry.messages = existingEntry.messages;
+	                    }
+	                    return normalizedEntry;
+	                });
 	        } catch (error) {
 	            console.debug('Load conversation archive failed.', error);
-	            this.conversationArchive = [];
 	        }
 	    },
 
@@ -958,24 +1774,64 @@ jQuery(document).ready(function($) {
 	        }
 
 	        this.$conversationOverview.empty();
+	        this.conversationOverviewRenderedCount = 0;
 
 	        if (!this.conversationArchive.length) {
 	            this.$conversationOverview.append($('<p class="geweb-ai-empty-panel"></p>').text(t('noChatsYet', 'No chats yet.')));
 	            return;
 	        }
 
-	        this.conversationArchive.forEach((entry) => {
+	        this.renderMoreConversationOverviewItems();
+	    },
+
+	    renderMoreConversationOverviewItems() {
+	        if (!this.$conversationOverview.length) {
+	            return;
+	        }
+
+	        const nextEntries = this.conversationArchive.slice(
+	            this.conversationOverviewRenderedCount,
+	            this.conversationOverviewRenderedCount + this.conversationOverviewPageSize
+	        );
+
+	        nextEntries.forEach((entry) => {
 	            const $item = $('<button type="button" class="geweb-ai-overview-item geweb-ai-overview-item--conversation"></button>');
 	            if (entry.id === this.conversationId) {
 	                $item.addClass('is-current');
 	            }
 
+	            const $removeButton = $('<button type="button" class="geweb-ai-overview-item-remove" aria-label="Remove chat" title="Remove chat"><span aria-hidden="true">−</span></button>');
+	            $removeButton.on('click', (event) => {
+	                event.preventDefault();
+	                event.stopPropagation();
+	                void this.deleteConversationById(entry.id);
+	            });
+
 	            const dateLabel = entry.savedAt ? new Date(entry.savedAt).toLocaleString() : '';
+	            $item.append($removeButton);
 	            $item.append($('<div class="geweb-ai-overview-role"></div>').text(dateLabel || t('savedChat', 'Saved chat')));
-	            $item.append($('<div class="geweb-ai-overview-preview"></div>').text(entry.summary || t('untitledConversation', 'Untitled conversation')));
+	            $item.append($('<div class="geweb-ai-overview-preview"></div>').text(entry.summary || t('untitledConversation', 'Untitled chat')));
 	            $item.on('click', () => this.loadConversation(entry.id));
 	            this.$conversationOverview.append($item);
 	        });
+
+	        this.conversationOverviewRenderedCount += nextEntries.length;
+	    },
+
+	    handleConversationOverviewScroll() {
+	        if (!this.$conversationOverview.length) {
+	            return;
+	        }
+
+	        const element = this.$conversationOverview.get(0);
+	        if (!element || this.conversationOverviewRenderedCount >= this.conversationArchive.length) {
+	            return;
+	        }
+
+	        const remaining = element.scrollHeight - (element.scrollTop + element.clientHeight);
+	        if (remaining <= 80) {
+	            this.renderMoreConversationOverviewItems();
+	        }
 	    },
 
 	    renderConversationSummary() {
@@ -988,7 +1844,7 @@ jQuery(document).ready(function($) {
 	            ? currentEntry.summary
 	            : this.buildConversationSummaryFromMessages(this.conversationHistory);
 
-	        this.$currentConversationSummary.text(summary || t('untitledConversation', 'Untitled conversation'));
+	        this.$currentConversationSummary.text(summary || t('untitledConversation', 'Untitled chat'));
 	    },
 
 	    ensureConversationId() {
@@ -1024,7 +1880,7 @@ jQuery(document).ready(function($) {
 					html = html.replaceAll(urlRegex, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
 
 					// Allow safe tags only
-	        const allowed = new Set(['p', 'br', 'b', 'strong', 'i', 'em', 'ul', 'ol', 'li', 'a', 'h1', 'h2', 'h3', 'sup']);
+	        const allowed = new Set(['p', 'br', 'b', 'strong', 'i', 'em', 'ul', 'ol', 'li', 'a', 'h1', 'h2', 'h3', 'span', 'sup']);
 					const div = document.createElement('div');
 					div.innerHTML = html;
 
@@ -1038,7 +1894,9 @@ jQuery(document).ready(function($) {
 											if (!/^https?:\/\//i.test(attr.value)) {
 													el.removeAttribute('href');
 											}
-									} else if (el.tagName.toLowerCase() === 'sup' && ['class', 'data-footnote', 'title'].includes(attr.name)) {
+									} else if (el.tagName.toLowerCase() === 'sup' && ['class', 'data-footnote'].includes(attr.name)) {
+											return;
+									} else if (el.tagName.toLowerCase() === 'span' && attr.name === 'class' && String(attr.value || '').includes('geweb-ai-footnote-group')) {
 											return;
 									} else if (!['target', 'rel'].includes(attr.name)) {
 											el.removeAttribute(attr.name);
@@ -1063,6 +1921,83 @@ jQuery(document).ready(function($) {
 	        this.renderConversationOverview();
 	        this.renderConversationSummary();
 	        this.renderSources();
+	        this.syncStoredChatState();
+	    },
+
+	    getStoredChatStateKey() {
+	        const pageKey = String(globalThis.location?.pathname || 'default').trim() || 'default';
+	        return `geweb_ai_chat_state:${pageKey}`;
+	    },
+
+	    readStoredChatState() {
+	        if (!globalThis.localStorage) {
+	            return null;
+	        }
+
+	        try {
+	            const rawValue = globalThis.localStorage.getItem(this.getStoredChatStateKey());
+	            if (!rawValue) {
+	                return null;
+	            }
+
+	            const parsed = JSON.parse(rawValue);
+	            return parsed && typeof parsed === 'object' ? parsed : null;
+	        } catch (error) {
+	            console.debug('Reading stored chat state failed.', error);
+	            return null;
+	        }
+	    },
+
+	    syncStoredChatState() {
+	        if (!globalThis.localStorage) {
+	            return;
+	        }
+
+	        try {
+	            globalThis.localStorage.setItem(this.getStoredChatStateKey(), JSON.stringify({
+	                conversationId: this.conversationId,
+	                compactedConversation: this.compactedConversation,
+	                conversationHistory: this.conversationHistory,
+	                conversationArchive: this.conversationArchive,
+	            }));
+	        } catch (error) {
+	            console.debug('Saving stored chat state failed.', error);
+	        }
+	    },
+
+	    hydrateFromStoredChatState() {
+	        const storedState = this.readStoredChatState();
+	        if (!storedState) {
+	            return false;
+	        }
+
+	        const storedArchive = Array.isArray(storedState.conversationArchive)
+	            ? storedState.conversationArchive.map((entry) => this.normalizeStoredConversation(entry))
+	            : [];
+	        if (storedArchive.length) {
+	            this.conversationArchive = storedArchive;
+	        }
+
+	        const storedConversationId = String(storedState.conversationId || '').trim();
+	        const storedHistory = Array.isArray(storedState.conversationHistory)
+	            ? storedState.conversationHistory
+	                .filter((entry) => entry && typeof entry === 'object')
+	                .map((entry) => ({
+	                    role: entry.role === 'model' ? 'model' : 'user',
+	                    content: String(entry.content || ''),
+	                    sources: Array.isArray(entry.sources) ? entry.sources : [],
+	                    meta: entry.meta && typeof entry.meta === 'object' ? entry.meta : {}
+	                }))
+	                .filter((entry) => entry.content.trim() !== '')
+	            : [];
+
+	        if (storedConversationId && storedHistory.length) {
+	            this.conversationId = storedConversationId;
+	            this.conversationHistory = storedHistory;
+	            this.compactedConversation = !!storedState.compactedConversation;
+	        }
+
+	        return storedArchive.length > 0 || storedHistory.length > 0;
 	    },
 
 	    normalizeStoredConversation(entry) {
@@ -1085,6 +2020,7 @@ jQuery(document).ready(function($) {
 	            savedAt: Number(entry.savedAt || Date.now()),
 	            compacted: !!entry.compacted,
 	            summary: summary,
+	            firstUserMessage: typeof entry.firstUserMessage === 'string' ? entry.firstUserMessage : this.getFirstUserMessageFromMessages(normalizedMessages),
 	            messages: normalizedMessages
 	        };
 	    },
@@ -1103,7 +2039,7 @@ jQuery(document).ready(function($) {
 	            return text.length > 80 ? `${text.slice(0, 77)}...` : text;
 	        }
 
-	        return t('untitledConversation', 'Untitled conversation');
+	        return t('untitledConversation', 'Untitled chat');
 	    },
 
 	    upsertCurrentConversationInArchive() {
@@ -1113,12 +2049,14 @@ jQuery(document).ready(function($) {
 	            savedAt: Date.now(),
 	            compacted: this.compactedConversation,
 	            summary: this.buildConversationSummaryFromMessages(this.conversationHistory),
+	            firstUserMessage: this.getFirstUserMessageFromMessages(this.conversationHistory),
 	            messages: this.conversationHistory
 	        };
 
 	        this.conversationArchive = this.conversationArchive.filter((item) => item.id !== id);
 	        this.conversationArchive.unshift(entry);
 	        this.conversationArchive = this.conversationArchive.slice(0, getLocalConversationArchiveLimit());
+	        return entry;
 	    },
 
 	    async renameCurrentConversation() {
@@ -1127,7 +2065,7 @@ jQuery(document).ready(function($) {
 	        const currentSummary = currentEntry?.summary
 	            ? currentEntry.summary
 	            : this.buildConversationSummaryFromMessages(this.conversationHistory);
-	        const nextSummary = globalThis.prompt(t('renameConversation', 'Rename conversation'), currentSummary || t('untitledConversation', 'Untitled conversation'));
+	        const nextSummary = globalThis.prompt(t('renameConversation', 'Rename chat'), currentSummary || t('untitledConversation', 'Untitled chat'));
 
 	        if (typeof nextSummary !== 'string') {
 	            return;
@@ -1155,19 +2093,24 @@ jQuery(document).ready(function($) {
 	            summary: trimmedSummary
 	        } : item);
 
-	        this.persistConversation();
+	        await this.persistConversation();
 	        this.renderConversationOverview();
 	        this.renderConversationSummary();
 	    },
 
 	    async deleteCurrentConversation() {
 	        const currentId = this.conversationId;
+	        await this.deleteConversationById(currentId);
+	    },
+
+	    async deleteConversationById(conversationId) {
+	        const currentId = String(conversationId || '').trim();
 	        if (!currentId) {
 	            this.createNewConversation(true);
 	            return;
 	        }
 
-	        if (!globalThis.confirm(t('removeConversationConfirm', 'Remove this conversation from the current search context?'))) {
+	        if (!globalThis.confirm(t('removeConversationConfirm', 'Remove this chat from the current search context?'))) {
 	            return;
 	        }
 
@@ -1183,6 +2126,14 @@ jQuery(document).ready(function($) {
 	        }
 
 	        await this.loadConversationArchive();
+	        if (currentId !== this.conversationId) {
+	            this.renderConversationOverview();
+	            this.renderConversationSummary();
+	            this.renderSources();
+	            this.syncStoredChatState();
+	            return;
+	        }
+
 	        if (this.conversationArchive.length) {
 	            await this.loadConversation(this.conversationArchive[0].id);
 	        } else {
@@ -1191,6 +2142,7 @@ jQuery(document).ready(function($) {
 	    },
 
 	    async loadConversation(conversationId) {
+	        try {
 	        let entry = this.conversationArchive.find((item) => item.id === conversationId);
 	        if (!entry?.messages?.length) {
 	            try {
@@ -1200,7 +2152,7 @@ jQuery(document).ready(function($) {
 		                if (!(response?.success && response?.data?.conversation)) {
 		                    this.conversationArchive = this.conversationArchive.filter((item) => item.id !== conversationId);
 		                    this.renderConversationOverview();
-		                    return;
+		                    return false;
 	                }
 	                entry = this.normalizeStoredConversation(response.data.conversation);
 	                this.conversationArchive = this.conversationArchive.map((item) => item.id === entry.id ? entry : item);
@@ -1212,7 +2164,7 @@ jQuery(document).ready(function($) {
 		                this.conversationArchive = this.conversationArchive.filter((item) => item.id !== conversationId);
 	                this.renderConversationOverview();
 	                this.renderConversationSummary();
-	                return;
+	                return false;
 	            }
 	        }
 
@@ -1228,7 +2180,7 @@ jQuery(document).ready(function($) {
 	        this.$answerBox.empty();
 
 	        if (this.compactedConversation) {
-	            this.appendSystemNote(t('earlierTrimmed', 'Earlier messages were trimmed to keep the conversation context compact.'));
+	            this.appendSystemNote(t('earlierTrimmed', 'Earlier messages were trimmed to keep the chat context compact.'));
 	        }
 
 	        this.conversationHistory.forEach((item) => {
@@ -1248,6 +2200,21 @@ jQuery(document).ready(function($) {
 	        this.renderConversationSummary();
 	        this.renderSources();
 	        this.toggleSubmitButton();
+	        this.syncFrontendPageConversationState();
+	        this.syncStoredChatState();
+	        return true;
+	        } catch (error) {
+	            console.debug('Restoring conversation render failed.', error);
+	            this.conversationId = conversationId;
+	            this.requestInFlight = false;
+	            this.renderConversationOverview();
+	            this.renderConversationSummary();
+	            this.renderSources();
+	            this.toggleSubmitButton();
+	            this.syncFrontendPageConversationState();
+	            this.syncStoredChatState();
+	            return false;
+	        }
 	    },
 
 	    createNewConversation(shouldFocus) {
@@ -1260,22 +2227,42 @@ jQuery(document).ready(function($) {
 	        this.renderConversationSummary();
 	        this.renderSources();
 	        this.toggleSubmitButton();
+	        this.syncFrontendPageConversationState();
+	        this.syncStoredChatState();
 
 	        if (shouldFocus) {
 	            this.focusInput();
 	        }
 	    },
 
+	    async restoreRequestedOrFirstConversation(requestedConversationId) {
+	        if (requestedConversationId) {
+	            return this.loadConversation(requestedConversationId);
+	        }
+
+	        const firstConversationId = this.conversationArchive[0]?.id || '';
+	        if (!firstConversationId) {
+	            return false;
+	        }
+
+	        return this.loadConversation(firstConversationId);
+	    },
+
 	    async applyFrontendRequestState() {
 	        const initialQuery = (geweb_aisearch.frontend_ai_initial_query || '').trim();
 	        const requestedConversationId = (geweb_aisearch.frontend_ai_conversation_id || '').trim();
+	        const conversationRestored = await this.restoreRequestedOrFirstConversation(requestedConversationId);
+	        if (!conversationRestored && requestedConversationId && this.conversationArchive.length) {
+	            await this.restoreRequestedOrFirstConversation('');
+	        }
 
-	        if (requestedConversationId && this.conversationArchive.some((item) => item.id === requestedConversationId)) {
-	            await this.loadConversation(requestedConversationId);
-	        } else if (requestedConversationId) {
-	            await this.loadConversation(requestedConversationId);
-	        } else if (this.conversationArchive.length) {
-	            await this.loadConversation(this.conversationArchive[0].id);
+	        if (!requestedConversationId && initialQuery && this.shouldAutoSubmitQuery(initialQuery)) {
+	            const targetConversationId = this.getTargetConversationIdForQuery(initialQuery);
+	            if (targetConversationId && targetConversationId !== this.conversationId) {
+	                await this.loadConversation(targetConversationId);
+	            } else if (!targetConversationId) {
+	                this.createNewConversation(false);
+	            }
 	        }
 
 	        if (initialQuery && this.shouldAutoSubmitQuery(initialQuery)) {
@@ -1299,6 +2286,8 @@ jQuery(document).ready(function($) {
 	    Object.assign(GewebAIChat, globalThis.GewebAISearchSourceMethods);
 	}
 
+	globalThis.GewebAIModal = GewebModal;
 	GewebModal.init();
 	GewebAIChat.init();
+	highlightFirstPageMatch();
 });
