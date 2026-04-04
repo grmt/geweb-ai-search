@@ -170,7 +170,7 @@ class AdminSettingsManager {
             $historyLimit = max(1, intval($_POST['geweb_ai_search_prompt_history_limit']));
         }
 
-        update_option(self::OPTION_PROMPT_HISTORY_LIMIT, $historyLimit);
+        $this->updateScopedOption(self::OPTION_PROMPT_HISTORY_LIMIT, $historyLimit);
         $this->trimPromptHistory(max(0, $historyLimit - 1));
         return $historyLimit;
     }
@@ -185,7 +185,7 @@ class AdminSettingsManager {
         }
 
         $newPrompt = PromptSupport::normalizePromptInput($_POST['geweb_ai_search_custom_prompt']);
-        $currentPrompt = (string) get_option(self::OPTION_CUSTOM_PROMPT, '');
+        $currentPrompt = (string) $this->getScopedOption(self::OPTION_CUSTOM_PROMPT, '');
         $newPromptName = isset($_POST['geweb_ai_search_custom_prompt_name'])
             ? sanitize_text_field(wp_unslash($_POST['geweb_ai_search_custom_prompt_name']))
             : '';
@@ -198,16 +198,16 @@ class AdminSettingsManager {
         }
 
         if ($useDefaultPrompt) {
-            delete_option(self::OPTION_CUSTOM_PROMPT);
-            delete_option(self::OPTION_CUSTOM_PROMPT_NAME);
+            $this->deleteScopedOption(self::OPTION_CUSTOM_PROMPT);
+            $this->deleteScopedOption(self::OPTION_CUSTOM_PROMPT_NAME);
             if (trim($defaultPrompt) !== trim($currentPrompt)) {
                 $this->storeCurrentPromptSnapshot($defaultPrompt, self::LABEL_DEFAULT_PROMPT, $historyLimit);
             }
             return;
         }
 
-        update_option(self::OPTION_CUSTOM_PROMPT, $newPrompt);
-        update_option(self::OPTION_CUSTOM_PROMPT_NAME, $newPromptName);
+        $this->updateScopedOption(self::OPTION_CUSTOM_PROMPT, $newPrompt);
+        $this->updateScopedOption(self::OPTION_CUSTOM_PROMPT_NAME, $newPromptName);
         if ($newPrompt !== $currentPrompt) {
             $this->storeCurrentPromptSnapshot($newPrompt, $newPromptName, $historyLimit);
         }
@@ -218,9 +218,9 @@ class AdminSettingsManager {
      * @return void
      */
     private function saveModelPromptOverrides(int $historyLimit): void {
-        $currentModelPrompts = get_option(self::OPTION_MODEL_PROMPTS, []);
-        $currentModelPromptNames = get_option(self::OPTION_MODEL_PROMPT_NAMES, []);
-        $currentModelPromptModes = get_option(self::OPTION_MODEL_PROMPT_MODES, []);
+        $currentModelPrompts = $this->getScopedOption(self::OPTION_MODEL_PROMPTS, []);
+        $currentModelPromptNames = $this->getScopedOption(self::OPTION_MODEL_PROMPT_NAMES, []);
+        $currentModelPromptModes = $this->getScopedOption(self::OPTION_MODEL_PROMPT_MODES, []);
         $currentModelPrompts = is_array($currentModelPrompts) ? $currentModelPrompts : [];
         $currentModelPromptNames = is_array($currentModelPromptNames) ? $currentModelPromptNames : [];
         $currentModelPromptModes = is_array($currentModelPromptModes) ? $currentModelPromptModes : [];
@@ -291,11 +291,11 @@ class AdminSettingsManager {
      */
     private function persistModelPromptOption(string $optionName, array $values): void {
         if (!empty($values)) {
-            update_option($optionName, $values, false);
+            $this->updateScopedOption($optionName, $values);
             return;
         }
 
-        delete_option($optionName);
+        $this->deleteScopedOption($optionName);
     }
 
     /**
@@ -358,7 +358,7 @@ class AdminSettingsManager {
             $name = self::LABEL_DEFAULT_PROMPT;
         }
 
-        $history = PromptSupport::normalizePromptHistoryEntries(get_option(self::OPTION_PROMPT_HISTORY, []));
+        $history = PromptSupport::normalizePromptHistoryEntries($this->getScopedOption(self::OPTION_PROMPT_HISTORY, []));
         array_unshift($history, [
             'entry_id' => wp_generate_uuid4(),
             'prompt' => $prompt,
@@ -409,7 +409,7 @@ class AdminSettingsManager {
             $counts[$scopeKey] += 1;
         }
 
-        update_option(self::OPTION_PROMPT_HISTORY, $uniqueHistory);
+        $this->updateScopedOption(self::OPTION_PROMPT_HISTORY, $uniqueHistory);
     }
 
     /**
@@ -417,7 +417,7 @@ class AdminSettingsManager {
      * @return void
      */
     private function updatePromptHistoryNames(array $names): void {
-        $history = PromptSupport::normalizePromptHistoryEntries(get_option(self::OPTION_PROMPT_HISTORY, []));
+        $history = PromptSupport::normalizePromptHistoryEntries($this->getScopedOption(self::OPTION_PROMPT_HISTORY, []));
         if (empty($history)) {
             return;
         }
@@ -449,7 +449,7 @@ class AdminSettingsManager {
         }
 
         if ($newHistory !== $history) {
-            update_option(self::OPTION_PROMPT_HISTORY, $newHistory);
+            $this->updateScopedOption(self::OPTION_PROMPT_HISTORY, $newHistory);
         }
     }
 
@@ -465,9 +465,9 @@ class AdminSettingsManager {
      * @return void
      */
     private function trimPromptHistory(int $limit): void {
-        $history = PromptSupport::normalizePromptHistoryEntries(get_option(self::OPTION_PROMPT_HISTORY, []));
+        $history = PromptSupport::normalizePromptHistoryEntries($this->getScopedOption(self::OPTION_PROMPT_HISTORY, []));
         if (empty($history)) {
-            update_option(self::OPTION_PROMPT_HISTORY, []);
+            $this->updateScopedOption(self::OPTION_PROMPT_HISTORY, []);
             return;
         }
 
@@ -486,7 +486,7 @@ class AdminSettingsManager {
             $counts[$scopeKey] += 1;
         }
 
-        update_option(self::OPTION_PROMPT_HISTORY, $trimmed);
+        $this->updateScopedOption(self::OPTION_PROMPT_HISTORY, $trimmed);
     }
 
     /**
@@ -496,6 +496,26 @@ class AdminSettingsManager {
         $documentManager = new ReferencedDocumentManager();
         $documentManager->clearAllTrackedDocuments();
         PostIndexManager::clearAllIndexedState();
+    }
+
+    /**
+     * @param mixed $default
+     * @return mixed
+     */
+    private function getScopedOption(string $optionName, $default = false) {
+        return UserScope::getScopedOption($optionName, $default);
+    }
+
+    /**
+     * @param mixed $value
+     * @return bool
+     */
+    private function updateScopedOption(string $optionName, $value): bool {
+        return UserScope::updateScopedOption($optionName, $value, false);
+    }
+
+    private function deleteScopedOption(string $optionName): void {
+        UserScope::deleteScopedOption($optionName);
     }
 
     /**

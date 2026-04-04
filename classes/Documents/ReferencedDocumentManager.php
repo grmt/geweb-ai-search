@@ -12,6 +12,7 @@ class ReferencedDocumentManager {
     private DocumentStore $documentStore;
     private string $documentsTable;
     private string $refsTable;
+    private string $ownerKey;
 
     public function __construct(?DocumentStore $documentStore = null) {
         global $wpdb;
@@ -19,6 +20,7 @@ class ReferencedDocumentManager {
         $this->documentStore = $documentStore ?? new DocumentStore();
         $this->documentsTable = $wpdb->prefix . 'geweb_ai_documents';
         $this->refsTable = $wpdb->prefix . 'geweb_ai_post_document_refs';
+        $this->ownerKey = $this->documentStore->getOwnerKey();
     }
 
     /**
@@ -36,8 +38,8 @@ class ReferencedDocumentManager {
                 continue;
             }
 
-            $wpdb->delete($this->refsTable, ['document_id' => $docId], ['%d']);
-            $deleted = $wpdb->delete($this->documentsTable, ['id' => $docId], ['%d']);
+            $wpdb->delete($this->refsTable, ['owner_key' => $this->ownerKey, 'document_id' => $docId], ['%s', '%d']);
+            $deleted = $wpdb->delete($this->documentsTable, ['owner_key' => $this->ownerKey, 'id' => $docId], ['%s', '%d']);
             if ($deleted) {
                 $removedCount++;
             }
@@ -87,8 +89,9 @@ class ReferencedDocumentManager {
     public function clearAllTrackedDocuments(): void {
         global $wpdb;
 
-        $wpdb->query(self::SQL_DELETE_FROM . $this->refsTable);
-        $wpdb->query(self::SQL_DELETE_FROM . $this->documentsTable);
+        $wpdb->delete($this->refsTable, ['owner_key' => $this->ownerKey], ['%s']);
+        $wpdb->delete($this->documentsTable, ['owner_key' => $this->ownerKey], ['%s']);
+        UserScope::deleteScopedOption(self::OPTION_REFERENCED_SELECTION_TARGETS);
         $this->documentStore->clearReferencedDocumentOverviewCache();
     }
 
@@ -120,7 +123,7 @@ class ReferencedDocumentManager {
         global $wpdb;
 
         $document = $wpdb->get_row(
-            $wpdb->prepare(self::SQL_SELECT_ALL_FROM . $this->documentsTable . self::SQL_WHERE_FILE_HASH, $fileHash),
+            $wpdb->prepare(self::SQL_SELECT_ALL_FROM . $this->documentsTable . " WHERE owner_key = %s AND file_hash = %s", $this->ownerKey, $fileHash),
             ARRAY_A
         );
 
@@ -139,8 +142,8 @@ class ReferencedDocumentManager {
             }
         }
 
-        $wpdb->delete($this->refsTable, ['document_id' => $docId], ['%d']);
-        $wpdb->delete($this->documentsTable, ['id' => $docId], ['%d']);
+        $wpdb->delete($this->refsTable, ['owner_key' => $this->ownerKey, 'document_id' => $docId], ['%s', '%d']);
+        $wpdb->delete($this->documentsTable, ['owner_key' => $this->ownerKey, 'id' => $docId], ['%s', '%d']);
         $this->documentStore->clearReferencedDocumentOverviewCache();
 
         return true;
@@ -236,7 +239,7 @@ class ReferencedDocumentManager {
      * @return array<string,bool>
      */
     public function getReferencedDocumentSelectionTargets(): array {
-        $stored = get_option(self::OPTION_REFERENCED_SELECTION_TARGETS, []);
+        $stored = UserScope::getScopedOption(self::OPTION_REFERENCED_SELECTION_TARGETS, []);
         if (!is_array($stored)) {
             return [];
         }
@@ -267,14 +270,14 @@ class ReferencedDocumentManager {
             $normalized[sanitize_text_field($fileHash)] = (bool) $target;
         }
 
-        update_option(self::OPTION_REFERENCED_SELECTION_TARGETS, $normalized, false);
+        UserScope::updateScopedOption(self::OPTION_REFERENCED_SELECTION_TARGETS, $normalized, false);
         $this->documentStore->clearReferencedDocumentOverviewCache();
     }
 
     public function saveReferencedDocumentSelectionTarget(string $fileHash, bool $include): void {
         $targets = $this->getReferencedDocumentSelectionTargets();
         $targets[sanitize_text_field($fileHash)] = $include;
-        update_option(self::OPTION_REFERENCED_SELECTION_TARGETS, $targets, false);
+        UserScope::updateScopedOption(self::OPTION_REFERENCED_SELECTION_TARGETS, $targets, false);
         $this->documentStore->clearReferencedDocumentOverviewCache();
     }
 
@@ -293,7 +296,8 @@ class ReferencedDocumentManager {
 
             $exists = $wpdb->get_var(
                 $wpdb->prepare(
-                    "SELECT COUNT(*) FROM " . $this->refsTable . " WHERE post_id = %d AND document_id = %d",
+                    "SELECT COUNT(*) FROM " . $this->refsTable . " WHERE owner_key = %s AND post_id = %d AND document_id = %d",
+                    $this->ownerKey,
                     $postId,
                     $documentId
                 )
@@ -305,8 +309,8 @@ class ReferencedDocumentManager {
 
             $wpdb->insert(
                 $this->refsTable,
-                ['post_id' => $postId, 'document_id' => $documentId],
-                ['%d', '%d']
+                ['owner_key' => $this->ownerKey, 'post_id' => $postId, 'document_id' => $documentId],
+                ['%s', '%d', '%d']
             );
         }
     }

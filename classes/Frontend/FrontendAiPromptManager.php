@@ -68,8 +68,8 @@ class FrontendAiPromptManager {
         }
 
         if ($name === '') {
-            $customPrompt = trim((string) get_option('geweb_aisearch_custom_prompt', ''));
-            $customPromptName = trim((string) get_option('geweb_aisearch_custom_prompt_name', ''));
+            $customPrompt = trim((string) UserScope::getScopedOption('geweb_aisearch_custom_prompt', ''));
+            $customPromptName = trim((string) UserScope::getScopedOption('geweb_aisearch_custom_prompt_name', ''));
             $name = __('Built-in prompt', 'geweb-ai-search');
             if ($customPrompt !== '') {
                 $name = $customPromptName !== '' ? $customPromptName : __('Custom prompt', 'geweb-ai-search');

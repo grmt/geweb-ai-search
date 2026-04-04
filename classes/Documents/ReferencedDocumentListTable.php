@@ -137,6 +137,7 @@ class ReferencedDocumentListTable extends \WP_List_Table {
         $displayName = isset($item['display_name']) ? trim((string) $item['display_name']) : '';
         $fileHash = isset($item['file_hash']) ? (string) $item['file_hash'] : '';
         $isEditable = !empty($item['managed_by_simple_file_list']) && $fileHash !== '';
+        $niceNameInputId = 'geweb-edit-nice-name-' . substr(sanitize_html_class($fileHash), 0, 12);
 
         if ($niceName === '' || $niceName === $displayName) {
             $niceName = '';
@@ -152,7 +153,7 @@ class ReferencedDocumentListTable extends \WP_List_Table {
             '<div class="geweb-nice-name-cell" data-file-hash="%s" data-current-nice-name="%s" data-placeholder="%s">' .
             '<button type="button" class="button-link geweb-edit-nice-name-trigger">%s</button>' .
             '<div class="geweb-edit-nice-name-form" style="display:none; margin-top:4px;">' .
-            '<input type="text" class="regular-text geweb-edit-nice-name-input" value="%s" placeholder="%s" style="max-width:24rem;"> ' .
+            '<input type="text" id="%s" name="%s" class="regular-text geweb-edit-nice-name-input" value="%s" placeholder="%s" style="max-width:24rem;"> ' .
             '<button type="button" class="button button-small geweb-save-nice-name">Save</button> ' .
             '<button type="button" class="button-link geweb-cancel-nice-name">Cancel</button>' .
             '<p class="geweb-ai-index-feedback" style="display:none; margin:4px 0 0;"></p>' .
@@ -162,6 +163,8 @@ class ReferencedDocumentListTable extends \WP_List_Table {
             esc_attr($niceName),
             esc_attr($placeholder),
             esc_html($niceName !== '' ? $niceName : 'Add nice name'),
+            esc_attr($niceNameInputId),
+            esc_attr($niceNameInputId),
             esc_attr($niceName),
             esc_attr($placeholder)
         );
@@ -273,6 +276,8 @@ class ReferencedDocumentListTable extends \WP_List_Table {
             return '—';
         }
 
+        $excludeToggleId = 'geweb-referenced-document-exclude-' . substr(sanitize_html_class($fileHash), 0, 12);
+
         $status = isset($item['status']) ? (string) $item['status'] : '';
         $isUploaded = strpos($status, 'Uploaded') === 0;
         $canManage = $isUploaded || !empty($item['file_path']);
@@ -290,7 +295,7 @@ class ReferencedDocumentListTable extends \WP_List_Table {
         return sprintf(
             '<div class="geweb-ai-index-cell geweb-referenced-document-cell" data-file-hash="%s" data-current-uploaded="%s" data-current-target="%s">' .
             '<button type="button" class="button button-small geweb-referenced-document-upload-now" data-file-hash="%s"%s>Upload</button> ' .
-            '<label style="margin-left:8px;"><input type="checkbox" class="geweb-referenced-document-toggle-exclude" data-file-hash="%s" %s%s> Exclude</label>' .
+            '<label for="%s" style="margin-left:8px;"><input type="checkbox" id="%s" name="%s" class="geweb-referenced-document-toggle-exclude" data-file-hash="%s" %s%s> Exclude</label>' .
             '<p class="geweb-ai-index-feedback" style="display:none; margin:4px 0 0;"></p>' .
             '</div>',
             esc_attr($fileHash),
@@ -298,6 +303,9 @@ class ReferencedDocumentListTable extends \WP_List_Table {
             $includeTarget ? '1' : '0',
             esc_attr($fileHash),
             $disableUpload ? ' disabled' : '',
+            esc_attr($excludeToggleId),
+            esc_attr($excludeToggleId),
+            esc_attr($excludeToggleId),
             esc_attr($fileHash),
             checked(!$includeTarget, true, false),
             $disableExcludeToggle ? ' disabled' : ''

@@ -290,6 +290,8 @@ class GeminiStoreListTable extends \WP_List_Table {
             $this->referencedDocumentByGeminiName = $this->buildReferencedDocumentMap();
         }
 
+        $browserId = 'geweb-gemini-store-browser-' . substr(md5(wp_json_encode($documents)), 0, 8);
+
         if (empty($documents)) {
             return '<p style="margin:0;">No uploaded items found for this store.</p>';
         }
@@ -358,26 +360,26 @@ class GeminiStoreListTable extends \WP_List_Table {
         return '' .
             '<div class="geweb-gemini-store-documents-browser">' .
                 '<div style="display:flex; flex-wrap:wrap; gap:12px; align-items:end; margin-bottom:12px;">' .
-                    '<label style="display:flex; flex-direction:column; gap:4px;">' .
+                    '<label for="' . esc_attr($browserId . '-filter') . '" style="display:flex; flex-direction:column; gap:4px;">' .
                         '<span>Filter</span>' .
-                        '<input type="search" class="regular-text geweb-gemini-store-documents-filter" placeholder="Filter uploaded items">' .
+                        '<input type="search" id="' . esc_attr($browserId . '-filter') . '" name="' . esc_attr($browserId . '-filter') . '" class="regular-text geweb-gemini-store-documents-filter" placeholder="Filter uploaded items">' .
                     '</label>' .
-                    '<label style="display:flex; flex-direction:column; gap:4px;">' .
+                    '<label for="' . esc_attr($browserId . '-type-filter') . '" style="display:flex; flex-direction:column; gap:4px;">' .
                         '<span>Type</span>' .
-                        '<select class="geweb-gemini-store-documents-type-filter">' .
+                        '<select id="' . esc_attr($browserId . '-type-filter') . '" name="' . esc_attr($browserId . '-type-filter') . '" class="geweb-gemini-store-documents-type-filter">' .
                             '<option value="">All types</option>' .
                             '<option value="page (markdown)">Page (Markdown)</option>' .
                             '<option value="image">Image</option>' .
                             '<option value="document">Document</option>' .
                         '</select>' .
                     '</label>' .
-                    '<label style="display:flex; flex-direction:column; gap:4px;">' .
+                    '<label for="' . esc_attr($browserId . '-id-filter') . '" style="display:flex; flex-direction:column; gap:4px;">' .
                         '<span>Page ID</span>' .
-                        '<input type="search" class="small-text geweb-gemini-store-documents-id-filter" placeholder="e.g. 62">' .
+                        '<input type="search" id="' . esc_attr($browserId . '-id-filter') . '" name="' . esc_attr($browserId . '-id-filter') . '" class="small-text geweb-gemini-store-documents-id-filter" placeholder="e.g. 62">' .
                     '</label>' .
-                    '<label style="display:flex; flex-direction:column; gap:4px;">' .
+                    '<label for="' . esc_attr($browserId . '-slug-filter') . '" style="display:flex; flex-direction:column; gap:4px;">' .
                         '<span>Slug</span>' .
-                        '<input type="search" class="regular-text geweb-gemini-store-documents-slug-filter" placeholder="Filter by slug">' .
+                        '<input type="search" id="' . esc_attr($browserId . '-slug-filter') . '" name="' . esc_attr($browserId . '-slug-filter') . '" class="regular-text geweb-gemini-store-documents-slug-filter" placeholder="Filter by slug">' .
                     '</label>' .
                 '</div>' .
                 '<div class="geweb-gemini-store-documents-filter-status description" style="margin-bottom:8px; color:#646970;"></div>' .

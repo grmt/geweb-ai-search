@@ -290,7 +290,7 @@ class AdminPageRenderer {
                                                 </p>
                                                 <textarea id="geweb_ai_search_model_prompt_<?php echo esc_attr((string) $row['index']); ?>" name="geweb_ai_search_model_prompts[]" rows="8" data-geweb-model-prompt="<?php echo esc_attr((string) $row['model']); ?>" class="large-text code" placeholder="Leave empty to use the general prompt for <?php echo esc_attr((string) $row['model']); ?>."><?php echo esc_textarea((string) $row['prompt']); ?></textarea>
                                                 <p class="description">Built-in prompt for this model starts with:</p>
-                                                <textarea readonly rows="4" class="large-text code" style="opacity:.75;"><?php echo esc_textarea((string) $row['default_prompt']); ?></textarea>
+                                                <textarea id="geweb_ai_search_default_model_prompt_<?php echo esc_attr((string) $row['index']); ?>" name="geweb_ai_search_default_model_prompts[]" readonly rows="4" class="large-text code" style="opacity:.75;"><?php echo esc_textarea((string) $row['default_prompt']); ?></textarea>
                                             </div>
                                         </details>
                                     <?php endforeach; ?>

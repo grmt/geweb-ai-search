@@ -63,7 +63,7 @@ class ReferencedDocumentOverviewBuilder {
             $uploadedByHash,
             $uploadsEnabled,
             $connectionState,
-            [$this, 'buildOverviewEntry']
+            \Closure::fromCallable([$this, 'buildOverviewEntry'])
         );
 
         $items = $this->finalizeReferencedDocumentOverviewItems($overview, $uploadedByHash);

@@ -14,7 +14,7 @@ class PromptHistoryAjaxController {
             wp_send_json_error(['message' => self::MESSAGE_INSUFFICIENT_PERMISSIONS], 403);
         }
 
-        update_option(self::OPTION_PROMPT_HISTORY, []);
+        UserScope::updateScopedOption(self::OPTION_PROMPT_HISTORY, []);
 
         wp_send_json_success([
             'message' => 'Prompt history cleared.',
@@ -33,7 +33,7 @@ class PromptHistoryAjaxController {
             wp_send_json_error(['message' => 'Invalid prompt history entry.'], 400);
         }
 
-        $history = PromptSupport::normalizePromptHistoryEntries(get_option(self::OPTION_PROMPT_HISTORY, []));
+        $history = PromptSupport::normalizePromptHistoryEntries(UserScope::getScopedOption(self::OPTION_PROMPT_HISTORY, []));
         if (empty($history)) {
             wp_send_json_success(['message' => 'History is already empty.']);
             return;
@@ -53,7 +53,7 @@ class PromptHistoryAjaxController {
             wp_send_json_error(['message' => 'Prompt version not found.'], 404);
         }
 
-        update_option(self::OPTION_PROMPT_HISTORY, $newHistory);
+        UserScope::updateScopedOption(self::OPTION_PROMPT_HISTORY, $newHistory);
 
         wp_send_json_success(['message' => 'Prompt version deleted.']);
     }

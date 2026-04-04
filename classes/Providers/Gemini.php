@@ -134,7 +134,7 @@ class Gemini implements AIProviderInterface {
 
         try {
             $result = $this->makeRequest($url, $body, 'POST');
-            if (!empty($result['name']) && update_option(self::OPTION_STORE, $result['name'])) {
+            if (!empty($result['name']) && $this->updateScopedOption(self::OPTION_STORE, $result['name'])) {
                 $newStore = (string) $result['name'];
                 $this->clearStoresCache();
                 if ($previousStore !== '' && $previousStore !== $newStore) {
@@ -154,7 +154,7 @@ class Gemini implements AIProviderInterface {
      * @return string Store name or empty string if not exists
      */
     public function getStoreData(): string {
-        return get_option(self::OPTION_STORE, '');
+        return (string) $this->getScopedOption(self::OPTION_STORE, '');
     }
 
     /**
@@ -170,7 +170,7 @@ class Gemini implements AIProviderInterface {
         }
 
         $this->deleteStoreByName($storeName);
-        delete_option(self::OPTION_STORE);
+        $this->deleteScopedOption(self::OPTION_STORE);
         $this->clearStoresCache();
     }
 
@@ -190,7 +190,7 @@ class Gemini implements AIProviderInterface {
         $this->deleteStoreByName($storeName);
 
         if ($storeName === $this->getStoreData()) {
-            delete_option(self::OPTION_STORE);
+            $this->deleteScopedOption(self::OPTION_STORE);
         }
 
         $this->clearStoresCache();
@@ -204,7 +204,7 @@ class Gemini implements AIProviderInterface {
      */
     public function getStoreOverview(bool $forceRefresh = false): array {
         if (!$forceRefresh) {
-            $cached = get_option(self::OPTION_STORES_CACHE, null);
+            $cached = $this->getScopedOption(self::OPTION_STORES_CACHE, null);
             if (is_array($cached)) {
                 return $cached;
             }
@@ -212,12 +212,12 @@ class Gemini implements AIProviderInterface {
 
         try {
             $items = $this->buildStoreOverview();
-            update_option(self::OPTION_STORES_CACHE, $items, false);
-            update_option(self::OPTION_STORES_CACHE_TIME, (string) time(), false);
-            delete_option(self::OPTION_STORES_CACHE_ERROR);
+            $this->updateScopedOption(self::OPTION_STORES_CACHE, $items);
+            $this->updateScopedOption(self::OPTION_STORES_CACHE_TIME, (string) time());
+            $this->deleteScopedOption(self::OPTION_STORES_CACHE_ERROR);
             return $items;
         } catch (\Exception $e) {
-            update_option(self::OPTION_STORES_CACHE_ERROR, $this->sanitizeConnectionErrorMessage($e->getMessage()), false);
+            $this->updateScopedOption(self::OPTION_STORES_CACHE_ERROR, $this->sanitizeConnectionErrorMessage($e->getMessage()));
             return [];
         }
     }
@@ -226,30 +226,30 @@ class Gemini implements AIProviderInterface {
      * @return bool
      */
     public function hasStoreOverviewCache(): bool {
-        return is_array(get_option(self::OPTION_STORES_CACHE, null));
+        return is_array($this->getScopedOption(self::OPTION_STORES_CACHE, null));
     }
 
     /**
      * @return int
      */
     public function getStoreOverviewCacheTime(): int {
-        return (int) get_option(self::OPTION_STORES_CACHE_TIME, 0);
+        return (int) $this->getScopedOption(self::OPTION_STORES_CACHE_TIME, 0);
     }
 
     /**
      * @return string
      */
     public function getStoreOverviewError(): string {
-        return (string) get_option(self::OPTION_STORES_CACHE_ERROR, '');
+        return (string) $this->getScopedOption(self::OPTION_STORES_CACHE_ERROR, '');
     }
 
     /**
      * @return void
      */
     public function clearStoresCache(): void {
-        delete_option(self::OPTION_STORES_CACHE);
-        delete_option(self::OPTION_STORES_CACHE_TIME);
-        delete_option(self::OPTION_STORES_CACHE_ERROR);
+        $this->deleteScopedOption(self::OPTION_STORES_CACHE);
+        $this->deleteScopedOption(self::OPTION_STORES_CACHE_TIME);
+        $this->deleteScopedOption(self::OPTION_STORES_CACHE_ERROR);
     }
 
     /**
@@ -1101,11 +1101,11 @@ class Gemini implements AIProviderInterface {
      * @return array<string,mixed>
      */
     private function getBasePromptDescriptor(string $resolvedModel): array {
-        $customPrompt = trim((string) get_option(self::OPTION_CUSTOM_PROMPT, ''));
+        $customPrompt = trim((string) $this->getScopedOption(self::OPTION_CUSTOM_PROMPT, ''));
         if ($customPrompt !== '') {
             return [
                 'instruction' => $customPrompt,
-                'name' => trim((string) get_option('geweb_aisearch_custom_prompt_name', '')) ?: 'Custom prompt',
+                'name' => trim((string) $this->getScopedOption('geweb_aisearch_custom_prompt_name', '')) ?: 'Custom prompt',
                 'scope' => 'global',
                 'is_model_specific' => false,
                 'is_custom' => true,
@@ -1147,7 +1147,7 @@ class Gemini implements AIProviderInterface {
      * @return array<string,string>
      */
     private function getStoredModelPrompts(): array {
-        $value = get_option(self::OPTION_MODEL_PROMPTS, []);
+        $value = $this->getScopedOption(self::OPTION_MODEL_PROMPTS, []);
         if (!is_array($value)) {
             return [];
         }
@@ -1162,7 +1162,7 @@ class Gemini implements AIProviderInterface {
      * @return array<string,string>
      */
     private function getStoredModelPromptNames(): array {
-        $value = get_option(self::OPTION_MODEL_PROMPT_NAMES, []);
+        $value = $this->getScopedOption(self::OPTION_MODEL_PROMPT_NAMES, []);
         return is_array($value) ? array_map('strval', $value) : [];
     }
 
@@ -1170,7 +1170,7 @@ class Gemini implements AIProviderInterface {
      * @return array<string,string>
      */
     private function getStoredModelPromptModes(): array {
-        $value = get_option(self::OPTION_MODEL_PROMPT_MODES, []);
+        $value = $this->getScopedOption(self::OPTION_MODEL_PROMPT_MODES, []);
         return is_array($value) ? array_map('strval', $value) : [];
     }
 
@@ -1461,6 +1461,26 @@ class Gemini implements AIProviderInterface {
         ];
 
         update_option(self::OPTION_MODEL_STATUS, $statuses);
+    }
+
+    /**
+     * @param mixed $default
+     * @return mixed
+     */
+    private function getScopedOption(string $optionName, $default = false) {
+        return UserScope::getScopedOption($optionName, $default);
+    }
+
+    /**
+     * @param mixed $value
+     * @return bool
+     */
+    private function updateScopedOption(string $optionName, $value): bool {
+        return UserScope::updateScopedOption($optionName, $value, false);
+    }
+
+    private function deleteScopedOption(string $optionName): void {
+        UserScope::deleteScopedOption($optionName);
     }
 
     /**

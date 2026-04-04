@@ -26,7 +26,7 @@
 
     function t(key, fallback) {
         const translated = getI18nValue(key);
-        if (translated) {
+        if (typeof translated === 'string' && translated.trim() !== '') {
             return translated;
         }
 
@@ -1036,6 +1036,8 @@
             const $toggle = $('<button type="button" class="geweb-ai-source-link geweb-ai-source-toggle"></button>');
 
             $toggle.attr('aria-label', `Show context for ${sourceLabel}`);
+            $toggle.attr('title', sourceLabel);
+            $toggle.append($('<span class="geweb-ai-source-link-icon" aria-hidden="true">📄</span>'));
             $toggle.append($('<span class="geweb-ai-source-link-label"></span>').text(title));
             if (referenceHint) {
                 $toggle.append($('<span class="geweb-ai-source-link-hint"></span>').text(referenceHint));
@@ -1045,7 +1047,7 @@
             $itemHeader.prepend($toggle);
             $item.append($itemHeader);
 
-            const $details = this.buildSourceDetails(url, contexts, previewSnippet, referenceHint, $item);
+            const $details = this.buildSourceDetails(url, contexts, previewSnippet, referenceHint, $item, footnote);
             if ($details.children().length) {
                 $item.append($details);
             }
@@ -1080,6 +1082,7 @@
             const activateSource = (event) => {
                 event.preventDefault();
                 event.stopPropagation();
+                this.ensureSourcesPanelVisible();
                 this.activateSourceReferenceItem($item);
             };
 
@@ -1121,7 +1124,7 @@
             $item.on('mouseleave focusout', clearPreview);
         },
 
-        buildSourceDetails(url, contexts, previewSnippet, referenceHint, $sourceItem) {
+        buildSourceDetails(url, contexts, previewSnippet, referenceHint, $sourceItem, footnote = 0) {
             const $details = $('<div class="geweb-ai-source-details"></div>');
             const $detailsHeader = $('<div class="geweb-ai-source-details-header"></div>');
             const $closeButton = $('<button type="button" class="geweb-ai-source-details-close" aria-label="Close source context" title="Close source context"></button>');
@@ -1135,8 +1138,8 @@
             $details.append($detailsHeader);
 
             const $contexts = contexts.length > 1
-                ? this.buildSourceContextList(url, contexts, $sourceItem)
-                : this.buildSingleSourceSnippet(url, contexts[0], previewSnippet, $sourceItem);
+                ? this.buildSourceContextList(url, contexts, $sourceItem, footnote)
+                : this.buildSingleSourceSnippet(url, contexts[0], previewSnippet, $sourceItem, footnote);
 
             if ($contexts) {
                 $details.append($contexts);
@@ -1145,10 +1148,10 @@
             return $details;
         },
 
-        buildSourceContextList(url, contexts, $sourceItem) {
+        buildSourceContextList(url, contexts, $sourceItem, footnote = 0) {
             const $contextList = $('<ol class="geweb-ai-source-context-list"></ol>');
             contexts.forEach((context, contextIndex) => {
-                const $contextItem = this.buildSourceContextItem(url, context, contextIndex, $sourceItem);
+                const $contextItem = this.buildSourceContextItem(url, context, contextIndex, $sourceItem, footnote);
                 if ($contextItem) {
                     $contextList.append($contextItem);
                 }
@@ -1157,7 +1160,7 @@
             return $contextList.children().length ? $contextList : null;
         },
 
-        buildSourceContextItem(url, context, contextIndex, $sourceItem) {
+        buildSourceContextItem(url, context, contextIndex, $sourceItem, footnote = 0) {
             const contextText = String(context?.text || '').trim();
             if (!contextText) {
                 return null;
@@ -1167,7 +1170,12 @@
             const targetUrl = String(context?.url || url || '').trim();
             const documentLabel = String(context?.documentLabel || '').trim();
             const $contextItem = $('<li class="geweb-ai-source-context-item"></li>');
-            $contextItem.append($('<div class="geweb-ai-source-context-label"></div>').text(`${t('groundingContextTitle', 'Context')} ${contextIndex + 1}`));
+            const $contextLabel = $('<div class="geweb-ai-source-context-label"></div>').text(t('groundingContextTitle', 'Context'));
+            const $footnoteBadge = this.buildSourceContextFootnoteBadge(footnote);
+            if ($footnoteBadge) {
+                $contextLabel.append($footnoteBadge);
+            }
+            $contextItem.append($contextLabel);
             if (documentLabel) {
                 $contextItem.append($('<div class="geweb-ai-source-context-document"></div>').text(documentLabel));
             }
@@ -1182,7 +1190,7 @@
             return $contextItem;
         },
 
-        buildSingleSourceSnippet(url, context, previewSnippet, $sourceItem) {
+        buildSingleSourceSnippet(url, context, previewSnippet, $sourceItem, footnote = 0) {
             const snippetText = String(context?.text || previewSnippet || '').trim();
             if (!snippetText) {
                 return null;
@@ -1192,6 +1200,12 @@
             const targetUrl = String(context?.url || url || '').trim();
             const documentLabel = String(context?.documentLabel || '').trim();
             const $wrapper = $('<div class="geweb-ai-source-single-context"></div>');
+            const $contextLabel = $('<div class="geweb-ai-source-context-label"></div>').text(t('groundingContextTitle', 'Context'));
+            const $footnoteBadge = this.buildSourceContextFootnoteBadge(footnote);
+            if ($footnoteBadge) {
+                $contextLabel.append($footnoteBadge);
+            }
+            $wrapper.append($contextLabel);
             if (documentLabel) {
                 $wrapper.append($('<div class="geweb-ai-source-context-document"></div>').text(documentLabel));
             }
@@ -1205,6 +1219,15 @@
             this.bindSourceContentInteraction($snippet, targetUrl, matchPhrase, $sourceItem);
             $wrapper.append($snippet);
             return $wrapper;
+        },
+
+        buildSourceContextFootnoteBadge(footnote) {
+            const footnoteNumber = Number(footnote || 0);
+            if (!Number.isInteger(footnoteNumber) || footnoteNumber <= 0) {
+                return null;
+            }
+
+            return $('<span class="geweb-ai-source-context-footnote"></span>').text(`[${footnoteNumber}]`);
         },
 
         bindSourceContentInteraction($element, url, matchPhrase, $sourceItem) {
@@ -1297,6 +1320,7 @@
             if (nextLabel) {
                 $label.text(nextLabel);
                 $item.attr('data-source-title', nextLabel);
+                $item.find('.geweb-ai-source-toggle').first().attr('title', nextLabel);
             }
             if (!nextUrl) {
                 return;
@@ -1498,7 +1522,7 @@
             return match?.[1] || '';
         },
 
-        highlightSourceReference(footnote) {
+        highlightSourceReference(footnote, options = {}) {
             if (!this.$sourcesBox.length) {
                 return;
             }
@@ -1509,8 +1533,18 @@
                 return;
             }
 
+            const mode = options?.mode === 'preview' ? 'preview' : 'active';
             this.ensureSourcesPanelVisible();
-            this.activateSourceReferenceItem($target);
+            if (mode === 'preview') {
+                this.previewSourceReferenceItem($target);
+            } else {
+                this.activateSourceReferenceItem($target);
+            }
+            this.highlightBestSourceContext($target, mode);
+            if (mode === 'preview') {
+                return;
+            }
+
             const element = $target.get(0);
             if (element && typeof element.scrollIntoView === 'function') {
                 element.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -1536,6 +1570,7 @@
 
             const $items = this.$sourcesBox.find('li');
             $items.removeClass('is-active is-preview');
+            this.clearSourceContextHighlights();
             $target.addClass('is-active');
         },
 
@@ -1546,6 +1581,7 @@
 
             const $items = this.$sourcesBox.find('li').not('.is-active');
             $items.removeClass('is-preview');
+            this.clearSourceContextHighlights('preview');
             if (!$target.hasClass('is-active')) {
                 $target.addClass('is-preview');
             }
@@ -1559,12 +1595,148 @@
             $target.removeClass('is-preview');
         },
 
+        clearAllSourceReferencePreviews() {
+            if (!this.$sourcesBox.length) {
+                return;
+            }
+
+            this.$sourcesBox.find('li.is-preview').removeClass('is-preview');
+            this.clearSourceContextHighlights('preview');
+        },
+
         deactivateSourceReferenceItems() {
             if (!this.$sourcesBox.length) {
                 return;
             }
 
             this.$sourcesBox.find('li').removeClass('is-active is-preview');
+            this.clearSourceContextHighlights();
+        },
+
+        highlightBestSourceContext($sourceItem, mode = 'active') {
+            if (!$sourceItem?.length) {
+                return;
+            }
+
+            const $contexts = $sourceItem.find('.geweb-ai-source-context-item, .geweb-ai-source-single-context');
+            if (!$contexts.length) {
+                return;
+            }
+
+            const previewOnly = mode === 'preview';
+            this.clearSourceContextHighlights(previewOnly ? 'preview' : null);
+            const $bestMatch = this.findBestSourceContextElement($sourceItem, $contexts);
+            if (!$bestMatch?.length) {
+                return;
+            }
+
+            $bestMatch.addClass(previewOnly ? 'is-context-preview' : 'is-context-active');
+            const element = $bestMatch.get(0);
+            if (element && typeof element.scrollIntoView === 'function') {
+                element.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
+        },
+
+        clearSourceContextHighlights(mode = null) {
+            if (!this.$sourcesBox.length) {
+                return;
+            }
+
+            const $contexts = this.$sourcesBox.find('.geweb-ai-source-context-item, .geweb-ai-source-single-context');
+            if (mode === 'preview') {
+                $contexts.removeClass('is-context-preview');
+                return;
+            }
+
+            $contexts.removeClass('is-context-preview is-context-active');
+        },
+
+        findBestSourceContextElement($sourceItem, $contexts) {
+            if (!$contexts?.length) {
+                return $();
+            }
+
+            if ($contexts.length === 1) {
+                return $contexts.first();
+            }
+
+            const preferredSnippet = this.normalizeSourceContextText($sourceItem.attr('data-source-snippet') || '');
+            const preferredPhrases = this.parseSourceMatchPhrases($sourceItem.attr('data-source-match-phrases'));
+            let bestScore = -1;
+            let $bestMatch = $contexts.first();
+
+            $contexts.each((index, element) => {
+                const $context = $(element);
+                const contextText = this.normalizeSourceContextText($context.text());
+                const matchPhrase = this.normalizeSourceContextText($context.attr('data-source-match-phrase') || '');
+                let score = 0;
+
+                if (preferredSnippet && contextText) {
+                    if (contextText.includes(preferredSnippet) || preferredSnippet.includes(contextText)) {
+                        score += 8;
+                    } else {
+                        score += this.computeSourceTextOverlapScore(preferredSnippet, contextText);
+                    }
+                }
+
+                if (matchPhrase) {
+                    score += 3;
+                }
+
+                if (matchPhrase && preferredPhrases.includes(matchPhrase)) {
+                    score += 6;
+                }
+
+                score -= index * 0.01;
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    $bestMatch = $context;
+                }
+            });
+
+            return $bestMatch;
+        },
+
+        parseSourceMatchPhrases(rawPhrases) {
+            if (!rawPhrases) {
+                return [];
+            }
+
+            try {
+                const phrases = JSON.parse(rawPhrases);
+                if (!Array.isArray(phrases)) {
+                    return [];
+                }
+
+                return phrases
+                    .map((phrase) => this.normalizeSourceContextText(phrase))
+                    .filter(Boolean);
+            } catch (error) {
+                return [];
+            }
+        },
+
+        normalizeSourceContextText(value) {
+            return String(value || '')
+                .replaceAll(/\s+/g, ' ')
+                .trim()
+                .toLowerCase();
+        },
+
+        computeSourceTextOverlapScore(left, right) {
+            if (!left || !right) {
+                return 0;
+            }
+
+            const leftTokens = [...new Set(left.split(' ').filter((token) => token.length > 3))];
+            if (!leftTokens.length) {
+                return 0;
+            }
+
+            return leftTokens.reduce((score, token) => (
+                right.includes(token) ? score + 1 : score
+            ), 0);
         },
 
         extractSourcesFromMeta(responseMeta, seen) {

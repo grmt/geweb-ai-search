@@ -111,6 +111,9 @@ class ConversationListTable extends \WP_List_Table {
             $summary = 'Untitled conversation';
         }
         $conversationId = isset($item['id']) ? (string) $item['id'] : '';
+        $editInputId = $conversationId !== ''
+            ? 'geweb-edit-conversation-' . substr(sanitize_html_class($conversationId), 0, 24)
+            : 'geweb-edit-conversation';
 
         $startedAt = isset($item['started_at']) ? (int) $item['started_at'] : 0;
         $startedLabel = $startedAt > 0
@@ -132,7 +135,7 @@ class ConversationListTable extends \WP_List_Table {
                     '%s' .
                 '</div>' .
                 '<div class="geweb-edit-conversation-form" style="display:none; margin-top:6px;">' .
-                    '<input type="text" class="regular-text geweb-edit-conversation-input" value="%s" style="max-width:24rem;"> ' .
+                    '<input type="text" id="%s" name="%s" class="regular-text geweb-edit-conversation-input" value="%s" style="max-width:24rem;"> ' .
                     '<button type="button" class="button button-small geweb-save-conversation-name">Save</button> ' .
                     '<button type="button" class="button-link geweb-cancel-conversation-name">Cancel</button>' .
                     '<p class="geweb-ai-index-feedback" style="display:none; margin:4px 0 0;"></p>' .
@@ -143,6 +146,8 @@ class ConversationListTable extends \WP_List_Table {
             esc_attr($summary),
             esc_html($summary),
             $this->getOpenConversationLinkHtml($conversationId),
+            esc_attr($editInputId),
+            esc_attr($editInputId),
             esc_attr($summary),
             esc_html($startedLabel)
         );

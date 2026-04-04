@@ -388,6 +388,7 @@ class PostIndexManager {
         $isExcluded = $this->isExcluded($postId);
         $hideIndexControls = $this->shouldHideIndexControls($postId, $isExcluded);
         $statusData = $hideIndexControls ? ['label' => 'Excluded by plugin', 'color' => self::COLOR_MUTED, 'last_indexed' => '', 'error' => ''] : $this->getStatusData($postId);
+        $excludeToggleId = 'geweb-ai-toggle-exclude-' . $postId;
         $html = '<div class="geweb-ai-index-cell" data-post-id="' . esc_attr((string) $postId) . '">';
         $html .= '<p style="margin:0; color:' . esc_attr($statusData['color']) . ';">' . esc_html($statusData['label']) . '</p>';
 
@@ -403,8 +404,8 @@ class PostIndexManager {
         if (!$hideIndexControls) {
             $html .= '<p style="margin:8px 0 0;">';
             $html .= '<button type="button" class="button button-small geweb-ai-reupload">Upload</button> ';
-            $html .= '<label style="margin-left:8px;">';
-            $html .= '<input type="checkbox" class="geweb-ai-toggle-exclude" ' . checked($isExcluded, true, false) . disabled($isExcluded, true, false) . '> Exclude';
+            $html .= '<label for="' . esc_attr($excludeToggleId) . '" style="margin-left:8px;">';
+            $html .= '<input type="checkbox" id="' . esc_attr($excludeToggleId) . '" name="' . esc_attr($excludeToggleId) . '" class="geweb-ai-toggle-exclude" ' . checked($isExcluded, true, false) . disabled($isExcluded, true, false) . '> Exclude';
             $html .= '</label>';
             $html .= '</p>';
         }

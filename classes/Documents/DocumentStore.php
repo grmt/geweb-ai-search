@@ -16,6 +16,12 @@ class DocumentStore {
     private const LOG_DOCUMENT_ID_SUFFIX = ' (document_id=';
     private static $documentsTable;
     private static $refsTable;
+    private static bool $schemaEnsured = false;
+    private string $ownerKey;
+
+    public function __construct() {
+        $this->ownerKey = UserScope::getCurrentScopeKey();
+    }
 
     /**
      * Initialize table names.
@@ -24,6 +30,7 @@ class DocumentStore {
         global $wpdb;
         self::$documentsTable = $wpdb->prefix . 'geweb_ai_documents';
         self::$refsTable = $wpdb->prefix . 'geweb_ai_post_document_refs';
+        self::ensureSchema();
     }
 
     /**
@@ -36,25 +43,47 @@ class DocumentStore {
 
         $sql_docs = "CREATE TABLE " . self::$documentsTable . " (
             id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+            owner_key VARCHAR(191) NOT NULL,
             file_hash VARCHAR(64) NOT NULL,
             gemini_doc_name VARCHAR(255) NOT NULL,
             display_name VARCHAR(255) NOT NULL,
             last_uploaded BIGINT(20) UNSIGNED NOT NULL,
             PRIMARY KEY (id),
-            UNIQUE KEY file_hash (file_hash),
-            UNIQUE KEY gemini_doc_name (gemini_doc_name)
+            UNIQUE KEY owner_file_hash (owner_key, file_hash),
+            UNIQUE KEY owner_gemini_doc_name (owner_key, gemini_doc_name),
+            KEY owner_key (owner_key)
         ) $charset_collate;";
 
         $sql_refs = "CREATE TABLE " . self::$refsTable . " (
+            owner_key VARCHAR(191) NOT NULL,
             post_id BIGINT(20) UNSIGNED NOT NULL,
             document_id BIGINT(20) UNSIGNED NOT NULL,
-            PRIMARY KEY (post_id, document_id),
+            PRIMARY KEY (owner_key, post_id, document_id),
+            KEY owner_document_id (owner_key, document_id),
             KEY document_id (document_id)
         ) $charset_collate;";
 
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
         dbDelta($sql_docs);
         dbDelta($sql_refs);
+    }
+
+    private static function ensureSchema(): void {
+        if (self::$schemaEnsured) {
+            return;
+        }
+
+        self::$schemaEnsured = true;
+        global $wpdb;
+
+        $docsHasOwnerKey = $wpdb->get_var("SHOW COLUMNS FROM " . self::$documentsTable . " LIKE 'owner_key'");
+        $refsHasOwnerKey = $wpdb->get_var("SHOW COLUMNS FROM " . self::$refsTable . " LIKE 'owner_key'");
+
+        if ($docsHasOwnerKey && $refsHasOwnerKey) {
+            return;
+        }
+
+        self::install();
     }
 
     /**
@@ -96,7 +125,8 @@ class DocumentStore {
         global $wpdb;
 
         return (int) $wpdb->get_var($wpdb->prepare(
-            "SELECT id FROM " . self::$documentsTable . self::SQL_WHERE_FILE_HASH,
+            "SELECT id FROM " . self::$documentsTable . " WHERE owner_key = %s AND file_hash = %s",
+            $this->ownerKey,
             $fileHash
         ));
     }
@@ -158,9 +188,10 @@ class DocumentStore {
                 'file_hash' => $fileHash,
                 'gemini_doc_name' => $geminiDocName,
                 'display_name' => $displayName,
+                'owner_key' => $this->ownerKey,
                 'last_uploaded' => time(),
             ],
-            ['%s', '%s', '%s', '%d']
+            ['%s', '%s', '%s', '%s', '%d']
         );
 
         return $result ? (int) $wpdb->insert_id : null;
@@ -172,7 +203,8 @@ class DocumentStore {
      */
     private function resolveDocumentInsertRace(\wpdb $wpdb, AIProviderInterface $gemini, string $fileHash, string $geminiDocName, string $displayName): ?int {
         $existing = $wpdb->get_row($wpdb->prepare(
-            "SELECT id, gemini_doc_name FROM " . self::$documentsTable . self::SQL_WHERE_FILE_HASH,
+            "SELECT id, gemini_doc_name FROM " . self::$documentsTable . " WHERE owner_key = %s AND file_hash = %s",
+            $this->ownerKey,
             $fileHash
         ), ARRAY_A);
 
@@ -238,7 +270,7 @@ class DocumentStore {
      */
     public function getReferencedDocumentOverview(bool $forceRefresh = false): array {
         if (!$forceRefresh) {
-            $cached = get_option(self::OPTION_REFERENCED_CACHE, null);
+            $cached = UserScope::getScopedOption(self::OPTION_REFERENCED_CACHE, null);
             if (is_array($cached)) {
                 return $cached;
             }
@@ -246,9 +278,9 @@ class DocumentStore {
 
         $result = (new ReferencedDocumentOverviewBuilder($this))->build();
         $items = is_array($result['items'] ?? null) ? $result['items'] : [];
-        update_option(self::OPTION_REFERENCED_CACHE, $items, false);
-        update_option(self::OPTION_REFERENCED_CACHE_TIME, (string) time(), false);
-        update_option(self::OPTION_REFERENCED_CACHE_DEBUG, is_array($result['debug'] ?? null) ? $result['debug'] : [], false);
+        UserScope::updateScopedOption(self::OPTION_REFERENCED_CACHE, $items, false);
+        UserScope::updateScopedOption(self::OPTION_REFERENCED_CACHE_TIME, (string) time(), false);
+        UserScope::updateScopedOption(self::OPTION_REFERENCED_CACHE_DEBUG, is_array($result['debug'] ?? null) ? $result['debug'] : [], false);
 
         return $items;
     }
@@ -257,21 +289,21 @@ class DocumentStore {
      * @return bool
      */
     public function hasReferencedDocumentOverviewCache(): bool {
-        return is_array(get_option(self::OPTION_REFERENCED_CACHE, null));
+        return is_array(UserScope::getScopedOption(self::OPTION_REFERENCED_CACHE, null));
     }
 
     /**
      * @return int
      */
     public function getReferencedDocumentOverviewCacheTime(): int {
-        return (int) get_option(self::OPTION_REFERENCED_CACHE_TIME, 0);
+        return (int) UserScope::getScopedOption(self::OPTION_REFERENCED_CACHE_TIME, 0);
     }
 
     /**
      * @return array<string,int>
      */
     public function getReferencedDocumentOverviewDebug(): array {
-        $debug = get_option(self::OPTION_REFERENCED_CACHE_DEBUG, []);
+        $debug = UserScope::getScopedOption(self::OPTION_REFERENCED_CACHE_DEBUG, []);
         return is_array($debug) ? $debug : [];
     }
 
@@ -279,9 +311,9 @@ class DocumentStore {
      * @return void
      */
     public function clearReferencedDocumentOverviewCache(): void {
-        delete_option(self::OPTION_REFERENCED_CACHE);
-        delete_option(self::OPTION_REFERENCED_CACHE_TIME);
-        delete_option(self::OPTION_REFERENCED_CACHE_DEBUG);
+        UserScope::deleteScopedOption(self::OPTION_REFERENCED_CACHE);
+        UserScope::deleteScopedOption(self::OPTION_REFERENCED_CACHE_TIME);
+        UserScope::deleteScopedOption(self::OPTION_REFERENCED_CACHE_DEBUG);
     }
 
     /**
@@ -296,13 +328,13 @@ class DocumentStore {
         $this->clearReferencedDocumentOverviewCache();
 
         // First, find out which documents are currently associated
-        $currentDocIds = $wpdb->get_col($wpdb->prepare("SELECT document_id FROM " . self::$refsTable . " WHERE post_id = %d", $postId));
+        $currentDocIds = $wpdb->get_col($wpdb->prepare("SELECT document_id FROM " . self::$refsTable . " WHERE owner_key = %s AND post_id = %d", $this->ownerKey, $postId));
 
         // Find which associations to remove
         $toRemove = array_diff($currentDocIds, $documentIds);
         if (!empty($toRemove)) {
             $in = implode(',', array_map('intval', $toRemove));
-            $wpdb->query($wpdb->prepare(self::SQL_DELETE_FROM . self::$refsTable . " WHERE post_id = %d AND document_id IN ($in)", $postId));
+            $wpdb->query($wpdb->prepare(self::SQL_DELETE_FROM . self::$refsTable . " WHERE owner_key = %s AND post_id = %d AND document_id IN ($in)", $this->ownerKey, $postId));
             $this->cleanupOrphanedDocuments($toRemove);
         }
 
@@ -311,8 +343,8 @@ class DocumentStore {
         foreach ($toAdd as $docId) {
             $wpdb->insert(
                 self::$refsTable,
-                ['post_id' => $postId, 'document_id' => (int) $docId],
-                ['%d', '%d']
+                ['owner_key' => $this->ownerKey, 'post_id' => $postId, 'document_id' => (int) $docId],
+                ['%s', '%d', '%d']
             );
         }
     }
@@ -338,17 +370,17 @@ class DocumentStore {
         $gemini = ProviderFactory::make();
 
         foreach ($documentIds as $docId) {
-            $count = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM " . self::$refsTable . " WHERE document_id = %d", $docId));
+            $count = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM " . self::$refsTable . " WHERE owner_key = %s AND document_id = %d", $this->ownerKey, $docId));
             if ((int) $count === 0) {
                 // This document is an orphan, delete it from Gemini and our DB
-                $doc = $wpdb->get_row($wpdb->prepare(self::SQL_SELECT_ALL_FROM . self::$documentsTable . " WHERE id = %d", $docId));
+                $doc = $wpdb->get_row($wpdb->prepare(self::SQL_SELECT_ALL_FROM . self::$documentsTable . " WHERE owner_key = %s AND id = %d", $this->ownerKey, $docId));
                 if ($doc) {
                     try {
                         $gemini->deleteDocument($doc->gemini_doc_name);
                     } catch (\Exception $e) {
                         // Ignore Gemini errors, we still want to remove it from our DB
                     }
-                    $wpdb->delete(self::$documentsTable, ['id' => $docId], ['%d']);
+                    $wpdb->delete(self::$documentsTable, ['owner_key' => $this->ownerKey, 'id' => $docId], ['%s', '%d']);
                 }
             }
         }
@@ -362,8 +394,15 @@ class DocumentStore {
     public function getAllDocuments(): array {
         self::init();
         global $wpdb;
-        $results = $wpdb->get_results(self::SQL_SELECT_ALL_FROM . self::$documentsTable, ARRAY_A);
+        $results = $wpdb->get_results(
+            $wpdb->prepare(self::SQL_SELECT_ALL_FROM . self::$documentsTable . " WHERE owner_key = %s", $this->ownerKey),
+            ARRAY_A
+        );
         return is_array($results) ? $results : [];
+    }
+
+    public function getOwnerKey(): string {
+        return $this->ownerKey;
     }
 
 }

@@ -4,7 +4,7 @@ function getAiSearchConfig() {
 
 function t(key, fallback) {
 	const translated = getAiSearchConfig().i18n?.[key];
-	return translated || fallback;
+	return typeof translated === 'string' && translated.trim() !== '' ? translated : fallback;
 }
 
 function getLocalConversationArchiveLimit() {
@@ -112,6 +112,10 @@ jQuery(document).ready(function($) {
 		}
 
 		return nonceRequest;
+	}
+
+	function clearSearchNonce() {
+		geweb_aisearch.search_nonce = '';
 	}
 
 	ensureSearchNonce().catch(function() {
@@ -311,6 +315,7 @@ jQuery(document).ready(function($) {
 	
 	        document.body.classList.add('geweb-ai-page', 'geweb-ai-page-open');
 	        this.initPageHeightPersistence();
+	        this.bindPageToolbarControls();
 	        this.ensurePageResizeHandle();
 	        this.bindFrontendHeaderSearch();
 	        this.bindWorkspacePaneResizers();
@@ -387,6 +392,19 @@ jQuery(document).ready(function($) {
 	        }
 	    },
 
+	    resetPageViewToViewport() {
+	        if (!this.isPageView() || !this.ai) {
+	            return;
+	        }
+
+	        this.clearStoredPageViewHeight();
+	        this.ai.style.height = '';
+	        this.applyPageViewHeight(this.getPageViewViewportHeight(), { persist: false });
+	        globalThis.requestAnimationFrame(() => {
+	            this.alignPageViewBottomToViewport();
+	        });
+	    },
+
 	    applyPageViewHeight(rawHeight, options = {}) {
 	        const height = this.clampPageViewHeight(rawHeight);
 	        if (!height || !this.ai) {
@@ -398,6 +416,45 @@ jQuery(document).ready(function($) {
 	        if (options.persist !== false) {
 	            this.persistPageViewHeight(height);
 	        }
+	    },
+
+	    alignPageViewBottomToViewport(options = {}) {
+	        if (!this.isPageView() || !this.ai) {
+	            return;
+	        }
+
+	        const align = (behavior) => {
+	            if (!this.ai) {
+	                return;
+	            }
+
+	            const viewportHeight = globalThis.innerHeight || 0;
+	            if (!viewportHeight) {
+	                return;
+	            }
+
+	            if (typeof this.ai.scrollIntoView === 'function') {
+	                this.ai.scrollIntoView({
+	                    block: 'end',
+	                    behavior,
+	                });
+	            }
+
+	            const rect = this.ai.getBoundingClientRect();
+	            const correction = rect.bottom - viewportHeight;
+	            if (Math.abs(correction) > 1 && typeof globalThis.scrollBy === 'function') {
+	                globalThis.scrollBy({
+	                    top: correction,
+	                    behavior,
+	                });
+	            }
+	        };
+
+	        const behavior = options.behavior || 'auto';
+	        align(behavior);
+	        globalThis.requestAnimationFrame(() => {
+	            align(behavior);
+	        });
 	    },
 
 	    syncPageViewHeightToViewport() {
@@ -452,6 +509,19 @@ jQuery(document).ready(function($) {
 
 	        globalThis.addEventListener('resize', () => {
 	            this.syncPageViewHeightToViewport();
+	        });
+	    },
+
+	    bindPageToolbarControls() {
+	        const alignButton = document.getElementById('geweb-ai-align-workspace');
+	        if (!alignButton || alignButton.dataset.gewebAiBound === '1') {
+	            return;
+	        }
+
+	        alignButton.dataset.gewebAiBound = '1';
+	        alignButton.addEventListener('click', (event) => {
+	            event.preventDefault();
+	            this.resetPageViewToViewport();
 	        });
 	    },
 
@@ -518,9 +588,7 @@ jQuery(document).ready(function($) {
 	            }
 
 	            event.preventDefault();
-	            this.clearStoredPageViewHeight();
-	            this.ai.style.height = '';
-	            this.applyPageViewHeight(this.getPageViewViewportHeight(), { persist: false });
+	            this.resetPageViewToViewport();
 	        });
 	    },
 
@@ -1095,6 +1163,10 @@ jQuery(document).ready(function($) {
 	    },
 
 	    getAjaxErrorMessage(xhr, fallbackMessage) {
+	        if (xhr?.statusText === 'timeout') {
+	            return t('requestTimedOut', 'The AI request timed out. Please try again.');
+	        }
+
 	        const responseJsonMessage = xhr?.responseJSON?.data?.message
 	            ? String(xhr.responseJSON.data.message).trim()
 	            : '';
@@ -1113,6 +1185,13 @@ jQuery(document).ready(function($) {
 	        }
 
 	        return fallbackMessage;
+	    },
+
+	    isNonceFailureResponse(xhr) {
+	        const responseText = typeof xhr?.responseText === 'string'
+	            ? String(xhr.responseText).trim()
+	            : '';
+	        return Number(xhr?.status || 0) === 403 && responseText === '-1';
 	    },
 
 		    setTemporaryPromptBase(descriptor) {
@@ -1328,26 +1407,50 @@ jQuery(document).ready(function($) {
 	            this.requestInFlight = false;
 	            this.appendMessage({ answer: t('couldNotStart', 'Could not start the AI search. Please try again.'), sources: [] }, 'ai');
 	            this.toggleSubmitButton();
-	            return;
-	        }
+		            return;
+		        }
 
-		        $.ajax({
-		            url: geweb_aisearch.ajax_url,
-		            type: 'POST',
-		            data: {
-		                action: 'geweb_ai_chat',
-		                nonce: geweb_aisearch.search_nonce,
-		                conversation_id: this.ensureConversationId(),
-		                model: this.getSelectedModel(),
-		                temporary_prompt: this.getTemporaryPrompt(),
-		                messages: [{
-		                    role: 'user',
-		                    content: message
-		                }]
-		            },
-		            success: (response) => this.handleResponse(response, $loader),
-		            error: (xhr) => this.handleError($loader, xhr)
-		        });
+		        const requestData = {
+		            action: 'geweb_ai_chat',
+		            nonce: geweb_aisearch.search_nonce,
+		            conversation_id: this.ensureConversationId(),
+		            model: this.getSelectedModel(),
+		            temporary_prompt: this.getTemporaryPrompt(),
+		            messages: [{
+		                role: 'user',
+		                content: message
+		            }]
+		        };
+		        let nonceRetried = false;
+		        const sendAjaxRequest = () => {
+		            $.ajax({
+		                url: geweb_aisearch.ajax_url,
+		                type: 'POST',
+		                timeout: 120000,
+		                data: requestData,
+		                success: (response) => this.handleResponse(response, $loader),
+		                error: (xhr) => {
+		                    if (!nonceRetried && this.isNonceFailureResponse(xhr)) {
+		                        nonceRetried = true;
+		                        clearSearchNonce();
+		                        ensureSearchNonce()
+		                            .then((freshNonce) => {
+		                                requestData.nonce = freshNonce;
+		                                sendAjaxRequest();
+		                            })
+		                            .catch((error) => {
+		                                console.debug('Could not refresh expired AI search nonce.', error);
+		                                this.handleError($loader, xhr);
+		                            });
+		                        return;
+		                    }
+
+		                    this.handleError($loader, xhr);
+		                }
+		            });
+		        };
+
+		        sendAjaxRequest();
 		        this.resetTemporarySettings();
 		        this.toggleTemporarySettings(false);
 		    },
@@ -1511,12 +1614,13 @@ jQuery(document).ready(function($) {
 	            const $footnote = $(event.currentTarget);
 	            const footnote = Number($footnote.attr('data-footnote') || 0);
 	            if (footnote > 0) {
-	                this.highlightSourceReference(footnote);
+	                this.highlightSourceReference(footnote, { mode: 'preview' });
 	                this.showFootnotePreview($footnote, footnote);
 	            }
 	        });
 
 	        $footnotes.on('mouseleave blur', () => {
+	            this.clearAllSourceReferencePreviews?.();
 	            this.hideFootnotePreview();
 	        });
 
@@ -1525,7 +1629,7 @@ jQuery(document).ready(function($) {
 	            event.stopPropagation();
 	            const footnote = Number($(event.currentTarget).attr('data-footnote') || 0);
 	            if (footnote > 0) {
-	                this.highlightSourceReference(footnote);
+	                this.highlightSourceReference(footnote, { mode: 'active' });
 	                this.hideFootnotePreview();
 	            }
 	        });
@@ -1539,7 +1643,7 @@ jQuery(document).ready(function($) {
 	            event.stopPropagation();
 	            const footnote = Number($(event.currentTarget).attr('data-footnote') || 0);
 	            if (footnote > 0) {
-	                this.highlightSourceReference(footnote);
+	                this.highlightSourceReference(footnote, { mode: 'active' });
 	                this.hideFootnotePreview();
 	            }
 	        });
@@ -1800,6 +1904,13 @@ jQuery(document).ready(function($) {
 	                $item.addClass('is-current');
 	            }
 
+	            const dateLabel = entry.savedAt ? new Date(entry.savedAt).toLocaleString() : '';
+	            const summaryLabel = entry.summary || t('untitledConversation', 'Untitled chat');
+	            const tooltipLabel = dateLabel ? `${summaryLabel} (${dateLabel})` : summaryLabel;
+	            $item.attr('title', tooltipLabel);
+	            $item.attr('aria-label', tooltipLabel);
+	            $item.append($('<span class="geweb-ai-overview-item-icon" aria-hidden="true">💬</span>'));
+
 	            const $removeButton = $('<button type="button" class="geweb-ai-overview-item-remove" aria-label="Remove chat" title="Remove chat"><span aria-hidden="true">−</span></button>');
 	            $removeButton.on('click', (event) => {
 	                event.preventDefault();
@@ -1807,10 +1918,9 @@ jQuery(document).ready(function($) {
 	                void this.deleteConversationById(entry.id);
 	            });
 
-	            const dateLabel = entry.savedAt ? new Date(entry.savedAt).toLocaleString() : '';
 	            $item.append($removeButton);
 	            $item.append($('<div class="geweb-ai-overview-role"></div>').text(dateLabel || t('savedChat', 'Saved chat')));
-	            $item.append($('<div class="geweb-ai-overview-preview"></div>').text(entry.summary || t('untitledConversation', 'Untitled chat')));
+	            $item.append($('<div class="geweb-ai-overview-preview"></div>').text(summaryLabel));
 	            $item.on('click', () => this.loadConversation(entry.id));
 	            this.$conversationOverview.append($item);
 	        });
@@ -1926,7 +2036,8 @@ jQuery(document).ready(function($) {
 
 	    getStoredChatStateKey() {
 	        const pageKey = String(globalThis.location?.pathname || 'default').trim() || 'default';
-	        return `geweb_ai_chat_state:${pageKey}`;
+	        const scopeKey = String(geweb_aisearch.current_scope_key || 'default').trim() || 'default';
+	        return `geweb_ai_chat_state:${scopeKey}:${pageKey}`;
 	    },
 
 	    readStoredChatState() {
