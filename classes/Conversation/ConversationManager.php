@@ -49,7 +49,7 @@ class ConversationManager {
         }
 
         $conversations[$conversationId]['summary'] = $summary;
-        UserScope::updateScopedOption(self::OPTION_CONVERSATIONS, $conversations, false);
+        UserScope::updateUserScopedOption(self::OPTION_CONVERSATIONS, $conversations, false);
 
         return true;
     }
@@ -65,7 +65,7 @@ class ConversationManager {
         }
 
         unset($conversations[$conversationId]);
-        UserScope::updateScopedOption(self::OPTION_CONVERSATIONS, $conversations, false);
+        UserScope::updateUserScopedOption(self::OPTION_CONVERSATIONS, $conversations, false);
 
         return true;
     }
@@ -116,7 +116,7 @@ class ConversationManager {
             return ((int) ($b['last_used_at'] ?? 0)) <=> ((int) ($a['last_used_at'] ?? 0));
         });
 
-        UserScope::updateScopedOption(self::OPTION_CONVERSATIONS, array_slice($conversations, 0, self::DEFAULT_CONVERSATION_LIMIT, true), false);
+        UserScope::updateUserScopedOption(self::OPTION_CONVERSATIONS, array_slice($conversations, 0, self::DEFAULT_CONVERSATION_LIMIT, true), false);
 
         return $conversation;
     }
@@ -303,14 +303,14 @@ class ConversationManager {
             return ((int) ($b['last_used_at'] ?? 0)) <=> ((int) ($a['last_used_at'] ?? 0));
         });
 
-        UserScope::updateScopedOption(self::OPTION_CONVERSATIONS, array_slice($conversations, 0, self::DEFAULT_CONVERSATION_LIMIT, true), false);
+        UserScope::updateUserScopedOption(self::OPTION_CONVERSATIONS, array_slice($conversations, 0, self::DEFAULT_CONVERSATION_LIMIT, true), false);
     }
 
     /**
      * @return array<string,array<string,mixed>>
      */
     private function getConversationOption(): array {
-        $conversations = UserScope::getScopedOption(self::OPTION_CONVERSATIONS, []);
+        $conversations = UserScope::getUserScopedOption(self::OPTION_CONVERSATIONS, []);
         return is_array($conversations) ? $conversations : [];
     }
 

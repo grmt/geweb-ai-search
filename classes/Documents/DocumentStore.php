@@ -20,7 +20,7 @@ class DocumentStore {
     private string $ownerKey;
 
     public function __construct() {
-        $this->ownerKey = UserScope::getCurrentScopeKey();
+        $this->ownerKey = UserScope::getCurrentGroupScopeKey();
     }
 
     /**
@@ -270,7 +270,7 @@ class DocumentStore {
      */
     public function getReferencedDocumentOverview(bool $forceRefresh = false): array {
         if (!$forceRefresh) {
-            $cached = UserScope::getScopedOption(self::OPTION_REFERENCED_CACHE, null);
+            $cached = UserScope::getGroupScopedOption(self::OPTION_REFERENCED_CACHE, null);
             if (is_array($cached)) {
                 return $cached;
             }
@@ -278,9 +278,9 @@ class DocumentStore {
 
         $result = (new ReferencedDocumentOverviewBuilder($this))->build();
         $items = is_array($result['items'] ?? null) ? $result['items'] : [];
-        UserScope::updateScopedOption(self::OPTION_REFERENCED_CACHE, $items, false);
-        UserScope::updateScopedOption(self::OPTION_REFERENCED_CACHE_TIME, (string) time(), false);
-        UserScope::updateScopedOption(self::OPTION_REFERENCED_CACHE_DEBUG, is_array($result['debug'] ?? null) ? $result['debug'] : [], false);
+        UserScope::updateGroupScopedOption(self::OPTION_REFERENCED_CACHE, $items, false);
+        UserScope::updateGroupScopedOption(self::OPTION_REFERENCED_CACHE_TIME, (string) time(), false);
+        UserScope::updateGroupScopedOption(self::OPTION_REFERENCED_CACHE_DEBUG, is_array($result['debug'] ?? null) ? $result['debug'] : [], false);
 
         return $items;
     }
@@ -289,21 +289,21 @@ class DocumentStore {
      * @return bool
      */
     public function hasReferencedDocumentOverviewCache(): bool {
-        return is_array(UserScope::getScopedOption(self::OPTION_REFERENCED_CACHE, null));
+        return is_array(UserScope::getGroupScopedOption(self::OPTION_REFERENCED_CACHE, null));
     }
 
     /**
      * @return int
      */
     public function getReferencedDocumentOverviewCacheTime(): int {
-        return (int) UserScope::getScopedOption(self::OPTION_REFERENCED_CACHE_TIME, 0);
+        return (int) UserScope::getGroupScopedOption(self::OPTION_REFERENCED_CACHE_TIME, 0);
     }
 
     /**
      * @return array<string,int>
      */
     public function getReferencedDocumentOverviewDebug(): array {
-        $debug = UserScope::getScopedOption(self::OPTION_REFERENCED_CACHE_DEBUG, []);
+        $debug = UserScope::getGroupScopedOption(self::OPTION_REFERENCED_CACHE_DEBUG, []);
         return is_array($debug) ? $debug : [];
     }
 
@@ -311,9 +311,9 @@ class DocumentStore {
      * @return void
      */
     public function clearReferencedDocumentOverviewCache(): void {
-        UserScope::deleteScopedOption(self::OPTION_REFERENCED_CACHE);
-        UserScope::deleteScopedOption(self::OPTION_REFERENCED_CACHE_TIME);
-        UserScope::deleteScopedOption(self::OPTION_REFERENCED_CACHE_DEBUG);
+        UserScope::deleteGroupScopedOption(self::OPTION_REFERENCED_CACHE);
+        UserScope::deleteGroupScopedOption(self::OPTION_REFERENCED_CACHE_TIME);
+        UserScope::deleteGroupScopedOption(self::OPTION_REFERENCED_CACHE_DEBUG);
     }
 
     /**

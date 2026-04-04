@@ -101,9 +101,40 @@ function applyPendingReferencedDocumentTargets() {
 
 jQuery(document).ready(function($) {
 		const $settingsForm = $('form[action*="admin-post.php"]').has('input[name="action"][value="geweb_save"]').first();
+		const $groupRevisionField = $('#geweb_ai_search_group_revision');
 		let initialFormState = $settingsForm.length ? $settingsForm.serialize() : '';
 		let suppressBeforeUnloadWarning = false;
 		let promptDiffRequestToken = 0;
+
+		function getGroupRevision() {
+				return $.trim(String($groupRevisionField.val() || gewebAisearchAdmin.groupDataRevision || ''));
+		}
+
+		function setGroupRevision(revision) {
+				const normalized = $.trim(String(revision || ''));
+				if (!normalized) return;
+
+				gewebAisearchAdmin.groupDataRevision = normalized;
+				if ($groupRevisionField.length) {
+						$groupRevisionField.val(normalized);
+				}
+		}
+
+		function syncGroupRevisionFromPayload(payload) {
+				if (!payload) return;
+				setGroupRevision(payload.group_revision || payload.current_revision || '');
+		}
+
+		function buildGroupRevisionData(extraData) {
+				return Object.assign({}, extraData || {}, {
+						group_revision: getGroupRevision()
+				});
+		}
+
+		function getAjaxErrorMessage(xhr, fallbackMessage) {
+				syncGroupRevisionFromPayload(xhr?.responseJSON?.data);
+				return xhr?.responseJSON?.data?.message || fallbackMessage;
+		}
 
 		function markFormSaved() {
 				if (!$settingsForm.length) return;
@@ -390,12 +421,13 @@ jQuery(document).ready(function($) {
 						url: getAdminAjaxUrl(),
 						type: 'POST',
 						dataType: 'json',
-						data: {
+						data: buildGroupRevisionData({
 								action: 'geweb_delete_prompt_history_item',
 								nonce: gewebAisearchAdmin.adminActionNonce,
 								entry_id: entryId
-						}
+						})
 				}).done(function(response) {
+						syncGroupRevisionFromPayload(response?.data);
 						if (!response?.success) {
 								const message = response?.data?.message || 'Could not delete prompt version.';
 								alert(message);
@@ -409,8 +441,8 @@ jQuery(document).ready(function($) {
 								$('#geweb-ai-clear-history').remove();
 								$('#geweb-ai-prompt-history-diff').parent().remove();
 						}
-				}).fail(function() {
-						alert('Could not delete prompt version due to a network error.');
+				}).fail(function(xhr) {
+						alert(getAjaxErrorMessage(xhr, 'Could not delete prompt version due to a network error.'));
 						$button.prop('disabled', false);
 				});
 		});
@@ -534,11 +566,12 @@ jQuery(document).ready(function($) {
 						url: getAdminAjaxUrl(),
 						type: 'POST',
 						dataType: 'json',
-						data: {
+						data: buildGroupRevisionData({
 								action: 'geweb_clear_prompt_history',
 								nonce: gewebAisearchAdmin.adminActionNonce
-						}
+						})
 				}).done(function(response) {
+						syncGroupRevisionFromPayload(response?.data);
 						if (!response?.success) {
 								const message = response?.data?.message || 'Could not clear prompt history.';
 								if ($diff.length) {
@@ -554,11 +587,11 @@ jQuery(document).ready(function($) {
 						$('#geweb-ai-prompt-history-list').replaceWith($p);
 						$('#geweb-ai-clear-history').remove();
 						$('#geweb-ai-prompt-history-diff').parent().remove();
-				}).fail(function() {
+				}).fail(function(xhr) {
 						if ($diff.length) {
-								$diff.text('Could not clear prompt history.');
+								$diff.text(getAjaxErrorMessage(xhr, 'Could not clear prompt history.'));
 						} else {
-								alert('Could not clear prompt history.');
+								alert(getAjaxErrorMessage(xhr, 'Could not clear prompt history.'));
 						}
 						$button.prop('disabled', false).text('Clear All History');
 				});
@@ -673,6 +706,7 @@ jQuery(document).ready(function($) {
 						updateSaveButtonState();
 				});
 				$settingsForm.on('submit', function() {
+						setGroupRevision(getGroupRevision());
 						markFormSaved();
 				});
 		}
@@ -847,6 +881,7 @@ jQuery(document).ready(function($) {
 								nonce: gewebAisearchAdmin.adminActionNonce
 						}
 				}).done(function(response) {
+						syncGroupRevisionFromPayload(response?.data);
 						if (!response?.success || !response?.data?.html) {
 								$status.text('Could not refresh referenced documents.');
 								isRefreshingReferencedDocuments = false;
@@ -898,6 +933,7 @@ jQuery(document).ready(function($) {
 								nonce: gewebAisearchAdmin.adminActionNonce
 						}
 				}).done(function(response) {
+						syncGroupRevisionFromPayload(response?.data);
 						if (!response?.success || typeof response?.data?.html !== 'string') {
 								const message = response?.data?.message || 'Could not refresh uploaded items.';
 								$status.text(message);
@@ -1019,13 +1055,14 @@ jQuery(document).ready(function($) {
 						url: getAdminAjaxUrl(),
 						type: 'POST',
 						dataType: 'json',
-						data: {
+						data: buildGroupRevisionData({
 								action: 'geweb_update_referenced_document',
 								document_action: 'upload',
 								file_hash: fileHash,
 								nonce: gewebAisearchAdmin.adminActionNonce
-						}
+						})
 				}).done(function(response) {
+						syncGroupRevisionFromPayload(response?.data);
 						if (!response?.success || !response?.data) {
 								const message = response?.data?.message || 'The document upload could not be completed.';
 								showCellFeedback($cell, message, true);
@@ -1054,7 +1091,7 @@ jQuery(document).ready(function($) {
 								refreshGeminiStores();
 						}
 				}).fail(function(xhr) {
-						const message = xhr?.responseJSON?.data?.message || 'The document upload could not be completed.';
+						const message = getAjaxErrorMessage(xhr, 'The document upload could not be completed.');
 						showCellFeedback($cell, message, true);
 						$button.prop('disabled', false).text('Upload');
 						if ($status.length) {
@@ -1078,13 +1115,14 @@ jQuery(document).ready(function($) {
 						url: getAdminAjaxUrl(),
 						type: 'POST',
 						dataType: 'json',
-						data: {
+						data: buildGroupRevisionData({
 								action: 'geweb_toggle_referenced_document_exclude',
 								file_hash: fileHash,
 								exclude: exclude,
 								nonce: gewebAisearchAdmin.adminActionNonce
-						}
+						})
 				}).done(function(response) {
+						syncGroupRevisionFromPayload(response?.data);
 						if (!response?.success || !response?.data) {
 								const message = response?.data?.message || 'Could not update exclusion.';
 								showCellFeedback($cell, message, true);
@@ -1113,7 +1151,7 @@ jQuery(document).ready(function($) {
 								refreshGeminiStores();
 						}
 				}).fail(function(xhr) {
-						const message = xhr?.responseJSON?.data?.message || 'Could not update exclusion.';
+						const message = getAjaxErrorMessage(xhr, 'Could not update exclusion.');
 						showCellFeedback($cell, message, true);
 						$checkbox.prop('disabled', false).prop('checked', !exclude);
 						if ($status.length) {
@@ -1184,13 +1222,14 @@ jQuery(document).ready(function($) {
 						url: getAdminAjaxUrl(),
 						type: 'POST',
 						dataType: 'json',
-						data: {
+						data: buildGroupRevisionData({
 								action: 'geweb_update_referenced_document_nice_name',
 								file_hash: fileHash,
 								nice_name: niceName,
 								nonce: gewebAisearchAdmin.adminActionNonce
-						}
+						})
 				}).done(function(response) {
+						syncGroupRevisionFromPayload(response?.data);
 						if (!response?.success || !response?.data) {
 								const message = response?.data?.message || 'The nice name could not be updated.';
 								$feedback.text(message).css('color', '#d63638').show();
@@ -1212,7 +1251,7 @@ jQuery(document).ready(function($) {
 								$status.text((response.data.message || 'Nice name updated.') + ' Last refreshed: ' + (response.data.refreshed_at || 'just now') + suffix);
 						}
 				}).fail(function(xhr) {
-						const message = xhr?.responseJSON?.data?.message || 'The nice name could not be updated.';
+						const message = getAjaxErrorMessage(xhr, 'The nice name could not be updated.');
 						$feedback.text(message).css('color', '#d63638').show();
 						$button.prop('disabled', false).text('Save');
 						if ($status.length) {
@@ -1250,6 +1289,7 @@ jQuery(document).ready(function($) {
 								nonce: gewebAisearchAdmin.adminActionNonce
 						}
 				}).done(function(response) {
+						syncGroupRevisionFromPayload(response?.data);
 						if (!response?.success || !response?.data?.html) {
 								$status.text('Could not refresh Gemini stores.');
 								isRefreshingGeminiStores = false;
@@ -1364,12 +1404,13 @@ jQuery(document).ready(function($) {
 						url: getAdminAjaxUrl(),
 						type: 'POST',
 						dataType: 'json',
-						data: {
+						data: buildGroupRevisionData({
 								action: 'geweb_delete_gemini_store',
 								store_name: storeName,
 								nonce: gewebAisearchAdmin.adminActionNonce
-						}
+						})
 				}).done(function(response) {
+						syncGroupRevisionFromPayload(response?.data);
 						if (!response?.success || !response?.data?.html) {
 								const message = response?.data?.message || 'Could not delete the Gemini store.';
 								$status.text(message);
@@ -1398,7 +1439,7 @@ jQuery(document).ready(function($) {
 								}, 1500);
 						}
 				}).fail(function(xhr) {
-						const message = xhr?.responseJSON?.data?.message || 'Could not delete the Gemini store.';
+						const message = getAjaxErrorMessage(xhr, 'Could not delete the Gemini store.');
 						$status.text(message);
 						$error.text(message).show();
 						$button.prop('disabled', false).text('Delete');

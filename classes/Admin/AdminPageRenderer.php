@@ -16,16 +16,20 @@ class AdminPageRenderer {
         ?>
         <div class="wrap">
             <h1>Geweb AI Search</h1>
+            <?php if ($conflictNotice !== ''): ?>
+                <div class="notice notice-error"><p><?php echo esc_html((string) $conflictNotice); ?></p></div>
+            <?php endif; ?>
             <h2 class="nav-tab-wrapper" style="margin-bottom:16px;">
                 <a href="<?php echo esc_url((string) $generalTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'general' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="general">General</a>
                 <a href="<?php echo esc_url((string) $promptsTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'prompts' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="prompts">Prompts</a>
                 <a href="<?php echo esc_url((string) $documentsTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'documents' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="documents">Documents</a>
                 <a href="<?php echo esc_url((string) $storesTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'stores' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="stores">Gemini Stores</a>
-                <a href="<?php echo esc_url((string) $conversationsTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'conversations' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="conversations">Conversations</a>
+                <a href="<?php echo esc_url((string) $conversationsTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'conversations' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="conversations">Chats</a>
             </h2>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" accept-charset="UTF-8">
                 <input type="hidden" name="action" value="geweb_save">
                 <input type="hidden" name="geweb_ai_search_referenced_document_targets" id="geweb_ai_search_referenced_document_targets" value="">
+                <input type="hidden" name="geweb_ai_search_group_revision" id="geweb_ai_search_group_revision" value="<?php echo esc_attr((string) $groupDataRevision); ?>">
                 <?php wp_nonce_field('geweb_ai_search_save_settings'); ?>
 
                 <div class="geweb-settings-tab-panel" data-geweb-tab-panel="general" <?php echo $activeTab === 'general' ? '' : (string) $inlineStyleHidden; ?>>
@@ -172,7 +176,7 @@ class AdminPageRenderer {
                                 <label for="geweb_ai_search_local_conversation_archive_limit"><strong>Saved conversations to show in the chat sidebar</strong></label><br>
                                 <input type="number" id="geweb_ai_search_local_conversation_archive_limit" name="geweb_ai_search_local_conversation_archive_limit" min="1" step="1" value="<?php echo esc_attr((string) $localConversationArchiveLimit); ?>" class="small-text">
                             </p>
-                            <p class="description">Number of saved conversations to show in the frontend chat sidebar at once. Full conversation history is stored in WordPress, while only a shorter trimmed context is sent to the AI model.</p>
+                            <p class="description">Number of saved chats to show in the frontend chat sidebar at once. Full chat history is stored in WordPress, while only a shorter trimmed context is sent to the AI model.</p>
                         </td>
                     </tr>
 
@@ -407,7 +411,7 @@ class AdminPageRenderer {
 
             <div class="geweb-settings-tab-panel" data-geweb-tab-panel="conversations" <?php echo $activeTab === 'conversations' ? '' : (string) $inlineStyleHidden; ?>>
                 <p class="description" style="margin-top:0; max-width: 900px;">
-                    Saved AI conversations are grouped by browser-side conversation ID and show the latest summary, last usage time, total token usage, and an estimated Gemini text-generation cost when usage metadata is available. Entries appear after a successful AI response, not only when the dialog is closed.
+                    Saved AI chats are grouped by browser-side chat ID and show the latest summary, last usage time, total token usage, and an estimated Gemini text-generation cost when usage metadata is available. Entries appear after a successful AI response, not only when the dialog is closed.
                 </p>
                 <div style="margin-top:16px;">
                     <?php echo $conversationsHtml; ?>

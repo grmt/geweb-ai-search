@@ -26,8 +26,8 @@ class ConversationListTable extends \WP_List_Table {
         $this->frontendAiPageUrl = $frontendAiPageUrl;
 
         parent::__construct([
-            'singular' => 'Conversation',
-            'plural'   => 'Conversations',
+            'singular' => 'Chat',
+            'plural'   => 'Chats',
             'ajax'     => false,
         ]);
     }
@@ -89,7 +89,7 @@ class ConversationListTable extends \WP_List_Table {
      * @return void
      */
     public function no_items(): void {
-        esc_html_e('No saved conversations yet. A conversation is added here after a successful AI response.', 'geweb-ai-search');
+        esc_html_e('No saved chats yet. A chat is added here after a successful AI response.', 'geweb-ai-search');
     }
 
     /**
@@ -108,7 +108,7 @@ class ConversationListTable extends \WP_List_Table {
     protected function column_summary($item): string {
         $summary = trim((string) ($item['summary'] ?? ''));
         if ($summary === '') {
-            $summary = 'Untitled conversation';
+            $summary = 'Untitled chat';
         }
         $conversationId = isset($item['id']) ? (string) $item['id'] : '';
         $editInputId = $conversationId !== ''

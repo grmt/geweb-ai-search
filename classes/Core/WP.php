@@ -22,6 +22,7 @@ class WP {
      * Constructor - registers WordPress hooks
      */
     public function __construct() {
+        UserScopeMigration::maybeRun();
         $this->conversationManager = new ConversationManager();
         $this->adminPageSections = new AdminPageSections($this->conversationManager);
         $this->frontendAiPromptManager = new FrontendAiPromptManager();
@@ -176,8 +177,8 @@ class WP {
 
         add_submenu_page(
             'geweb-ai-search',
-            'Conversations',
-            'Conversations',
+            'Chats',
+            'Chats',
             'manage_options',
             'geweb-ai-search&geweb_tab=conversations',
             [$this, 'renderOptionsPage']
@@ -221,8 +222,23 @@ class WP {
             wp_die(self::MESSAGE_INSUFFICIENT_PERMISSIONS);
         }
 
-        $settingsManager = new AdminSettingsManager();
-        $settingsManager->save();
+        try {
+            GroupDataRevision::assertExpectedRevision(
+                GroupDataRevision::extractExpectedRevisionFromRequest('geweb_ai_search_group_revision')
+            );
+
+            $settingsManager = new AdminSettingsManager();
+            $settingsManager->save();
+        } catch (OptimisticLockException $e) {
+            $redirectUrl = add_query_arg(
+                [
+                    'geweb_conflict' => $e->getMessage(),
+                ],
+                wp_get_referer() ?: admin_url('admin.php?page=geweb-ai-search')
+            );
+            wp_safe_redirect($redirectUrl);
+            exit;
+        }
 
         wp_safe_redirect(wp_get_referer());
         exit;
@@ -436,6 +452,7 @@ class WP {
             'ajaxUrl' => admin_url('admin-ajax.php'),
             'generateLibraryNonce' => wp_create_nonce('geweb_ai_search_generate_library'),
             'adminActionNonce' => wp_create_nonce('geweb_ai_search_admin_actions'),
+            'groupDataRevision' => GroupDataRevision::ensureCurrentRevision(),
         ]);
     }
 

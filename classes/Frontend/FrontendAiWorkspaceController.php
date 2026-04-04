@@ -83,7 +83,7 @@ class FrontendAiWorkspaceController {
             'frontend_ai_page_url' => FrontendAiContext::getCurrentFrontendAiPageUrl(),
             'frontend_ai_exit_url' => FrontendAiContext::getFrontendAiExitUrl(),
             'frontend_ai_manage_conversations_url' => current_user_can('manage_options') ? ($this->getTabUrl)('conversations') : '',
-            'current_scope_key' => UserScope::getCurrentScopeStorageKey(),
+            'current_scope_key' => UserScope::getCurrentUserScopeStorageKey(),
             'is_frontend_ai_page' => FrontendAiContext::isFrontendAiPageRequest($this->shortcodePageViewActive),
             'frontend_ai_conversation_id' => FrontendAiContext::getRequestedFrontendConversationId(),
             'frontend_ai_initial_query' => FrontendAiContext::getRequestedFrontendQuery(),

@@ -74,18 +74,18 @@ class AdminPageConfigBuilder {
         $hasValidSavedApiKey = is_array($connectionStatus) && (($connectionStatus['status'] ?? '') === 'ok');
         $selectedProvider = ProviderFactory::getConfiguredProviderKey();
         $availableProviders = ProviderFactory::getAvailableProviders();
-        $customPrompt = UserScope::getScopedOption('geweb_aisearch_custom_prompt', '');
-        $customPromptName = UserScope::getScopedOption('geweb_aisearch_custom_prompt_name', '');
-        $modelPromptOverrides = UserScope::getScopedOption('geweb_aisearch_model_prompts', []);
-        $modelPromptOverrideNames = UserScope::getScopedOption('geweb_aisearch_model_prompt_names', []);
-        $modelPromptOverrideModes = UserScope::getScopedOption('geweb_aisearch_model_prompt_modes', []);
+        $customPrompt = UserScope::getGroupScopedOption('geweb_aisearch_custom_prompt', '');
+        $customPromptName = UserScope::getGroupScopedOption('geweb_aisearch_custom_prompt_name', '');
+        $modelPromptOverrides = UserScope::getGroupScopedOption('geweb_aisearch_model_prompts', []);
+        $modelPromptOverrideNames = UserScope::getGroupScopedOption('geweb_aisearch_model_prompt_names', []);
+        $modelPromptOverrideModes = UserScope::getGroupScopedOption('geweb_aisearch_model_prompt_modes', []);
         $defaultPrompt = $provider->getDefaultSystemInstruction();
         $isUsingDefaultPrompt = trim((string) $customPrompt) === '';
         $modelPromptOverrides = is_array($modelPromptOverrides) ? $modelPromptOverrides : [];
         $modelPromptOverrideNames = is_array($modelPromptOverrideNames) ? $modelPromptOverrideNames : [];
         $modelPromptOverrideModes = is_array($modelPromptOverrideModes) ? $modelPromptOverrideModes : [];
-        $promptHistoryLimit = (int) UserScope::getScopedOption('geweb_aisearch_prompt_history_limit', 10);
-        $promptHistory = PromptSupport::normalizePromptHistoryEntries(UserScope::getScopedOption('geweb_aisearch_prompt_history', []));
+        $promptHistoryLimit = (int) UserScope::getGroupScopedOption('geweb_aisearch_prompt_history_limit', 10);
+        $promptHistory = PromptSupport::normalizePromptHistoryEntries(UserScope::getGroupScopedOption('geweb_aisearch_prompt_history', []));
         $postTypes = get_option('geweb_aisearch_post_types', []);
         $includeReferencedDocuments = get_option('geweb_aisearch_include_referenced_documents', '0') === '1';
         $preserveDataOnUninstall = get_option('geweb_aisearch_preserve_data_on_uninstall', '0') === '1';
@@ -139,6 +139,8 @@ class AdminPageConfigBuilder {
             $this->renderGeminiStoreDocumentsPanel
         );
         $conversationsHtml = AdminPageSupport::captureHtml($this->renderConversationsTable);
+        $groupDataRevision = GroupDataRevision::ensureCurrentRevision();
+        $conflictNotice = isset($_GET['geweb_conflict']) ? sanitize_text_field(wp_unslash($_GET['geweb_conflict'])) : '';
 
         return [
             'activeTab' => $activeTab,
@@ -164,6 +166,7 @@ class AdminPageConfigBuilder {
             'generalTabUrl' => $generalTabUrl,
             'geminiStoreDocumentsPanelHtml' => $geminiStoreDocumentsPanelHtml,
             'geminiStoresHtml' => $geminiStoresHtml,
+            'groupDataRevision' => $groupDataRevision,
             'hasReferencedDocumentCache' => $hasReferencedDocumentCache,
             'hasValidSavedApiKey' => $hasValidSavedApiKey,
             'includeReferencedDocuments' => $includeReferencedDocuments,
@@ -194,6 +197,7 @@ class AdminPageConfigBuilder {
             'storeEnabled' => $storeEnabled,
             'storesTabUrl' => $storesTabUrl,
             'conversationsTabUrl' => $conversationsTabUrl,
+            'conflictNotice' => $conflictNotice,
         ];
     }
 }

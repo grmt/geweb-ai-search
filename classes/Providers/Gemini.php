@@ -1468,7 +1468,7 @@ class Gemini implements AIProviderInterface {
      * @return mixed
      */
     private function getScopedOption(string $optionName, $default = false) {
-        return UserScope::getScopedOption($optionName, $default);
+        return UserScope::getGroupScopedOption($optionName, $default);
     }
 
     /**
@@ -1476,11 +1476,11 @@ class Gemini implements AIProviderInterface {
      * @return bool
      */
     private function updateScopedOption(string $optionName, $value): bool {
-        return UserScope::updateScopedOption($optionName, $value, false);
+        return UserScope::updateGroupScopedOption($optionName, $value, false);
     }
 
     private function deleteScopedOption(string $optionName): void {
-        UserScope::deleteScopedOption($optionName);
+        UserScope::deleteGroupScopedOption($optionName);
     }
 
     /**

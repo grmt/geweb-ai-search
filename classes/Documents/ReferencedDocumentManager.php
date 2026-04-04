@@ -91,7 +91,7 @@ class ReferencedDocumentManager {
 
         $wpdb->delete($this->refsTable, ['owner_key' => $this->ownerKey], ['%s']);
         $wpdb->delete($this->documentsTable, ['owner_key' => $this->ownerKey], ['%s']);
-        UserScope::deleteScopedOption(self::OPTION_REFERENCED_SELECTION_TARGETS);
+        UserScope::deleteGroupScopedOption(self::OPTION_REFERENCED_SELECTION_TARGETS);
         $this->documentStore->clearReferencedDocumentOverviewCache();
     }
 
@@ -239,7 +239,7 @@ class ReferencedDocumentManager {
      * @return array<string,bool>
      */
     public function getReferencedDocumentSelectionTargets(): array {
-        $stored = UserScope::getScopedOption(self::OPTION_REFERENCED_SELECTION_TARGETS, []);
+        $stored = UserScope::getGroupScopedOption(self::OPTION_REFERENCED_SELECTION_TARGETS, []);
         if (!is_array($stored)) {
             return [];
         }
@@ -270,14 +270,14 @@ class ReferencedDocumentManager {
             $normalized[sanitize_text_field($fileHash)] = (bool) $target;
         }
 
-        UserScope::updateScopedOption(self::OPTION_REFERENCED_SELECTION_TARGETS, $normalized, false);
+        UserScope::updateGroupScopedOption(self::OPTION_REFERENCED_SELECTION_TARGETS, $normalized, false);
         $this->documentStore->clearReferencedDocumentOverviewCache();
     }
 
     public function saveReferencedDocumentSelectionTarget(string $fileHash, bool $include): void {
         $targets = $this->getReferencedDocumentSelectionTargets();
         $targets[sanitize_text_field($fileHash)] = $include;
-        UserScope::updateScopedOption(self::OPTION_REFERENCED_SELECTION_TARGETS, $targets, false);
+        UserScope::updateGroupScopedOption(self::OPTION_REFERENCED_SELECTION_TARGETS, $targets, false);
         $this->documentStore->clearReferencedDocumentOverviewCache();
     }
 

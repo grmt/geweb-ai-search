@@ -14,10 +14,18 @@ class PromptHistoryAjaxController {
             wp_send_json_error(['message' => self::MESSAGE_INSUFFICIENT_PERMISSIONS], 403);
         }
 
-        UserScope::updateScopedOption(self::OPTION_PROMPT_HISTORY, []);
+        try {
+            GroupDataRevision::assertExpectedRevision(GroupDataRevision::extractExpectedRevisionFromRequest());
+        } catch (OptimisticLockException $e) {
+            $this->sendConflictResponse($e);
+        }
+
+        UserScope::updateGroupScopedOption(self::OPTION_PROMPT_HISTORY, []);
+        $revision = GroupDataRevision::touch();
 
         wp_send_json_success([
             'message' => 'Prompt history cleared.',
+            'group_revision' => $revision,
         ]);
     }
 
@@ -28,12 +36,18 @@ class PromptHistoryAjaxController {
             wp_send_json_error(['message' => self::MESSAGE_INSUFFICIENT_PERMISSIONS], 403);
         }
 
+        try {
+            GroupDataRevision::assertExpectedRevision(GroupDataRevision::extractExpectedRevisionFromRequest());
+        } catch (OptimisticLockException $e) {
+            $this->sendConflictResponse($e);
+        }
+
         $entryId = isset($_POST['entry_id']) ? sanitize_text_field(wp_unslash($_POST['entry_id'])) : '';
         if ($entryId === '') {
             wp_send_json_error(['message' => 'Invalid prompt history entry.'], 400);
         }
 
-        $history = PromptSupport::normalizePromptHistoryEntries(UserScope::getScopedOption(self::OPTION_PROMPT_HISTORY, []));
+        $history = PromptSupport::normalizePromptHistoryEntries(UserScope::getGroupScopedOption(self::OPTION_PROMPT_HISTORY, []));
         if (empty($history)) {
             wp_send_json_success(['message' => 'History is already empty.']);
             return;
@@ -53,9 +67,13 @@ class PromptHistoryAjaxController {
             wp_send_json_error(['message' => 'Prompt version not found.'], 404);
         }
 
-        UserScope::updateScopedOption(self::OPTION_PROMPT_HISTORY, $newHistory);
+        UserScope::updateGroupScopedOption(self::OPTION_PROMPT_HISTORY, $newHistory);
+        $revision = GroupDataRevision::touch();
 
-        wp_send_json_success(['message' => 'Prompt version deleted.']);
+        wp_send_json_success([
+            'message' => 'Prompt version deleted.',
+            'group_revision' => $revision,
+        ]);
     }
 
     public function ajaxRenderPromptDiff(): void {
@@ -94,5 +112,12 @@ class PromptHistoryAjaxController {
         wp_send_json_success([
             'html' => is_string($diffHtml) && $diffHtml !== '' ? $diffHtml : '<p>No differences from the current AI Prompt.</p>',
         ]);
+    }
+
+    private function sendConflictResponse(OptimisticLockException $e): void {
+        wp_send_json_error([
+            'message' => $e->getMessage(),
+            'current_revision' => $e->getCurrentRevision(),
+        ], 409);
     }
 }

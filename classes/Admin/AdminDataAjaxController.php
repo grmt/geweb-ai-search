@@ -30,6 +30,7 @@ class AdminDataAjaxController {
             'html' => $html,
             'refreshed_at' => wp_date(get_option('date_format') . ' ' . get_option('time_format'), time()),
             'count' => count($items),
+            'group_revision' => GroupDataRevision::ensureCurrentRevision(),
         ]);
     }
 
@@ -38,6 +39,12 @@ class AdminDataAjaxController {
 
         if (!current_user_can('manage_options')) {
             wp_send_json_error(['message' => self::MESSAGE_INSUFFICIENT_PERMISSIONS], 403);
+        }
+
+        try {
+            GroupDataRevision::assertExpectedRevision(GroupDataRevision::extractExpectedRevisionFromRequest());
+        } catch (OptimisticLockException $e) {
+            $this->sendConflictResponse($e);
         }
 
         $fileHash = isset($_POST['file_hash']) ? sanitize_text_field(wp_unslash($_POST['file_hash'])) : '';
@@ -82,6 +89,7 @@ class AdminDataAjaxController {
             'row_exists' => is_array($updatedItem),
             'status_html' => is_array($updatedItem) ? $table->renderStatusCell($updatedItem) : '',
             'actions_html' => is_array($updatedItem) ? $table->renderActionsCell($updatedItem) : '',
+            'group_revision' => GroupDataRevision::touch(),
         ]);
     }
 
@@ -90,6 +98,12 @@ class AdminDataAjaxController {
 
         if (!current_user_can('manage_options')) {
             wp_send_json_error(['message' => self::MESSAGE_INSUFFICIENT_PERMISSIONS], 403);
+        }
+
+        try {
+            GroupDataRevision::assertExpectedRevision(GroupDataRevision::extractExpectedRevisionFromRequest());
+        } catch (OptimisticLockException $e) {
+            $this->sendConflictResponse($e);
         }
 
         $fileHash = isset($_POST['file_hash']) ? sanitize_text_field(wp_unslash($_POST['file_hash'])) : '';
@@ -131,6 +145,7 @@ class AdminDataAjaxController {
             'row_exists' => is_array($updatedItem),
             'status_html' => is_array($updatedItem) ? $table->renderStatusCell($updatedItem) : '',
             'actions_html' => is_array($updatedItem) ? $table->renderActionsCell($updatedItem) : '',
+            'group_revision' => GroupDataRevision::touch(),
         ]);
     }
 
@@ -139,6 +154,12 @@ class AdminDataAjaxController {
 
         if (!current_user_can('manage_options')) {
             wp_send_json_error(['message' => self::MESSAGE_INSUFFICIENT_PERMISSIONS], 403);
+        }
+
+        try {
+            GroupDataRevision::assertExpectedRevision(GroupDataRevision::extractExpectedRevisionFromRequest());
+        } catch (OptimisticLockException $e) {
+            $this->sendConflictResponse($e);
         }
 
         $fileHash = isset($_POST['file_hash']) ? sanitize_text_field(wp_unslash($_POST['file_hash'])) : '';
@@ -181,6 +202,7 @@ class AdminDataAjaxController {
             'message' => 'Nice name updated.',
             'row_exists' => is_array($updatedItem),
             'nice_name_html' => is_array($updatedItem) ? $table->renderNiceNameCell($updatedItem) : '',
+            'group_revision' => GroupDataRevision::touch(),
         ]);
     }
 
@@ -217,6 +239,7 @@ class AdminDataAjaxController {
             'refreshed_at' => wp_date(get_option('date_format') . ' ' . get_option('time_format'), time()),
             'count' => count($items),
             'error' => $provider->getStoreOverviewError(),
+            'group_revision' => GroupDataRevision::ensureCurrentRevision(),
         ]);
     }
 
@@ -258,6 +281,7 @@ class AdminDataAjaxController {
             'store_label' => $storeLabel,
             'count' => count($documents),
             'message' => 'Uploaded items refreshed.',
+            'group_revision' => GroupDataRevision::ensureCurrentRevision(),
         ]);
     }
 
@@ -266,6 +290,12 @@ class AdminDataAjaxController {
 
         if (!current_user_can('manage_options')) {
             wp_send_json_error(['message' => self::MESSAGE_INSUFFICIENT_PERMISSIONS], 403);
+        }
+
+        try {
+            GroupDataRevision::assertExpectedRevision(GroupDataRevision::extractExpectedRevisionFromRequest());
+        } catch (OptimisticLockException $e) {
+            $this->sendConflictResponse($e);
         }
 
         $provider = ProviderFactory::make();
@@ -303,6 +333,7 @@ class AdminDataAjaxController {
             'message' => 'Gemini store deleted.',
             'deleted_store_name' => $storeName,
             'error' => $provider->getStoreOverviewError(),
+            'group_revision' => GroupDataRevision::touch(),
         ]);
     }
 
@@ -369,5 +400,12 @@ class AdminDataAjaxController {
         $documentManager = new ReferencedDocumentManager();
         $documentManager->clearAllTrackedDocuments();
         PostIndexManager::clearAllIndexedState();
+    }
+
+    private function sendConflictResponse(OptimisticLockException $e): void {
+        wp_send_json_error([
+            'message' => $e->getMessage(),
+            'current_revision' => $e->getCurrentRevision(),
+        ], 409);
     }
 }

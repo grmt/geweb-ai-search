@@ -44,15 +44,15 @@ class AdminPageSections {
         $latestConversationId = isset($latestConversation['id']) ? (string) $latestConversation['id'] : '';
 
         echo '<p class="description" style="margin:0 0 12px;">';
-        echo esc_html(sprintf(_n('%d saved conversation.', '%d saved conversations.', count($conversations), 'geweb-ai-search'), count($conversations)));
+        echo esc_html(sprintf(_n('%d saved chat.', '%d saved chats.', count($conversations), 'geweb-ai-search'), count($conversations)));
         echo '</p>';
         echo '<p class="description" style="margin:0 0 12px;">';
-        echo esc_html(sprintf(__('The %d most recently used conversations are kept automatically; the oldest unused ones are pruned first.', 'geweb-ai-search'), self::DEFAULT_CONVERSATION_LIMIT));
+        echo esc_html(sprintf(__('The %d most recently used chats are kept automatically; the oldest unused ones are pruned first.', 'geweb-ai-search'), self::DEFAULT_CONVERSATION_LIMIT));
         echo '</p>';
 
         if (empty($conversations)) {
             echo '<div class="notice notice-info inline" style="margin:0 0 12px;"><p>';
-            echo esc_html__('No saved conversations yet. A conversation is added here after a successful AI response.', 'geweb-ai-search');
+            echo esc_html__('No saved chats yet. A chat is added here after a successful AI response.', 'geweb-ai-search');
             echo '</p></div>';
             return;
         }
@@ -60,7 +60,7 @@ class AdminPageSections {
         if ($frontendAiPageUrl !== '' && $latestConversationId !== '') {
             $latestConversationUrl = FrontendAiContext::getFrontendAiConversationUrl($latestConversationId);
             echo '<p style="margin:0 0 12px;">';
-            echo '<a class="button button-primary" href="' . esc_url($latestConversationUrl) . '">Open Latest Conversation</a>';
+            echo '<a class="button button-primary" href="' . esc_url($latestConversationUrl) . '">Open Latest Chat</a>';
             echo '</p>';
         }
 
@@ -69,7 +69,7 @@ class AdminPageSections {
         echo '<form method="get" action="' . esc_url(admin_url('admin.php')) . '" class="geweb-conversations-table-form">';
         echo '<input type="hidden" name="page" value="geweb-ai-search">';
         echo '<input type="hidden" name="geweb_tab" value="conversations">';
-        $table->search_box(__('Search conversations', 'geweb-ai-search'), 'geweb-conversations');
+        $table->search_box(__('Search chats', 'geweb-ai-search'), 'geweb-conversations');
         $table->display();
         echo '</form>';
     }

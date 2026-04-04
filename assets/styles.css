@@ -405,17 +405,17 @@ body.geweb-ai-page-resizing {
     min-height: 32px !important;
     padding: 0 10px !important;
     border-radius: 999px !important;
-    border: 1px solid rgba(148, 163, 184, 0.28) !important;
-    background: #fff !important;
-    color: #0f172a !important;
+    border: 1px solid rgba(148, 163, 184, 0.42) !important;
+    background: #f8fafc !important;
+    color: #475569 !important;
     text-decoration: none !important;
     box-shadow: none !important;
 }
 .geweb-ai-page-toolbar-button:hover,
 .geweb-ai-page-toolbar-button:focus {
     border-color: rgba(100, 116, 139, 0.45) !important;
-    color: #020617 !important;
-    background: #f8fafc !important;
+    color: #334155 !important;
+    background: #f1f5f9 !important;
 }
 .geweb-ai-page-toolbar-button-icon {
     display: inline-flex;
@@ -751,6 +751,9 @@ body.geweb-ai-page-resizing {
     margin-left: auto;
     flex: 0 0 auto;
 }
+.geweb-ai-overview-header .geweb-ai-panel-heading > .geweb-ai-panel-collapse {
+    margin-left: auto;
+}
 .geweb-ai-panel-title--inline {
     margin-bottom: 0;
 }
@@ -1030,11 +1033,11 @@ body.geweb-ai-page-resizing {
     flex: 0 0 auto;
 }
 .geweb-ai-workspace.is-left-collapsed .geweb-ai-overview-header,
-.geweb-ai-workspace.is-right-collapsed .geweb-ai-panel-heading {
+.geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel .geweb-ai-panel-heading {
     justify-content: center;
 }
 .geweb-ai-workspace.is-left-collapsed .geweb-ai-overview-actions,
-.geweb-ai-workspace.is-right-collapsed .geweb-ai-panel-heading-actions {
+.geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel .geweb-ai-panel-heading-actions {
     display: none;
 }
 .geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar {
@@ -1105,7 +1108,7 @@ body.geweb-ai-page-resizing {
     display: none;
 }
 .geweb-ai-workspace.is-left-collapsed .geweb-ai-panel-heading,
-.geweb-ai-workspace.is-right-collapsed .geweb-ai-panel-heading {
+.geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel .geweb-ai-panel-heading {
     min-height: 40px;
 }
 .geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel {
@@ -1116,8 +1119,8 @@ body.geweb-ai-page-resizing {
     padding-bottom: 8px;
     overflow: hidden;
 }
-.geweb-ai-workspace.is-right-collapsed .geweb-ai-panel-heading,
-.geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-help {
+.geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel .geweb-ai-panel-heading,
+.geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel .geweb-ai-sources-help {
     display: none;
 }
 .geweb-ai-workspace.is-right-collapsed .geweb-ai-sources {
@@ -1159,7 +1162,8 @@ body.geweb-ai-page-resizing {
 }
 .geweb-ai-workspace.is-right-collapsed .geweb-ai-source-link-label,
 .geweb-ai-workspace.is-right-collapsed .geweb-ai-source-link-hint,
-.geweb-ai-workspace.is-right-collapsed .geweb-ai-source-details {
+.geweb-ai-workspace.is-right-collapsed .geweb-ai-source-details,
+.geweb-ai-workspace.is-right-collapsed .geweb-ai-empty-panel {
     display: none !important;
 }
 .geweb-ai-conversation-overview,
