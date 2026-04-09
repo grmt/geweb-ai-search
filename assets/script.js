@@ -16,6 +16,61 @@ function normalizeInlineMatchText(text) {
 	return String(text || '').replaceAll(/\s+/g, ' ').trim().toLowerCase();
 }
 
+function escapeInlineMatchHtml(text) {
+	return String(text || '')
+		.replaceAll('&', '&amp;')
+		.replaceAll('<', '&lt;')
+		.replaceAll('>', '&gt;')
+		.replaceAll('"', '&quot;')
+		.replaceAll("'", '&#039;');
+}
+
+function buildPageMatchSnippet(text, matchIndex, matchLength) {
+	const rawText = String(text || '').replaceAll(/\s+/g, ' ').trim();
+	if (!rawText) {
+		return '';
+	}
+
+	const start = Math.max(0, matchIndex - 90);
+	const end = Math.min(rawText.length, matchIndex + matchLength + 110);
+	const prefix = start > 0 ? '…' : '';
+	const suffix = end < rawText.length ? '…' : '';
+	const before = escapeInlineMatchHtml(rawText.slice(start, matchIndex));
+	const match = escapeInlineMatchHtml(rawText.slice(matchIndex, matchIndex + matchLength));
+	const after = escapeInlineMatchHtml(rawText.slice(matchIndex + matchLength, end));
+
+	return `${prefix}${before}<mark class="geweb-ai-inline-match">${match}</mark>${after}${suffix}`;
+}
+
+function showPageMatchPreview(snippetHtml) {
+	if (!snippetHtml) {
+		return;
+	}
+
+	document.querySelectorAll('.geweb-ai-page-match-preview').forEach((element) => element.remove());
+	const preview = document.createElement('aside');
+	preview.className = 'geweb-ai-page-match-preview';
+	preview.innerHTML = `
+		<div class="geweb-ai-page-match-preview-label">${escapeInlineMatchHtml(t('matchPreviewLabel', 'Matching text on this page'))}</div>
+		<div class="geweb-ai-page-match-preview-text">${snippetHtml}</div>
+	`;
+	document.body.appendChild(preview);
+}
+
+function selectPageMatchRange(range) {
+	if (!range || typeof globalThis.getSelection !== 'function') {
+		return;
+	}
+
+	const selection = globalThis.getSelection();
+	if (!selection) {
+		return;
+	}
+
+	selection.removeAllRanges();
+	selection.addRange(range);
+}
+
 function highlightFirstPageMatch() {
 	const currentUrl = globalThis.location?.href;
 	if (!currentUrl) {
@@ -37,7 +92,7 @@ function highlightFirstPageMatch() {
 
 	const candidates = [];
 	const words = phrase.split(/\s+/).filter(Boolean);
-	for (let length = Math.min(5, words.length); length >= 1; length -= 1) {
+	for (let length = Math.min(6, words.length); length >= 1; length -= 1) {
 		candidates.push(words.slice(0, length).join(' '));
 	}
 
@@ -71,9 +126,11 @@ function highlightFirstPageMatch() {
 		const range = document.createRange();
 		range.setStart(matchedNode, matchIndex);
 		range.setEnd(matchedNode, matchIndex + matchedPhrase.length);
+		selectPageMatchRange(range);
 		const highlight = document.createElement('mark');
 		highlight.className = 'geweb-ai-inline-match';
 		range.surroundContents(highlight);
+		showPageMatchPreview(buildPageMatchSnippet(rawText, matchIndex, matchedPhrase.length));
 		if (typeof highlight.scrollIntoView === 'function') {
 			globalThis.setTimeout(() => {
 				highlight.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -319,8 +376,264 @@ jQuery(document).ready(function($) {
 	        this.ensurePageResizeHandle();
 	        this.bindFrontendHeaderSearch();
 	        this.bindWorkspacePaneResizers();
+	        this.bindMobileWorkspaceNavigation();
+	        this.bindMobilePaneFooter();
 	        this.bindPanelCollapseButtons();
+	        this.bindResponsivePanelCollapse();
 	        this.syncPanelCollapseButtons();
+	    },
+
+	    getWorkspaceElement() {
+	        return this.ai ? this.ai.querySelector('.geweb-ai-workspace') : null;
+	    },
+
+	    getWorkspaceAutoCollapseThreshold() {
+	        return 767;
+	    },
+
+	    isMobileWorkspaceNavigationActive(workspace = this.getWorkspaceElement()) {
+	        return !!workspace
+	            && this.isPageView()
+	            && !!globalThis.matchMedia
+	            && globalThis.matchMedia(`(max-width: ${this.getWorkspaceAutoCollapseThreshold()}px)`).matches;
+	    },
+
+	    getMobileWorkspacePaneIndex(pane) {
+	        return {
+	            left: 0,
+	            main: 1,
+	            right: 2,
+	        }[pane] ?? 1;
+	    },
+
+	    setMobileWorkspacePane(pane, options = {}) {
+	        const workspace = this.getWorkspaceElement();
+	        const nextPane = ['left', 'main', 'right'].includes(pane) ? pane : 'main';
+	        if (!workspace) {
+	            return;
+	        }
+
+	        const previousPane = ['left', 'main', 'right'].includes(workspace.dataset.mobilePane) ? workspace.dataset.mobilePane : 'main';
+	        const isMobile = this.isMobileWorkspaceNavigationActive(workspace);
+	        const shouldAnimate = isMobile && !options?.skipAnimation && previousPane !== nextPane;
+
+	        if (shouldAnimate) {
+	            const direction = this.getMobileWorkspacePaneIndex(nextPane) > this.getMobileWorkspacePaneIndex(previousPane)
+	                ? 'forward'
+	                : 'backward';
+	            workspace.dataset.mobilePanePrevious = previousPane;
+	            workspace.dataset.mobilePaneAnimating = '1';
+	            workspace.dataset.mobilePaneDirection = direction;
+	            if (workspace._gewebMobilePaneAnimationTimeout) {
+	                globalThis.clearTimeout(workspace._gewebMobilePaneAnimationTimeout);
+	            }
+	        }
+
+	        workspace.dataset.mobilePane = nextPane;
+	        this.syncMobilePaneFooter(nextPane);
+
+	        if (shouldAnimate) {
+	            workspace._gewebMobilePaneAnimationTimeout = globalThis.setTimeout(() => {
+	                delete workspace.dataset.mobilePanePrevious;
+	                delete workspace.dataset.mobilePaneAnimating;
+	                delete workspace.dataset.mobilePaneDirection;
+	            }, 340);
+	        }
+
+	        if (options?.focusPane && this.isMobileWorkspaceNavigationActive(workspace)) {
+	            const paneSelector = {
+	                left: '.geweb-ai-sidebar',
+	                main: '.geweb-ai-main-panel',
+	                right: '.geweb-ai-sources-panel',
+	            }[nextPane];
+	            const paneElement = paneSelector ? workspace.querySelector(paneSelector) : null;
+	            if (paneElement && typeof paneElement.focus === 'function') {
+	                paneElement.focus({ preventScroll: true });
+	            }
+	        }
+	    },
+
+	    moveMobileWorkspacePane(direction) {
+	        const workspace = this.getWorkspaceElement();
+	        if (!this.isMobileWorkspaceNavigationActive(workspace)) {
+	            return;
+	        }
+
+	        const currentPane = ['left', 'main', 'right'].includes(workspace.dataset.mobilePane) ? workspace.dataset.mobilePane : 'main';
+
+	        if (currentPane === 'main') {
+	            this.setMobileWorkspacePane(direction > 0 ? 'right' : 'left', { focusPane: true });
+	            return;
+	        }
+
+	        this.setMobileWorkspacePane('main', { focusPane: true });
+	    },
+
+	    bindMobileWorkspaceNavigation() {
+	        const workspace = this.getWorkspaceElement();
+	        if (!workspace || workspace.dataset.gewebMobilePaneBound === '1') {
+	            return;
+	        }
+
+	        workspace.dataset.gewebMobilePaneBound = '1';
+	        this.setMobileWorkspacePane(workspace.dataset.mobilePane || 'main', { skipAnimation: true });
+
+	        const syncMobilePaneState = () => {
+	            if (this.isMobileWorkspaceNavigationActive(workspace)) {
+	                this.setMobileWorkspacePane(workspace.dataset.mobilePane || 'main', { skipAnimation: true });
+	                return;
+	            }
+
+	            delete workspace.dataset.mobilePane;
+	        };
+
+	        let touchStartX = 0;
+	        let touchStartY = 0;
+
+	        workspace.addEventListener('touchstart', (event) => {
+	            if (!this.isMobileWorkspaceNavigationActive(workspace) || event.touches.length !== 1) {
+	                return;
+	            }
+
+	            touchStartX = Number(event.touches[0]?.clientX || 0);
+	            touchStartY = Number(event.touches[0]?.clientY || 0);
+	        }, { passive: true });
+
+	        workspace.addEventListener('touchend', (event) => {
+	            if (!this.isMobileWorkspaceNavigationActive(workspace) || event.changedTouches.length !== 1) {
+	                return;
+	            }
+
+	            const endX = Number(event.changedTouches[0]?.clientX || 0);
+	            const endY = Number(event.changedTouches[0]?.clientY || 0);
+	            const deltaX = endX - touchStartX;
+	            const deltaY = endY - touchStartY;
+
+	            if (Math.abs(deltaX) < 56 || Math.abs(deltaX) <= Math.abs(deltaY)) {
+	                return;
+	            }
+
+	            this.moveMobileWorkspacePane(deltaX < 0 ? 1 : -1);
+	        }, { passive: true });
+
+	        if (typeof globalThis.matchMedia === 'function') {
+	            const mediaQuery = globalThis.matchMedia(`(max-width: ${this.getWorkspaceAutoCollapseThreshold()}px)`);
+	            if (typeof mediaQuery.addEventListener === 'function') {
+	                mediaQuery.addEventListener('change', syncMobilePaneState);
+	            } else if (typeof mediaQuery.addListener === 'function') {
+	                mediaQuery.addListener(syncMobilePaneState);
+	            }
+	        }
+
+	        syncMobilePaneState();
+	    },
+
+	    bindMobilePaneFooter() {
+	        const $tabs = $(this.ai).find('.geweb-ai-mobile-pane-tab');
+	        if (!$tabs.length) {
+	            return;
+	        }
+
+	        $tabs.each((_, element) => {
+	            const $tab = $(element);
+	            if ($tab.data('gewebMobilePaneBound')) {
+	                return;
+	            }
+
+	            $tab.data('gewebMobilePaneBound', true);
+	            $tab.on('click', (event) => {
+	                event.preventDefault();
+	                const targetPane = String($tab.data('mobile-pane-target') || 'main');
+	                this.setMobileWorkspacePane(targetPane, { focusPane: true });
+	                this.syncPanelCollapseButtons();
+	            });
+	        });
+
+	        this.syncMobilePaneFooter(this.getWorkspaceElement()?.dataset?.mobilePane || 'main');
+	    },
+
+	    syncMobilePaneFooter(activePane = 'main') {
+	        const workspace = this.getWorkspaceElement();
+	        const isMobile = this.isMobileWorkspaceNavigationActive(workspace);
+	        const $footer = $(this.ai).find('.geweb-ai-mobile-pane-footer');
+	        const $tabs = $footer.find('.geweb-ai-mobile-pane-tab');
+
+	        $footer.toggleClass('is-visible', isMobile);
+	        $tabs.each((_, element) => {
+	            const $tab = $(element);
+	            const isActive = String($tab.data('mobile-pane-target') || '') === activePane;
+	            $tab.toggleClass('is-active', isActive);
+	            $tab.attr('aria-pressed', isActive ? 'true' : 'false');
+	        });
+	    },
+
+	    setWorkspacePanelCollapsed(workspace, side, collapsed) {
+	        if (!workspace || (side !== 'left' && side !== 'right')) {
+	            return;
+	        }
+
+	        workspace.classList.toggle(`is-${side}-collapsed`, !!collapsed);
+	    },
+
+	    applyResponsivePanelCollapse() {
+	        const workspace = this.getWorkspaceElement();
+	        if (!workspace) {
+	            return;
+	        }
+
+	        if (this.isMobileWorkspaceNavigationActive(workspace)) {
+	            workspace.dataset.autoCollapseActive = '1';
+	            this.setWorkspacePanelCollapsed(workspace, 'left', false);
+	            this.setWorkspacePanelCollapsed(workspace, 'right', false);
+	            this.setMobileWorkspacePane(workspace.dataset.mobilePane || 'main');
+	            this.syncPanelCollapseButtons();
+	            return;
+	        }
+
+	        const shouldAutoCollapse = workspace.clientWidth <= this.getWorkspaceAutoCollapseThreshold();
+	        const autoCollapseWasActive = workspace.dataset.autoCollapseActive === '1';
+
+	        if (shouldAutoCollapse) {
+	            if (!autoCollapseWasActive) {
+	                workspace.dataset.manualLeftCollapsed = workspace.classList.contains('is-left-collapsed') ? '1' : '0';
+	                workspace.dataset.manualRightCollapsed = workspace.classList.contains('is-right-collapsed') ? '1' : '0';
+	            }
+
+	            workspace.dataset.autoCollapseActive = '1';
+	            this.setWorkspacePanelCollapsed(workspace, 'left', true);
+	            this.setWorkspacePanelCollapsed(workspace, 'right', true);
+	        } else if (autoCollapseWasActive) {
+	            this.setWorkspacePanelCollapsed(workspace, 'left', workspace.dataset.manualLeftCollapsed === '1');
+	            this.setWorkspacePanelCollapsed(workspace, 'right', workspace.dataset.manualRightCollapsed === '1');
+	            delete workspace.dataset.autoCollapseActive;
+	            delete workspace.dataset.manualLeftCollapsed;
+	            delete workspace.dataset.manualRightCollapsed;
+	        }
+
+	        this.syncPanelCollapseButtons();
+	    },
+
+	    bindResponsivePanelCollapse() {
+	        const workspace = this.getWorkspaceElement();
+	        if (!workspace || workspace.dataset.gewebResponsiveCollapseBound === '1') {
+	            return;
+	        }
+
+	        workspace.dataset.gewebResponsiveCollapseBound = '1';
+
+	        const apply = () => {
+	            this.applyResponsivePanelCollapse();
+	        };
+
+	        if (typeof globalThis.ResizeObserver === 'function') {
+	            const observer = new globalThis.ResizeObserver(() => apply());
+	            observer.observe(workspace);
+	            workspace._gewebResponsiveCollapseObserver = observer;
+	        } else {
+	            globalThis.addEventListener('resize', apply);
+	        }
+
+	        apply();
 	    },
 
 	    getPageViewHeightStorageKey() {
@@ -489,17 +802,16 @@ jQuery(document).ready(function($) {
 	            return;
 	        }
 
-	        const currentHeight = this.ai.getBoundingClientRect().height;
 	        const viewportHeight = this.getPageViewViewportHeight();
 	        const hasStoredHeight = this.readStoredPageViewHeight() !== null;
-	        const hasExplicitHeight = Boolean(this.ai.style.height);
-
-	        if (!hasStoredHeight && !hasExplicitHeight) {
+	        if (!hasStoredHeight) {
+	            this.ai.style.height = `${viewportHeight}px`;
 	            return;
 	        }
 
-	        if (currentHeight >= viewportHeight - 2 && !hasStoredHeight) {
-	            this.ai.style.height = `${viewportHeight}px`;
+	        const currentHeight = this.ai.getBoundingClientRect().height;
+	        const hasExplicitHeight = Boolean(this.ai.style.height);
+	        if (!hasExplicitHeight) {
 	            return;
 	        }
 
@@ -516,6 +828,13 @@ jQuery(document).ready(function($) {
 	        const storedHeight = this.readStoredPageViewHeight();
 	        if (storedHeight) {
 	            this.applyPageViewHeight(storedHeight, { persist: false });
+	        } else {
+	            this.applyPageViewHeight(this.getPageViewViewportHeight(), { persist: false });
+	            if (this.resolveQueryText('') === '') {
+	                globalThis.requestAnimationFrame(() => {
+	                    this.alignPageViewBottomToViewport();
+	                });
+	            }
 	        }
 
 	        if (typeof globalThis.ResizeObserver === 'function') {
@@ -548,8 +867,27 @@ jQuery(document).ready(function($) {
 	        alignButton.dataset.gewebAiBound = '1';
 	        alignButton.addEventListener('click', (event) => {
 	            event.preventDefault();
+	            const now = Date.now();
+	            const lastClickAt = Number(alignButton.dataset.gewebLastClickAt || 0);
+	            if (lastClickAt > 0 && (now - lastClickAt) < 1200) {
+	                alignButton.dataset.gewebLastClickAt = '0';
+	                this.togglePageAdminBarVisibility();
+	                return;
+	            }
+
+	            alignButton.dataset.gewebLastClickAt = String(now);
 	            this.resetPageViewToViewport();
 	        });
+	    },
+
+	    togglePageAdminBarVisibility() {
+	        const body = document.body;
+	        if (!body || !body.classList.contains('geweb-ai-page')) {
+	            return;
+	        }
+
+	        body.classList.toggle('geweb-ai-page-hide-adminbar');
+	        this.syncPageViewHeightToViewport();
 	    },
 
 	    ensurePageResizeHandle() {
@@ -573,6 +911,7 @@ jQuery(document).ready(function($) {
 	        }
 
 	        handle.dataset.gewebAiResizeBound = '1';
+	        const getPointerPageY = (event) => Number(event?.clientY || 0) + (globalThis.scrollY || 0);
 
 	        const stopResize = () => {
 	            document.body.classList.remove('geweb-ai-page-resizing');
@@ -587,7 +926,14 @@ jQuery(document).ready(function($) {
 	                return;
 	            }
 
-	            const deltaY = Number(event.clientY) - startY;
+	            const edgeThreshold = 32;
+	            if (Number(event.clientY) >= (globalThis.innerHeight || 0) - edgeThreshold && typeof globalThis.scrollBy === 'function') {
+	                globalThis.scrollBy({ top: 18, behavior: 'auto' });
+	            } else if (Number(event.clientY) <= edgeThreshold && typeof globalThis.scrollBy === 'function') {
+	                globalThis.scrollBy({ top: -18, behavior: 'auto' });
+	            }
+
+	            const deltaY = getPointerPageY(event) - startY;
 	            this.applyPageViewHeight(startHeight + deltaY);
 	        };
 
@@ -600,7 +946,7 @@ jQuery(document).ready(function($) {
 	            }
 
 	            event.preventDefault();
-	            startY = Number(event.clientY);
+	            startY = getPointerPageY(event);
 	            startHeight = this.ai.getBoundingClientRect().height;
 	            document.body.classList.add('geweb-ai-page-resizing');
 	            handle.classList.add('is-active');
@@ -723,7 +1069,7 @@ jQuery(document).ready(function($) {
 	    },
 
 	    bindPanelCollapseButtons() {
-	        const workspace = this.ai ? this.ai.querySelector('.geweb-ai-workspace') : null;
+	        const workspace = this.getWorkspaceElement();
 	        const $searchPanel = $('.geweb-ai-search-results-panel');
 	        if (!workspace) {
 	            return;
@@ -732,8 +1078,26 @@ jQuery(document).ready(function($) {
 	        $(this.ai).find('.geweb-ai-panel-collapse').on('click', function() {
 	            const target = $(this).data('panel-toggle');
 	            if (target === 'left') {
+	                if (GewebModal.isMobileWorkspaceNavigationActive(workspace)) {
+	                    GewebModal.setMobileWorkspacePane(workspace.dataset.mobilePane === 'left' ? 'main' : 'left', { focusPane: true });
+	                    GewebModal.syncPanelCollapseButtons();
+	                    return;
+	                }
+	                if (workspace.dataset.autoCollapseActive === '1') {
+	                    GewebModal.syncPanelCollapseButtons();
+	                    return;
+	                }
 	                workspace.classList.toggle('is-left-collapsed');
 	            } else if (target === 'right') {
+	                if (GewebModal.isMobileWorkspaceNavigationActive(workspace)) {
+	                    GewebModal.setMobileWorkspacePane(workspace.dataset.mobilePane === 'right' ? 'main' : 'right', { focusPane: true });
+	                    GewebModal.syncPanelCollapseButtons();
+	                    return;
+	                }
+	                if (workspace.dataset.autoCollapseActive === '1') {
+	                    GewebModal.syncPanelCollapseButtons();
+	                    return;
+	                }
 	                workspace.classList.toggle('is-right-collapsed');
 	            } else if (target === 'search') {
 	                $searchPanel.toggleClass('is-collapsed');
@@ -747,6 +1111,8 @@ jQuery(document).ready(function($) {
 	        const workspace = this.ai ? this.ai.querySelector('.geweb-ai-workspace') : null;
 	        const leftCollapsed = !!workspace?.classList.contains('is-left-collapsed');
 	        const rightCollapsed = !!workspace?.classList.contains('is-right-collapsed');
+	        const mobilePane = workspace?.dataset.mobilePane || 'main';
+	        const mobileNavigationActive = this.isMobileWorkspaceNavigationActive(workspace);
 	        const $searchPanel = $('.geweb-ai-search-results-panel');
 	        const searchCollapsed = $searchPanel.hasClass('is-collapsed');
 
@@ -757,17 +1123,21 @@ jQuery(document).ready(function($) {
 	            $button.find('.geweb-ai-panel-collapse-icon').text(icon);
 	        };
 
-		        applyButtonState(
-		            $(this.ai).find('.geweb-ai-panel-collapse[data-panel-toggle="left"]'),
-		            !leftCollapsed,
-		            leftCollapsed ? '▶' : '◀',
-		            leftCollapsed ? 'Expand chats panel' : 'Collapse chats panel'
-		        );
+	        applyButtonState(
+	            $(this.ai).find('.geweb-ai-panel-collapse[data-panel-toggle="left"]'),
+	            mobileNavigationActive ? mobilePane === 'left' : !leftCollapsed,
+	            mobileNavigationActive ? (mobilePane === 'left' ? '▶' : '◀') : (leftCollapsed ? '▶' : '◀'),
+	            mobileNavigationActive
+	                ? (mobilePane === 'left' ? 'Show answer panel' : 'Show chats panel')
+	                : (leftCollapsed ? 'Expand chats panel' : 'Collapse chats panel')
+	        );
 	        applyButtonState(
 	            $(this.ai).find('.geweb-ai-panel-collapse[data-panel-toggle="right"]'),
-	            !rightCollapsed,
-	            rightCollapsed ? '◀' : '▶',
-	            rightCollapsed ? 'Expand sources panel' : 'Collapse sources panel'
+	            mobileNavigationActive ? mobilePane === 'right' : !rightCollapsed,
+	            mobileNavigationActive ? (mobilePane === 'right' ? '◀' : '▶') : (rightCollapsed ? '◀' : '▶'),
+	            mobileNavigationActive
+	                ? (mobilePane === 'right' ? 'Show answer panel' : 'Show sources panel')
+	                : (rightCollapsed ? 'Expand sources panel' : 'Collapse sources panel')
 	        );
 	        applyButtonState(
 	            $(this.ai).find('.geweb-ai-panel-collapse[data-panel-toggle="search"]'),
@@ -775,6 +1145,7 @@ jQuery(document).ready(function($) {
 	            searchCollapsed ? '▾' : '▴',
 	            searchCollapsed ? 'Expand classic search results' : 'Collapse classic search results'
 	        );
+	        this.syncMobilePaneFooter(mobilePane);
 	    },
 
 	    bindFrontendHeaderSearch() {
@@ -793,12 +1164,47 @@ jQuery(document).ready(function($) {
 	                return;
 	            }
 
+	            const currentWorkspaceQuery = this.resolveQueryText('');
+	            if (currentWorkspaceQuery !== '' && String($input.val() || '').trim() === '') {
+	                $input.val(currentWorkspaceQuery);
+	            }
+
+	            const navigateToHeaderSearchQuery = (query) => {
+	                globalThis.location.href = this.buildFrontendAiPageUrl(query, GewebAIChat.getTargetConversationIdForQuery(query));
+	            };
+
+	            const syncCompactPlaceholderState = () => {
+	                $input.toggleClass('geweb-ai-search-input--compact-placeholder', String($input.val() || '').trim() === '');
+	            };
+
+	            const clearWorkspaceResultsIfInputIsEmpty = () => {
+	                const visibleQuery = String($input.val() || '').trim();
+	                const currentQuery = this.resolveQueryText('');
+	                if (visibleQuery !== '' || currentQuery === '') {
+	                    return;
+	                }
+
+	                navigateToHeaderSearchQuery('');
+	            };
+
+	            $form.addClass('geweb-ai-workspace-search-form');
+	            $input.addClass('geweb-ai-workspace-search-input');
+	            $input.attr('placeholder', t('searchResultsIntro', 'Use your normal site search above to update these WordPress results without leaving the AI workspace.'));
+	            syncCompactPlaceholderState();
+	            $input.on('input', syncCompactPlaceholderState);
+	            $input.on('search', clearWorkspaceResultsIfInputIsEmpty);
+	            $input.on('change', clearWorkspaceResultsIfInputIsEmpty);
+
 	            $form.data('gewebAiSearchBound', true);
 	            $form.on('submit', (event) => {
 	                event.preventDefault();
 	                const query = String($input.val() || '').trim();
-		                globalThis.location.href = this.buildFrontendAiPageUrl(query, GewebAIChat.getTargetConversationIdForQuery(query));
+		                navigateToHeaderSearchQuery(query);
 	            });
+
+	            globalThis.setTimeout(() => {
+	                syncCompactPlaceholderState();
+	            }, 0);
 	        });
 	    },
 
@@ -812,7 +1218,7 @@ jQuery(document).ready(function($) {
 		    $textarea: $('#geweb-ai-query-display'),
 		    $submitBtn: $('#geweb-ask-ai-submit'),
 		    $modelSelector: $('#geweb-ai-model-selector'),
-		    $settingsToggle: $('#geweb-ai-toggle-temp-settings'),
+		    $settingsToggle: $('[data-geweb-temp-settings-toggle="1"]'),
 		    $settingsPanel: $('#geweb-ai-temporary-settings-panel'),
 		    $resetSettingsBtn: $('#geweb-ai-reset-temp-settings'),
 		    $resetModelBtn: $('#geweb-ai-reset-temp-model'),
@@ -831,11 +1237,12 @@ jQuery(document).ready(function($) {
 	    $copyConversationBtn: $('#geweb-ai-copy-conversation'),
 	    $renameConversationBtn: $('#geweb-ai-rename-conversation'),
 	    $deleteConversationBtn: $('#geweb-ai-delete-conversation'),
-		    $newConversationBtn: $('.geweb-ai-new-conversation'),
+	    $newConversationBtn: $('.geweb-ai-new-conversation'),
 	    conversationHistory: [],
 	    conversationId: '',
 	    requestInFlight: false,
 	    compactedConversation: false,
+	    excludedSourceKeysByConversation: {},
 		    conversationArchive: [],
 		    conversationOverviewPageSize: 10,
 		    conversationOverviewRenderedCount: 0,
@@ -862,12 +1269,21 @@ jQuery(document).ready(function($) {
 		            event.stopPropagation();
 		            this.toggleConversationOverviewScrollActive();
 		        });
-		        this.$conversationOverview.on('mouseleave', () => this.setConversationOverviewScrollActive(false));
 		        this.$answerBox.on('click', (event) => {
 		            event.stopPropagation();
+		            if (this.isMobileAnswerBoxTouchMode()) {
+		                return;
+		            }
 		            this.toggleAnswerBoxScrollActive();
 		        });
-		        this.$answerBox.on('mouseleave', () => this.setAnswerBoxScrollActive(false));
+		        this.$sourcesBox.on('click', (event) => {
+		            event.stopPropagation();
+		            if (this.isMobileWorkspaceNavigationActive()) {
+		                return;
+		            }
+		            this.toggleSourcesScrollActive();
+		        });
+		        this.bindAnswerBoxTouchScrollActivation();
 		        this.$conversationOverview.on('scroll', () => this.handleConversationOverviewScroll());
 		        $(document).on('click', (event) => this.handleDocumentClick(event));
 		        document.addEventListener('scroll', () => this.hideFootnotePreview(), true);
@@ -881,6 +1297,7 @@ jQuery(document).ready(function($) {
 		        });
 		        this.resetTemporarySettings();
 		        this.updateTemporarySettingsAvailability(false);
+		        this.syncModelSelectorWidth();
 		        void this.bootstrap();
 		    },
 
@@ -895,6 +1312,7 @@ jQuery(document).ready(function($) {
 	        this.renderConversationOverview();
 	        this.renderConversationSummary();
 	        this.renderSources();
+	        this.syncModelSelectorWidth();
 	        this.toggleSubmitButton();
 	        this.syncStoredChatState();
 	    },
@@ -937,37 +1355,155 @@ jQuery(document).ready(function($) {
 	        }
 	    },
 
-	    setConversationOverviewScrollActive(isActive) {
-	        if (!this.$conversationOverview.length) {
+	    populateQuestionBox(text, options = {}) {
+	        if (!this.$textarea.length) {
 	            return;
 	        }
 
-	        this.$conversationOverview.toggleClass('is-scroll-active', !!isActive);
+	        const nextValue = String(text || '');
+	        this.$textarea.val(nextValue);
+	        this.toggleSubmitButton();
+
+	        const textarea = this.$textarea.get(0);
+	        if (textarea && typeof textarea.setSelectionRange === 'function') {
+	            const cursorPosition = nextValue.length;
+	            textarea.setSelectionRange(cursorPosition, cursorPosition);
+	        }
+
+	        if (options.focus !== false) {
+	            this.focusInput();
+	        }
+	    },
+
+	    getScrollablePaneTargets() {
+	        return [
+	            {
+	                key: 'conversation',
+	                $element: this.$conversationOverview,
+	                activeClass: 'is-scroll-active',
+	            },
+	            {
+	                key: 'answer',
+	                $element: this.$answerBox,
+	                activeClass: 'is-scroll-active',
+	                onChange: (isActive) => {
+	                    this.$answerBox.closest('.geweb-ai-main-panel').toggleClass('is-answer-box-scroll-active', !!isActive);
+	                },
+	            },
+	            {
+	                key: 'sources',
+	                $element: this.$sourcesBox,
+	                activeClass: 'is-scroll-active',
+	                onChange: (isActive) => {
+	                    this.$sourcesBox.closest('.geweb-ai-sources-panel').toggleClass('is-sources-scroll-active', !!isActive);
+	                },
+	            },
+	        ];
+	    },
+
+	    setScrollablePaneActive(targetKey = null) {
+	        this.getScrollablePaneTargets().forEach((target) => {
+	            if (!target?.$element?.length) {
+	                return;
+	            }
+
+	            const isActive = !!targetKey && target.key === targetKey;
+	            target.$element.toggleClass(target.activeClass, isActive);
+	            if (typeof target.onChange === 'function') {
+	                target.onChange(isActive);
+	            }
+	        });
+	    },
+
+	    toggleScrollablePane(targetKey) {
+	        const target = this.getScrollablePaneTargets().find((item) => item.key === targetKey && item.$element?.length);
+	        if (!target) {
+	            return;
+	        }
+
+	        const shouldActivate = !target.$element.hasClass(target.activeClass);
+	        this.setScrollablePaneActive(shouldActivate ? targetKey : null);
+	    },
+
+	    setConversationOverviewScrollActive(isActive) {
+	        this.setScrollablePaneActive(isActive ? 'conversation' : null);
 	    },
 
 	    setAnswerBoxScrollActive(isActive) {
-	        if (!this.$answerBox.length) {
-	            return;
-	        }
-
-	        this.$answerBox.toggleClass('is-scroll-active', !!isActive);
+	        this.setScrollablePaneActive(isActive ? 'answer' : null);
 	    },
 
 	    toggleConversationOverviewScrollActive() {
-	        if (!this.$conversationOverview.length) {
-	            return;
-	        }
-
-	        this.setConversationOverviewScrollActive(!this.$conversationOverview.hasClass('is-scroll-active'));
+	        this.toggleScrollablePane('conversation');
 	    },
 
-	    toggleAnswerBoxScrollActive() {
-	        if (!this.$answerBox.length) {
-	            return;
-	        }
+		    toggleAnswerBoxScrollActive() {
+		        this.toggleScrollablePane('answer');
+		    },
 
-	        this.setAnswerBoxScrollActive(!this.$answerBox.hasClass('is-scroll-active'));
+	    toggleSourcesScrollActive() {
+	        this.toggleScrollablePane('sources');
 	    },
+
+		    isMobileAnswerBoxTouchMode() {
+		        return this.isMobileWorkspaceNavigationActive();
+		    },
+
+		    bindAnswerBoxTouchScrollActivation() {
+		        const answerBox = this.$answerBox.get(0);
+		        if (!answerBox || answerBox.dataset.gewebTouchScrollBound === '1') {
+		            return;
+		        }
+
+		        answerBox.dataset.gewebTouchScrollBound = '1';
+		        let pressTimer = null;
+		        let startX = 0;
+		        let startY = 0;
+		        let touchActivated = false;
+
+		        const clearPressTimer = () => {
+		            if (pressTimer !== null) {
+		                globalThis.clearTimeout(pressTimer);
+		                pressTimer = null;
+		            }
+		        };
+
+		        answerBox.addEventListener('touchstart', (event) => {
+		            if (!this.isMobileAnswerBoxTouchMode() || event.touches.length !== 1) {
+		                return;
+		            }
+
+		            const touch = event.touches[0];
+		            startX = Number(touch?.clientX || 0);
+		            startY = Number(touch?.clientY || 0);
+		            touchActivated = false;
+		            clearPressTimer();
+		            pressTimer = globalThis.setTimeout(() => {
+		                touchActivated = true;
+		                this.setAnswerBoxScrollActive(true);
+		            }, 240);
+		        }, { passive: true });
+
+		        answerBox.addEventListener('touchmove', (event) => {
+		            if (!this.isMobileAnswerBoxTouchMode() || event.touches.length !== 1) {
+		                return;
+		            }
+
+		            const touch = event.touches[0];
+		            const deltaX = Math.abs(Number(touch?.clientX || 0) - startX);
+		            const deltaY = Math.abs(Number(touch?.clientY || 0) - startY);
+		            if (!touchActivated && (deltaX > 8 || deltaY > 8)) {
+		                clearPressTimer();
+		            }
+		        }, { passive: true });
+
+		        const finishTouch = () => {
+		            clearPressTimer();
+		        };
+
+		        answerBox.addEventListener('touchend', finishTouch, { passive: true });
+		        answerBox.addEventListener('touchcancel', finishTouch, { passive: true });
+		    },
 
 	    submitQuestionBoxFromKeyboard(event) {
 	        if (event) {
@@ -1101,30 +1637,150 @@ jQuery(document).ready(function($) {
 	        }));
 	        this.compactedConversation = !!entry.compacted;
 	        this.requestInFlight = false;
+	        this.renderConversationMessages();
+
+	        this.renderConversationOverview();
+	        this.renderConversationSummary();
+	        this.renderSources();
+	        this.syncStoredChatState();
+	        this.toggleSubmitButton();
+	        this.syncFrontendPageConversationState();
+	    },
+
+	    renderConversationMessages() {
+	        if (!this.$answerBox.length) {
+	            return;
+	        }
+
 	        this.$answerBox.empty();
 
 	        if (this.compactedConversation) {
 	            this.appendSystemNote(t('earlierTrimmed', 'Earlier messages were trimmed to keep the chat context compact.'));
 	        }
 
-	        this.conversationHistory.forEach((item) => {
+	        this.conversationHistory.forEach((item, index) => {
 	            if (item.role === 'model') {
 	                this.appendMessage({
 	                    answer: item.content,
 	                    sources: item.sources || [],
 	                    meta: item.meta || {}
-	                }, 'ai');
+	                }, 'ai', { historyIndex: index });
 	                return;
 	            }
 
-	            this.appendMessage(item.content, 'user');
+	            this.appendMessage(item.content, 'user', { historyIndex: index });
 	        });
+	    },
 
+	    async removeConversationTurn(historyIndex) {
+	        const index = Number(historyIndex);
+	        if (!Number.isInteger(index) || index < 0 || index >= this.conversationHistory.length) {
+	            return;
+	        }
+
+	        const targetEntry = this.conversationHistory[index];
+	        if (!targetEntry || targetEntry.role !== 'user') {
+	            return;
+	        }
+
+	        const deleteCount = this.conversationHistory[index + 1]?.role === 'model' ? 2 : 1;
+	        this.conversationHistory.splice(index, deleteCount);
+	        this.requestInFlight = false;
+	        this.renderConversationMessages();
 	        this.renderConversationOverview();
 	        this.renderConversationSummary();
 	        this.renderSources();
 	        this.toggleSubmitButton();
 	        this.syncFrontendPageConversationState();
+	        this.syncStoredChatState();
+	        await this.persistConversation();
+	        await this.loadConversationArchive();
+	        this.renderConversationOverview();
+	        this.renderConversationSummary();
+	    },
+
+	    getNormalizedConversationIdForSourceState() {
+	        return String(this.conversationId || '').trim() || this.ensureConversationId();
+	    },
+
+	    getCurrentExcludedSourceKeys() {
+	        const conversationId = this.getNormalizedConversationIdForSourceState();
+	        const storedKeys = this.excludedSourceKeysByConversation?.[conversationId];
+	        return Array.isArray(storedKeys)
+	            ? [...new Set(storedKeys.map((key) => String(key || '').trim()).filter(Boolean))]
+	            : [];
+	    },
+
+	    setCurrentExcludedSourceKeys(keys) {
+	        const conversationId = this.getNormalizedConversationIdForSourceState();
+	        const normalizedKeys = Array.isArray(keys)
+	            ? [...new Set(keys.map((key) => String(key || '').trim()).filter(Boolean))]
+	            : [];
+
+	        if (!normalizedKeys.length) {
+	            delete this.excludedSourceKeysByConversation[conversationId];
+	            this.syncStoredChatState();
+	            return;
+	        }
+
+	        this.excludedSourceKeysByConversation[conversationId] = normalizedKeys;
+	        this.syncStoredChatState();
+	    },
+
+	    isSourceTemporarilyExcluded(source) {
+	        const sourceKey = typeof this.getSourceRegistryKey === 'function'
+	            ? String(this.getSourceRegistryKey(source) || '').trim()
+	            : '';
+	        if (!sourceKey) {
+	            return false;
+	        }
+
+	        return this.getCurrentExcludedSourceKeys().includes(sourceKey);
+	    },
+
+	    toggleSourceTemporarilyExcluded(source) {
+	        const sourceKey = typeof this.getSourceRegistryKey === 'function'
+	            ? String(this.getSourceRegistryKey(source) || '').trim()
+	            : '';
+	        if (!sourceKey) {
+	            return;
+	        }
+
+	        const currentKeys = this.getCurrentExcludedSourceKeys();
+	        const nextKeys = currentKeys.includes(sourceKey)
+	            ? currentKeys.filter((key) => key !== sourceKey)
+	            : [...currentKeys, sourceKey];
+
+	        this.setCurrentExcludedSourceKeys(nextKeys);
+	        this.renderSources();
+	    },
+
+	    clearTemporarilyExcludedSources() {
+	        this.setCurrentExcludedSourceKeys([]);
+	        this.renderSources();
+	    },
+
+	    getExcludedSourcesForRequest() {
+	        const normalizedSources = typeof this.buildConversationSourceRegistry === 'function'
+	            ? this.buildConversationSourceRegistry()
+	            : [];
+	        const excludedKeys = new Set(this.getCurrentExcludedSourceKeys());
+
+	        return normalizedSources.reduce((items, source) => {
+	            const key = typeof this.getSourceRegistryKey === 'function'
+	                ? String(this.getSourceRegistryKey(source) || '').trim()
+	                : '';
+	            if (!key || !excludedKeys.has(key)) {
+	                return items;
+	            }
+
+	            items.push({
+	                key,
+	                title: String(source?.title || '').trim(),
+	                url: String(source?.url || '').trim(),
+	            });
+	            return items;
+	        }, []);
 	    },
 
 	    prepareChatForQuery(query) {
@@ -1378,18 +2034,37 @@ jQuery(document).ready(function($) {
 		        }
 		    },
 
+		    syncModelSelectorWidth() {
+		        const select = this.$modelSelector.get(0);
+		        if (!select) {
+		            return;
+		        }
+
+		        const optionTexts = Array.from(select.options || []).map((option) => String(option.text || ''));
+		        const longest = optionTexts.reduce((best, text) => text.length > best.length ? text : best, '');
+		        if (!longest) {
+		            return;
+		        }
+
+		        const probe = document.createElement('span');
+		        probe.textContent = longest;
+		        probe.style.position = 'absolute';
+		        probe.style.visibility = 'hidden';
+		        probe.style.whiteSpace = 'nowrap';
+		        probe.style.font = globalThis.getComputedStyle(select).font;
+		        document.body.appendChild(probe);
+		        const width = Math.ceil(probe.getBoundingClientRect().width) + 56;
+		        document.body.removeChild(probe);
+		        select.style.width = `${width}px`;
+		        select.style.minWidth = `${width}px`;
+		    },
+
 		    handleDocumentClick(event) {
 		        this.hideFootnotePreview();
 		        const $target = $(event.target);
-
-		        if (this.$conversationOverview.length) {
-		            const clickedInsideOverview = $target.closest('#geweb-ai-conversation-overview').length > 0;
-		            this.setConversationOverviewScrollActive(clickedInsideOverview);
-		        }
-
-		        if (this.$answerBox.length) {
-		            const clickedInsideAnswerBox = $target.closest('.answer-box').length > 0;
-		            this.setAnswerBoxScrollActive(clickedInsideAnswerBox);
+		        const clickedInsideScrollablePane = $target.closest('#geweb-ai-conversation-overview, .answer-box, #geweb-ai-sources').length > 0;
+		        if (!clickedInsideScrollablePane) {
+		            this.setScrollablePaneActive(null);
 		        }
 
 		        if (!this.$settingsPanel.length || this.$settingsPanel.prop('hidden')) {
@@ -1398,7 +2073,7 @@ jQuery(document).ready(function($) {
 
 		        if (
 		            $target.closest('#geweb-ai-temporary-settings-panel').length ||
-		            $target.closest('#geweb-ai-toggle-temp-settings').length
+		            $target.closest('[data-geweb-temp-settings-toggle="1"]').length
 		        ) {
 		            return;
 		        }
@@ -1443,6 +2118,7 @@ jQuery(document).ready(function($) {
 		            conversation_id: this.ensureConversationId(),
 		            model: this.getSelectedModel(),
 		            temporary_prompt: this.getTemporaryPrompt(),
+		            excluded_sources: JSON.stringify(this.getExcludedSourcesForRequest()),
 		            messages: [{
 		                role: 'user',
 		                content: message
@@ -1516,9 +2192,35 @@ jQuery(document).ready(function($) {
 	        this.toggleSubmitButton();
 		},
 
-		appendMessage(text, type) {
+		appendMessage(text, type, options = {}) {
 	        if (type === 'user') {
-		        const $msg = $(`<p class="user-message">${this.escapeHtml(text)}</p>`);
+		        const questionText = String(text || '');
+		        const historyIndex = Number.isInteger(options?.historyIndex) ? options.historyIndex : -1;
+		        const $msg = $(`<div class="user-message" role="button" tabindex="0"></div>`);
+		        const $text = $('<span class="geweb-ai-user-message-text"></span>').html(this.escapeHtml(questionText));
+		        $msg.append($text);
+		        if (historyIndex >= 0) {
+		            const $removeButton = $('<button type="button" class="geweb-ai-user-message-remove" aria-label="Remove question and answer" title="Remove question and answer"><span aria-hidden="true">−</span></button>');
+		            $removeButton.on('click', async (event) => {
+		                event.preventDefault();
+		                event.stopPropagation();
+		                await this.removeConversationTurn(historyIndex);
+		            });
+		            $msg.append($removeButton);
+		        }
+		        $msg.attr('title', t('reuseQuestion', 'Reuse this question'));
+		        $msg.attr('aria-label', t('reuseQuestion', 'Reuse this question'));
+		        $msg.on('click', () => {
+		            this.populateQuestionBox(questionText, { focus: true });
+		        });
+		        $msg.on('keydown', (event) => {
+		            if (event.key !== 'Enter' && event.key !== ' ') {
+		                return;
+		            }
+
+		            event.preventDefault();
+		            this.populateQuestionBox(questionText, { focus: true });
+		        });
 		        this.$answerBox.append($msg);
 		        this.scrollElementIntoView($msg.get(0));
 		    } else {
@@ -1572,7 +2274,7 @@ jQuery(document).ready(function($) {
 		        }
 
 		        if ($messageActions.children().length) {
-		            $container.append($messageActions);
+		            $content.prepend($messageActions);
 		        }
 		        $container.append($content);
 		        if ($details) {
@@ -1656,8 +2358,8 @@ jQuery(document).ready(function($) {
 	            event.stopPropagation();
 	            const footnote = Number($(event.currentTarget).attr('data-footnote') || 0);
 	            if (footnote > 0) {
+	                this.showFootnotePreview($(event.currentTarget), footnote);
 	                this.highlightSourceReference(footnote, { mode: 'active' });
-	                this.hideFootnotePreview();
 	            }
 	        });
 
@@ -1670,8 +2372,8 @@ jQuery(document).ready(function($) {
 	            event.stopPropagation();
 	            const footnote = Number($(event.currentTarget).attr('data-footnote') || 0);
 	            if (footnote > 0) {
+	                this.showFootnotePreview($(event.currentTarget), footnote);
 	                this.highlightSourceReference(footnote, { mode: 'active' });
-	                this.hideFootnotePreview();
 	            }
 	        });
 	    },
@@ -1948,7 +2650,12 @@ jQuery(document).ready(function($) {
 	            $item.append($removeButton);
 	            $item.append($('<div class="geweb-ai-overview-role"></div>').text(dateLabel || t('savedChat', 'Saved chat')));
 	            $item.append($('<div class="geweb-ai-overview-preview"></div>').text(summaryLabel));
-	            $item.on('click', () => this.loadConversation(entry.id));
+	            $item.on('click', async () => {
+	                const loaded = await this.loadConversation(entry.id);
+	                if (loaded && this.isMobileWorkspaceNavigationActive()) {
+	                    this.setMobileWorkspacePane('main', { focusPane: true });
+	                }
+	            });
 	            this.$conversationOverview.append($item);
 	        });
 
@@ -2053,6 +2760,7 @@ jQuery(document).ready(function($) {
 	        this.conversationId = '';
 	        this.requestInFlight = false;
 	        this.compactedConversation = false;
+	        this.excludedSourceKeysByConversation = {};
 	        this.$answerBox.html('');
 	        this.conversationArchive = [];
 	        this.renderConversationOverview();
@@ -2095,6 +2803,7 @@ jQuery(document).ready(function($) {
 	            globalThis.localStorage.setItem(this.getStoredChatStateKey(), JSON.stringify({
 	                conversationId: this.conversationId,
 	                compactedConversation: this.compactedConversation,
+	                excludedSourceKeysByConversation: this.excludedSourceKeysByConversation,
 	                conversationHistory: this.conversationHistory,
 	                conversationArchive: this.conversationArchive,
 	            }));
@@ -2133,6 +2842,22 @@ jQuery(document).ready(function($) {
 	            this.conversationId = storedConversationId;
 	            this.conversationHistory = storedHistory;
 	            this.compactedConversation = !!storedState.compactedConversation;
+	        }
+
+	        if (storedState.excludedSourceKeysByConversation && typeof storedState.excludedSourceKeysByConversation === 'object') {
+	            this.excludedSourceKeysByConversation = Object.entries(storedState.excludedSourceKeysByConversation).reduce((map, [conversationId, keys]) => {
+	                const normalizedConversationId = String(conversationId || '').trim();
+	                if (!normalizedConversationId || !Array.isArray(keys)) {
+	                    return map;
+	                }
+
+	                const normalizedKeys = [...new Set(keys.map((key) => String(key || '').trim()).filter(Boolean))];
+	                if (normalizedKeys.length) {
+	                    map[normalizedConversationId] = normalizedKeys;
+	                }
+
+	                return map;
+	            }, {});
 	        }
 
 	        return storedArchive.length > 0 || storedHistory.length > 0;
@@ -2264,6 +2989,8 @@ jQuery(document).ready(function($) {
 	        }
 
 	        await this.loadConversationArchive();
+	        delete this.excludedSourceKeysByConversation[currentId];
+	        this.syncStoredChatState();
 	        if (currentId !== this.conversationId) {
 	            this.renderConversationOverview();
 	            this.renderConversationSummary();
@@ -2315,24 +3042,7 @@ jQuery(document).ready(function($) {
 	        }));
 	        this.compactedConversation = !!entry.compacted;
 	        this.requestInFlight = false;
-	        this.$answerBox.empty();
-
-	        if (this.compactedConversation) {
-	            this.appendSystemNote(t('earlierTrimmed', 'Earlier messages were trimmed to keep the chat context compact.'));
-	        }
-
-	        this.conversationHistory.forEach((item) => {
-	            if (item.role === 'model') {
-	                this.appendMessage({
-	                    answer: item.content,
-	                    sources: item.sources || [],
-	                    meta: item.meta || {}
-	                }, 'ai');
-	                return;
-	            }
-
-	            this.appendMessage(item.content, 'user');
-	        });
+	        this.renderConversationMessages();
 
 	        this.renderConversationOverview();
 	        this.renderConversationSummary();

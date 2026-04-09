@@ -346,7 +346,7 @@
                 return '';
             }
 
-            return normalized.split(/\s+/).slice(0, 5).join(' ');
+            return normalized.split(/\s+/).slice(0, 6).join(' ');
         },
 
         isDocumentLikeTitle(title) {
@@ -365,6 +365,89 @@
             }
 
             return this.isDocumentLikeTitle(normalizedTitle) ? normalizedTitle : '';
+        },
+
+        getDocumentExtension(value) {
+            const normalizedValue = String(value || '').trim();
+            if (!normalizedValue) {
+                return '';
+            }
+
+            const match = /\.([a-z0-9]{2,8})(?:[?#].*)?$/i.exec(normalizedValue);
+            return match?.[1] ? String(match[1]).toLowerCase() : '';
+        },
+
+        isDocumentUrl(url) {
+            const normalizedUrl = String(url || '').trim();
+            if (!normalizedUrl) {
+                return false;
+            }
+
+            try {
+                const parsed = new URL(normalizedUrl, String(getAiSearchConfig().site_url || globalThis.location?.origin || ''));
+                return ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'csv', 'rtf'].includes(this.getDocumentExtension(parsed.pathname || ''));
+            } catch (error) {
+                console.debug('Document URL detection failed.', error);
+                return ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'csv', 'rtf'].includes(this.getDocumentExtension(normalizedUrl));
+            }
+        },
+
+        getDocumentType(source) {
+            const title = String(source?.title || '').trim();
+            const url = String(source?.url || '').trim();
+            const documentLabel = String(source?.documentLabel || this.extractDocumentLabelFromTitle(title)).trim();
+            const extension = this.getDocumentExtension(documentLabel) || this.getDocumentExtension(url);
+
+            if (['doc', 'docx', 'rtf'].includes(extension)) {
+                return 'word';
+            }
+
+            if (['xls', 'xlsx', 'csv'].includes(extension)) {
+                return 'sheet';
+            }
+
+            if (['ppt', 'pptx'].includes(extension)) {
+                return 'slides';
+            }
+
+            if (['txt'].includes(extension)) {
+                return 'text';
+            }
+
+            if (extension === 'pdf') {
+                return 'pdf';
+            }
+
+            return documentLabel || this.isDocumentUrl(url) ? 'document' : '';
+        },
+
+        getSourceKind(source) {
+            return this.getDocumentType(source) ? 'document' : 'page';
+        },
+
+        getSourceIcon(source) {
+            const documentType = this.getDocumentType(source);
+            if (documentType === 'pdf') {
+                return '📕';
+            }
+
+            if (documentType === 'word') {
+                return '📝';
+            }
+
+            if (documentType === 'sheet') {
+                return '📊';
+            }
+
+            if (documentType === 'slides') {
+                return '📈';
+            }
+
+            if (documentType === 'text') {
+                return '📄';
+            }
+
+            return documentType ? '📁' : '🌐';
         },
 
         normalizeDocumentContextText(text) {
@@ -668,24 +751,25 @@
                 }
 
                 const existing = blockFootnotes.get(matchedBlock) || [];
+                const insertionOffset = this.findExactFootnoteOffsetInBlock(matchedBlock, segmentText);
                 indices.forEach((index) => {
                     const localFootnote = index + 1;
                     const footnote = Number(sourceFootnoteMap?.[localFootnote]) || localFootnote;
-                    if (!existing.includes(footnote)) {
-                        existing.push(footnote);
+                    if (!existing.some((entry) => entry.footnote === footnote && entry.offset === insertionOffset)) {
+                        existing.push({
+                            footnote,
+                            offset: insertionOffset,
+                        });
                     }
                 });
-                blockFootnotes.set(matchedBlock, existing.sort((a, b) => a - b));
+                blockFootnotes.set(matchedBlock, existing.sort((left, right) => left.offset === right.offset ? left.footnote - right.footnote : left.offset - right.offset));
             });
 
-            blockFootnotes.forEach((footnotes, block) => {
-                if (!footnotes.length) {
+            blockFootnotes.forEach((placements, block) => {
+                if (!placements.length) {
                     return;
                 }
-                const marker = document.createElement('span');
-                marker.className = 'geweb-ai-footnote-group';
-                marker.innerHTML = footnotes.map((number) => `<sup class="geweb-ai-footnote-ref" data-footnote="${number}">[${number}]</sup>`).join('');
-                block.appendChild(marker);
+                this.insertFootnotesIntoBlock(block, placements);
             });
 
             if (!blockFootnotes.size) {
@@ -707,6 +791,104 @@
             }
 
             return container.innerHTML;
+        },
+
+        findExactFootnoteOffsetInBlock(block, segmentText) {
+            const rawText = String(block?.textContent || '');
+            if (!rawText.trim()) {
+                return 0;
+            }
+
+            const normalizedSegment = String(segmentText || '').replaceAll(/\s+/g, ' ').trim().toLowerCase();
+            if (!normalizedSegment) {
+                return rawText.length;
+            }
+
+            const lowerRawText = rawText.toLowerCase();
+            let startIndex = lowerRawText.indexOf(normalizedSegment);
+            let matchLength = normalizedSegment.length;
+
+            if (startIndex < 0) {
+                const fallbackToken = normalizedSegment
+                    .split(/\s+/)
+                    .find((token) => token.length >= 4 && lowerRawText.includes(token));
+                if (!fallbackToken) {
+                    return rawText.length;
+                }
+                startIndex = lowerRawText.indexOf(fallbackToken);
+                matchLength = fallbackToken.length;
+            }
+
+            return Math.max(0, Math.min(rawText.length, startIndex + matchLength));
+        },
+
+        buildFootnoteGroupMarker(footnotes) {
+            const marker = document.createElement('span');
+            marker.className = 'geweb-ai-footnote-group';
+            marker.innerHTML = footnotes.map((number) => `<sup class="geweb-ai-footnote-ref" data-footnote="${number}">[${number}]</sup>`).join('');
+            return marker;
+        },
+
+        insertFootnotesIntoBlock(block, placements) {
+            if (!block || !Array.isArray(placements) || !placements.length) {
+                return;
+            }
+
+            const groupedPlacements = placements.reduce((map, placement) => {
+                const offset = Number(placement?.offset ?? 0);
+                const footnote = Number(placement?.footnote ?? 0);
+                if (!Number.isInteger(footnote) || footnote <= 0) {
+                    return map;
+                }
+
+                const normalizedOffset = Math.max(0, Math.min(String(block.textContent || '').length, Number.isFinite(offset) ? offset : 0));
+                const existing = map.get(normalizedOffset) || [];
+                if (!existing.includes(footnote)) {
+                    existing.push(footnote);
+                }
+                map.set(normalizedOffset, existing.sort((a, b) => a - b));
+                return map;
+            }, new Map());
+
+            const insertions = Array.from(groupedPlacements.entries()).sort((left, right) => right[0] - left[0]);
+            insertions.forEach(([offset, footnotes]) => {
+                const marker = this.buildFootnoteGroupMarker(footnotes);
+                if (!this.insertNodeAtTextOffset(block, marker, offset)) {
+                    block.appendChild(marker);
+                }
+            });
+        },
+
+        insertNodeAtTextOffset(root, node, targetOffset) {
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+            let currentNode = null;
+            let traversed = 0;
+
+            while ((currentNode = walker.nextNode())) {
+                const textLength = String(currentNode.textContent || '').length;
+                const nextTraversed = traversed + textLength;
+                if (targetOffset > nextTraversed) {
+                    traversed = nextTraversed;
+                    continue;
+                }
+
+                const localOffset = Math.max(0, targetOffset - traversed);
+                if (localOffset <= 0) {
+                    currentNode.parentNode?.insertBefore(node, currentNode);
+                    return true;
+                }
+
+                if (localOffset >= textLength) {
+                    currentNode.parentNode?.insertBefore(node, currentNode.nextSibling);
+                    return true;
+                }
+
+                const splitNode = currentNode.splitText(localOffset);
+                splitNode.parentNode?.insertBefore(node, splitNode);
+                return true;
+            }
+
+            return false;
         },
 
         getFallbackFootnoteNumbers(sourceFootnoteMap, sources) {
@@ -1006,10 +1188,33 @@
             this.$sourcesBox.empty();
 
             const normalizedSources = this.buildConversationSourceRegistry();
+            const requestExcludedSources = typeof this.getExcludedSourcesForRequest === 'function'
+                ? this.getExcludedSourcesForRequest()
+                : [];
+            const excludedCount = requestExcludedSources.length;
 
             if (!normalizedSources.length) {
                 this.$sourcesBox.append($('<p class="geweb-ai-empty-panel"></p>').text(t('noSourcesYet', 'No source links yet.')));
                 return;
+            }
+
+            if (excludedCount > 0 && typeof this.clearTemporarilyExcludedSources === 'function') {
+                const $toolbar = $('<div class="geweb-ai-source-filter-toolbar"></div>');
+                const summaryText = excludedCount === 1
+                    ? t('oneSourceTemporarilyExcluded', '1 source temporarily excluded for the next question.')
+                    : t('multipleSourcesTemporarilyExcluded', `${excludedCount} sources temporarily excluded for the next question.`).replace('%d', String(excludedCount));
+                const $summary = $('<div class="geweb-ai-source-filter-summary"></div>').text(summaryText);
+                const $resetButton = $('<button type="button" class="button button-small geweb-ai-source-filter-reset"></button>')
+                    .text(t('useAllSourcesAgain', 'Use all sources again'))
+                    .attr('title', t('useAllSourcesAgain', 'Use all sources again'))
+                    .on('click', (event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        this.clearTemporarilyExcludedSources();
+                    });
+
+                $toolbar.append($summary, $resetButton);
+                this.$sourcesBox.append($toolbar);
             }
 
             const $list = $('<ol class="geweb-ai-source-list"></ol>');
@@ -1031,20 +1236,33 @@
             const sourceLabel = title || url || `Source ${footnote || ''}`.trim();
             const referenceHint = this.getManagedSourceReferenceHint(url);
             const firstMatchPhrase = contexts[0]?.matchPhrase || '';
+            const sourceKind = this.getSourceKind(source);
+            const sourceIcon = this.getSourceIcon(source);
             const $item = $('<li></li>');
             const $itemHeader = $('<div class="geweb-ai-source-item-header"></div>');
             const $toggle = $('<button type="button" class="geweb-ai-source-link geweb-ai-source-toggle"></button>');
+            const $number = $('<span class="geweb-ai-source-item-number" aria-hidden="true"></span>').text(`${footnote || ''}`);
+            const isExcluded = typeof this.isSourceTemporarilyExcluded === 'function'
+                ? this.isSourceTemporarilyExcluded(source)
+                : false;
 
             $toggle.attr('aria-label', `Show context for ${sourceLabel}`);
             $toggle.attr('title', sourceLabel);
-            $toggle.append($('<span class="geweb-ai-source-link-icon" aria-hidden="true">📄</span>'));
+            $toggle.append($('<span class="geweb-ai-source-link-icon" aria-hidden="true"></span>').text(sourceIcon));
             $toggle.append($('<span class="geweb-ai-source-link-label"></span>').text(title));
             if (referenceHint) {
                 $toggle.append($('<span class="geweb-ai-source-link-hint"></span>').text(referenceHint));
             }
             this.applySourceItemAttributes($item, { footnote, title, snippet, previewSnippet, url, contexts });
-            this.bindSourceToggleInteractions($toggle, $item, url, firstMatchPhrase);
-            $itemHeader.prepend($toggle);
+            $item.attr('data-source-kind', sourceKind);
+            this.bindSourceToggleInteractions($toggle, $item, url, firstMatchPhrase, $itemHeader, $number);
+            if (isExcluded) {
+                $item.addClass('is-excluded');
+            }
+
+            $itemHeader.append(this.buildSourceExcludeToggle(source, sourceLabel, isExcluded));
+            $itemHeader.append($number);
+            $itemHeader.append($toggle);
             $item.append($itemHeader);
 
             const $details = this.buildSourceDetails(url, contexts, previewSnippet, referenceHint, $item, footnote);
@@ -1053,6 +1271,40 @@
             }
 
             return $item;
+        },
+
+        buildSourceExcludeToggle(source, sourceLabel, isExcluded) {
+            const includeTitle = t('includeSourceAgainTitle', 'Allow this source again for the next question');
+            const excludeTitle = t('excludeSourceTemporarilyTitle', 'Temporarily exclude this source from the next question');
+            const checkboxId = `geweb-ai-source-filter-${String(source?.footnote || sourceLabel || 'source')
+                .toLowerCase()
+                .replaceAll(/[^a-z0-9]+/g, '-')}`;
+
+            const $wrapper = $('<label class="geweb-ai-source-filter-toggle"></label>');
+            const $checkbox = $('<input type="checkbox" class="geweb-ai-source-filter-checkbox" />');
+            const nextTitle = isExcluded ? includeTitle : excludeTitle;
+
+            $wrapper.attr('for', checkboxId);
+            $wrapper.attr('title', `${nextTitle}: ${sourceLabel}`);
+            $wrapper.attr('aria-label', `${nextTitle}: ${sourceLabel}`);
+            $wrapper.toggleClass('is-active', isExcluded);
+
+            $checkbox.attr('id', checkboxId);
+            $checkbox.prop('checked', !isExcluded);
+            $checkbox.attr('title', `${nextTitle}: ${sourceLabel}`);
+            $checkbox.on('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (typeof this.toggleSourceTemporarilyExcluded === 'function') {
+                    this.toggleSourceTemporarilyExcluded(source);
+                }
+            });
+            $checkbox.on('keydown', (event) => {
+                event.stopPropagation();
+            });
+
+            $wrapper.append($checkbox);
+            return $wrapper;
         },
 
         applySourceItemAttributes($item, sourceInfo) {
@@ -1078,51 +1330,55 @@
             }
         },
 
-        bindSourceToggleInteractions($toggle, $item, url, matchPhrase) {
-            const activateSource = (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                this.ensureSourcesPanelVisible();
-                this.activateSourceReferenceItem($item);
-            };
+	        bindSourceToggleInteractions($toggle, $item, url, matchPhrase, $itemHeader = null, $number = null) {
+	            const activateSource = (event) => {
+	                event.preventDefault();
+	                event.stopPropagation();
+	                this.setScrollablePaneActive?.('sources');
+	                this.ensureSourcesPanelVisible();
+	                this.activateSourceReferenceItem($item);
+	            };
 
-            const previewSource = () => {
-                this.previewSourceReferenceItem($item);
-            };
-
-            const clearPreview = (event) => {
-                const relatedTarget = event?.relatedTarget;
-                if (relatedTarget && $item.get(0)?.contains?.(relatedTarget)) {
-                    return;
-                }
-
-                this.clearSourceReferencePreview($item);
-            };
-
-            const handleSourceToggle = (event) => {
-                if ($item.hasClass('is-active') && url) {
-                    event.preventDefault();
+	            const handleSourceToggle = (event) => {
+	                if ($item.hasClass('is-active') && url) {
+	                    event.preventDefault();
                     event.stopPropagation();
                     this.openSourceDestination(url, matchPhrase);
                     return;
                 }
 
-                activateSource(event);
-            };
+	                activateSource(event);
+	            };
+	            $toggle.on('click', handleSourceToggle);
+	            $toggle.on('keydown', (event) => {
+	                if (event.key !== 'Enter' && event.key !== ' ') {
+	                    return;
+	                }
 
-            $toggle.on('mouseenter focus', previewSource);
-            $toggle.on('click', handleSourceToggle);
-            $toggle.on('keydown', (event) => {
-                if (event.key !== 'Enter' && event.key !== ' ') {
-                    return;
-                }
+	                handleSourceToggle(event);
+	            });
+	            if ($number?.length) {
+	                $number.attr('role', 'button');
+	                $number.attr('tabindex', '0');
+	                $number.on('click', handleSourceToggle);
+	                $number.on('keydown', (event) => {
+	                    if (event.key !== 'Enter' && event.key !== ' ') {
+	                        return;
+	                    }
 
-                handleSourceToggle(event);
-            });
+	                    handleSourceToggle(event);
+	                });
+	            }
+	            if ($itemHeader?.length) {
+	                $itemHeader.on('click', (event) => {
+	                    if ($(event.target).closest('.geweb-ai-source-filter-toggle, .geweb-ai-source-toggle, .geweb-ai-source-item-number').length) {
+	                        return;
+	                    }
 
-            $item.on('mouseenter focusin', previewSource);
-            $item.on('mouseleave focusout', clearPreview);
-        },
+	                    handleSourceToggle(event);
+	                });
+	            }
+	        },
 
         buildSourceDetails(url, contexts, previewSnippet, referenceHint, $sourceItem, footnote = 0) {
             const $details = $('<div class="geweb-ai-source-details"></div>');
@@ -1230,16 +1486,17 @@
             return $('<span class="geweb-ai-source-context-footnote"></span>').text(`[${footnoteNumber}]`);
         },
 
-        bindSourceContentInteraction($element, url, matchPhrase, $sourceItem) {
-            if (!url) {
-                return;
-            }
+	        bindSourceContentInteraction($element, url, matchPhrase, $sourceItem) {
+	            if (!url) {
+	                return;
+	            }
 
-            const activateOrOpen = (event) => {
-                if (!$sourceItem?.length || !$sourceItem.hasClass('is-active')) {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    if ($sourceItem?.length) {
+	            const activateOrOpen = (event) => {
+	                this.setScrollablePaneActive?.('sources');
+	                if (!$sourceItem?.length || !$sourceItem.hasClass('is-active')) {
+	                    event.preventDefault();
+	                    event.stopPropagation();
+	                    if ($sourceItem?.length) {
                         this.activateSourceReferenceItem($sourceItem);
                     }
                     return;
@@ -1522,10 +1779,10 @@
             return match?.[1] || '';
         },
 
-        highlightSourceReference(footnote, options = {}) {
-            if (!this.$sourcesBox.length) {
-                return;
-            }
+	        highlightSourceReference(footnote, options = {}) {
+	            if (!this.$sourcesBox.length) {
+	                return;
+	            }
 
             const $items = this.$sourcesBox.find('[data-source-footnote]');
             const $target = $items.filter(`[data-source-footnote="${footnote}"]`).first();
@@ -1533,26 +1790,25 @@
                 return;
             }
 
-            const mode = options?.mode === 'preview' ? 'preview' : 'active';
-            this.ensureSourcesPanelVisible();
-            if (mode === 'preview') {
-                this.previewSourceReferenceItem($target);
-            } else {
-                this.activateSourceReferenceItem($target);
-            }
-            this.highlightBestSourceContext($target, mode);
-            if (mode === 'preview') {
-                return;
-            }
+	            this.setScrollablePaneActive?.('sources');
+	            this.ensureSourcesPanelVisible();
+	            this.activateSourceReferenceItem($target);
+	            this.highlightBestSourceContext($target, 'active');
 
-            const element = $target.get(0);
-            if (element && typeof element.scrollIntoView === 'function') {
-                element.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-            }
+	            const element = $target.get(0);
+	            if (element && typeof element.scrollIntoView === 'function') {
+	                element.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+	            }
         },
 
         ensureSourcesPanelVisible() {
             const workspace = this.$sourcesBox.closest('.geweb-ai-workspace').get(0);
+            if (globalThis.GewebAIModal && typeof globalThis.GewebAIModal.isMobileWorkspaceNavigationActive === 'function' && globalThis.GewebAIModal.isMobileWorkspaceNavigationActive(workspace)) {
+                globalThis.GewebAIModal.setMobileWorkspacePane('right', { focusPane: true });
+                globalThis.GewebAIModal.syncPanelCollapseButtons();
+                return;
+            }
+
             if (!workspace?.classList.contains('is-right-collapsed')) {
                 return;
             }
@@ -1631,6 +1887,10 @@
             }
 
             $bestMatch.addClass(previewOnly ? 'is-context-preview' : 'is-context-active');
+            if (previewOnly) {
+                return;
+            }
+
             const element = $bestMatch.get(0);
             if (element && typeof element.scrollIntoView === 'function') {
                 element.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -1933,8 +2193,8 @@
                 return '';
             }
 
-            const pageId = parsed.searchParams.get('page_id') || parsed.searchParams.get('p');
-            return pageId ? `page ${pageId}` : '';
+            const pageId = String(parsed.searchParams.get('page_id') || parsed.searchParams.get('p') || '').trim();
+            return /^\d+$/.test(pageId) ? `[page ${pageId}]` : '';
         },
 
         normalizeManagedSourceUrl(url) {
