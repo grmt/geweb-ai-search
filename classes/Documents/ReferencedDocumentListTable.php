@@ -175,21 +175,23 @@ class ReferencedDocumentListTable extends \WP_List_Table {
      * @return string
      */
     protected function column_status($item): string {
+        $operationStatus = sanitize_key((string) ($item['operation_status'] ?? ''));
         $includeTarget = !empty($item['include_in_store_target']);
         $isUploaded = strpos((string) ($item['status'] ?? ''), 'Uploaded') === 0;
-        $isPendingUpload = $includeTarget && !$isUploaded;
-        $isPendingExclude = !$includeTarget && $isUploaded;
 
-        if ($isPendingUpload) {
+        if ($operationStatus === 'uploading') {
             $label = 'Uploading';
             $color = '#2271b1';
-        } elseif ($isPendingExclude) {
+        } elseif ($operationStatus === 'excluding') {
             $label = 'Excluding';
             $color = '#996800';
-        } elseif (!$includeTarget) {
+        } elseif ($operationStatus === 'error') {
+            $label = 'Error';
+            $color = '#d63638';
+        } elseif (!$includeTarget || $operationStatus === 'excluded') {
             $label = 'Excluded';
             $color = '#996800';
-        } elseif ($isUploaded) {
+        } elseif ($isUploaded || $operationStatus === 'indexed') {
             $label = 'Indexed';
             $color = '#46b450';
         } else {
@@ -279,12 +281,11 @@ class ReferencedDocumentListTable extends \WP_List_Table {
         $excludeToggleId = 'geweb-referenced-document-exclude-' . substr(sanitize_html_class($fileHash), 0, 12);
 
         $status = isset($item['status']) ? (string) $item['status'] : '';
+        $operationStatus = sanitize_key((string) ($item['operation_status'] ?? ''));
         $isUploaded = strpos($status, 'Uploaded') === 0;
         $canManage = $isUploaded || !empty($item['file_path']);
         $includeTarget = !empty($item['include_in_store_target']);
-        $isPendingUpload = $includeTarget && !$isUploaded;
-        $isPendingExclude = !$includeTarget && $isUploaded;
-        $isTransitioning = $isPendingUpload || $isPendingExclude;
+        $isTransitioning = in_array($operationStatus, ['uploading', 'excluding'], true);
         $disableUpload = !$includeTarget || $isTransitioning;
         $disableExcludeToggle = $isTransitioning;
 
@@ -495,24 +496,35 @@ class ReferencedDocumentListTable extends \WP_List_Table {
     private function getIndexedFilterValue(array $item): string {
         $status = strtolower(trim((string) ($item['status'] ?? '')));
         $statusColor = strtolower(trim((string) ($item['status_color'] ?? '')));
+        $operationStatus = sanitize_key((string) ($item['operation_status'] ?? ''));
         $includeTarget = !empty($item['include_in_store_target']);
         $isUploaded = strpos((string) ($item['status'] ?? ''), 'Uploaded') === 0;
-        $isPendingUpload = $includeTarget && !$isUploaded;
-        $isPendingExclude = !$includeTarget && $isUploaded;
+
+        if ($operationStatus === 'uploading') {
+            return 'uploading';
+        }
+
+        if ($operationStatus === 'excluding') {
+            return 'excluding';
+        }
+
+        if ($operationStatus === 'error') {
+            return 'error';
+        }
+
+        if ($operationStatus === 'excluded') {
+            return 'excluded';
+        }
+
+        if ($operationStatus === 'indexed') {
+            return 'indexed';
+        }
 
         if (strpos($status, 'uploading') !== false || strpos($status, 'pending') !== false) {
             return 'uploading';
         }
 
         if (strpos($status, 'removing') !== false || strpos($status, 'excluding') !== false) {
-            return 'excluding';
-        }
-
-        if ($isPendingUpload) {
-            return 'uploading';
-        }
-
-        if ($isPendingExclude) {
             return 'excluding';
         }
 

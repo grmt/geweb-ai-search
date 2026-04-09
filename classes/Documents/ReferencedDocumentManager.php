@@ -5,6 +5,8 @@ defined('ABSPATH') || exit;
 
 class ReferencedDocumentManager {
     private const OPTION_REFERENCED_SELECTION_TARGETS = 'geweb_aisearch_referenced_document_selection_targets';
+    private const OPTION_REFERENCED_OPERATION_STATUSES = 'geweb_aisearch_referenced_document_operation_statuses';
+    private const OPERATION_TIMEOUT_SECONDS = 300;
     private const SQL_SELECT_ALL_FROM = 'SELECT * FROM ';
     private const SQL_DELETE_FROM = 'DELETE FROM ';
     private const SQL_WHERE_FILE_HASH = ' WHERE file_hash = %s';
@@ -278,6 +280,98 @@ class ReferencedDocumentManager {
         $targets = $this->getReferencedDocumentSelectionTargets();
         $targets[sanitize_text_field($fileHash)] = $include;
         UserScope::updateGroupScopedOption(self::OPTION_REFERENCED_SELECTION_TARGETS, $targets, false);
+        $this->documentStore->clearReferencedDocumentOverviewCache();
+    }
+
+    /**
+     * @return array<string,array{status:string,error:string,updated_at:int}>
+     */
+    public function getReferencedDocumentOperationStatuses(): array {
+        $stored = UserScope::getGroupScopedOption(self::OPTION_REFERENCED_OPERATION_STATUSES, []);
+        $statuses = is_array($stored) ? $stored : [];
+        $normalized = [];
+        $changed = false;
+        $now = time();
+
+        foreach ($statuses as $fileHash => $payload) {
+            if (!is_string($fileHash) || $fileHash === '' || !is_array($payload)) {
+                $changed = true;
+                continue;
+            }
+
+            $status = sanitize_key((string) ($payload['status'] ?? ''));
+            $error = sanitize_text_field((string) ($payload['error'] ?? ''));
+            $updatedAt = (int) ($payload['updated_at'] ?? 0);
+            if ($status === '') {
+                $changed = true;
+                continue;
+            }
+
+            if (in_array($status, ['uploading', 'excluding'], true) && $updatedAt > 0 && ($now - $updatedAt) > self::OPERATION_TIMEOUT_SECONDS) {
+                $status = 'error';
+                $error = $error !== '' ? $error : 'The document operation timed out. Please retry.';
+                $updatedAt = $now;
+                $changed = true;
+            }
+
+            $normalized[$fileHash] = [
+                'status' => $status,
+                'error' => $error,
+                'updated_at' => $updatedAt,
+            ];
+        }
+
+        if ($changed) {
+            UserScope::updateGroupScopedOption(self::OPTION_REFERENCED_OPERATION_STATUSES, $normalized, false);
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @return array{status:string,error:string,updated_at:int}|null
+     */
+    public function getReferencedDocumentOperationStatus(string $fileHash): ?array {
+        $fileHash = sanitize_text_field($fileHash);
+        if ($fileHash === '') {
+            return null;
+        }
+
+        $statuses = $this->getReferencedDocumentOperationStatuses();
+        return $statuses[$fileHash] ?? null;
+    }
+
+    public function saveReferencedDocumentOperationStatus(string $fileHash, string $status, string $error = ''): void {
+        $fileHash = sanitize_text_field($fileHash);
+        $status = sanitize_key($status);
+        if ($fileHash === '' || $status === '') {
+            return;
+        }
+
+        $statuses = $this->getReferencedDocumentOperationStatuses();
+        $statuses[$fileHash] = [
+            'status' => $status,
+            'error' => sanitize_text_field($error),
+            'updated_at' => time(),
+        ];
+
+        UserScope::updateGroupScopedOption(self::OPTION_REFERENCED_OPERATION_STATUSES, $statuses, false);
+        $this->documentStore->clearReferencedDocumentOverviewCache();
+    }
+
+    public function clearReferencedDocumentOperationStatus(string $fileHash): void {
+        $fileHash = sanitize_text_field($fileHash);
+        if ($fileHash === '') {
+            return;
+        }
+
+        $statuses = $this->getReferencedDocumentOperationStatuses();
+        if (!array_key_exists($fileHash, $statuses)) {
+            return;
+        }
+
+        unset($statuses[$fileHash]);
+        UserScope::updateGroupScopedOption(self::OPTION_REFERENCED_OPERATION_STATUSES, $statuses, false);
         $this->documentStore->clearReferencedDocumentOverviewCache();
     }
 

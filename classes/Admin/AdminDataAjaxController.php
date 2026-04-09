@@ -57,15 +57,18 @@ class AdminDataAjaxController {
         $documentStore = new DocumentStore();
         $documentManager = new ReferencedDocumentManager($documentStore);
         $shouldInclude = $actionName === 'upload';
+        $documentManager->saveReferencedDocumentOperationStatus($fileHash, $shouldInclude ? 'uploading' : 'excluding');
         $success = $shouldInclude
             ? $documentManager->uploadReferencedDocumentByHash($fileHash)
             : $documentManager->removeReferencedDocumentByHash($fileHash);
 
         if ($success) {
             $documentManager->saveReferencedDocumentSelectionTarget($fileHash, $shouldInclude);
+            $documentManager->saveReferencedDocumentOperationStatus($fileHash, $shouldInclude ? 'indexed' : 'excluded');
         }
 
         if (!$success) {
+            $documentManager->saveReferencedDocumentOperationStatus($fileHash, 'error', 'The document action could not be completed.');
             wp_send_json_error(['message' => 'The document action could not be completed.'], 500);
         }
 
@@ -116,13 +119,17 @@ class AdminDataAjaxController {
         $documentStore = new DocumentStore();
         $documentManager = new ReferencedDocumentManager($documentStore);
         if ($exclude) {
+            $documentManager->saveReferencedDocumentOperationStatus($fileHash, 'excluding');
             $removed = $documentManager->removeReferencedDocumentByHash($fileHash);
             if (!$removed) {
+                $documentManager->saveReferencedDocumentOperationStatus($fileHash, 'error', 'Could not remove this source from the Gemini store. It is still included.');
                 wp_send_json_error(['message' => 'Could not remove this source from the Gemini store. It is still included.'], 500);
             }
             $documentManager->saveReferencedDocumentSelectionTarget($fileHash, false);
+            $documentManager->saveReferencedDocumentOperationStatus($fileHash, 'excluded');
         } else {
             $documentManager->saveReferencedDocumentSelectionTarget($fileHash, true);
+            $documentManager->saveReferencedDocumentOperationStatus($fileHash, 'not_indexed');
         }
 
         $items = $documentStore->getReferencedDocumentOverview(true);

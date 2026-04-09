@@ -1,4 +1,7 @@
 {
+    "scripts": {
+        "validate-gemini-fallback-models": "php scripts/validate_gemini_fallback_models.php"
+    },
     "require-dev": {
         "php-stubs/wordpress-stubs": "^6.9"
     }

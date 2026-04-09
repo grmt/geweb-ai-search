@@ -349,7 +349,13 @@ class WP {
             $fullMessages = $this->conversationManager->buildFullConversationMessages($conversationId, $messages, $latestUserMessage);
             $context = $this->conversationManager->compactConversationForRequest($fullMessages);
 
-            $result = $provider->search($context['messages'], $selectedModel, $temporaryPrompt !== '' ? $temporaryPrompt : null);
+            $excludedSources = $this->extractExcludedSourcesFromRequest();
+            $result = $provider->search(
+                $context['messages'],
+                $selectedModel,
+                $temporaryPrompt !== '' ? $temporaryPrompt : null,
+                $excludedSources
+            );
             $this->appendAiResponseToConversation($fullMessages, $result);
 
             $this->conversationManager->recordConversationUsage($conversationId, $fullMessages, $context['summary'], $result, $provider);
@@ -391,6 +397,43 @@ class WP {
         }
 
         return $messages;
+    }
+
+    /**
+     * @return array<int,array{key:string,title:string,url:string}>
+     */
+    private function extractExcludedSourcesFromRequest(): array {
+        $rawValue = isset($_POST['excluded_sources']) ? wp_unslash($_POST['excluded_sources']) : '';
+        if (!is_string($rawValue) || trim($rawValue) === '') {
+            return [];
+        }
+
+        $decoded = json_decode($rawValue, true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        $excludedSources = [];
+        foreach ($decoded as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $key = isset($item['key']) ? sanitize_text_field((string) $item['key']) : '';
+            $title = isset($item['title']) ? sanitize_text_field((string) $item['title']) : '';
+            $url = isset($item['url']) ? esc_url_raw((string) $item['url']) : '';
+            if ($key === '' && $url === '' && $title === '') {
+                continue;
+            }
+
+            $excludedSources[] = [
+                'key' => $key,
+                'title' => $title,
+                'url' => $url,
+            ];
+        }
+
+        return $excludedSources;
     }
 
     /**
@@ -444,7 +487,7 @@ class WP {
             'geweb-ai-search-admin',
             GEWEB_AI_SEARCH_URL . 'assets/admin.js',
             ['jquery'],
-            GEWEB_AI_SEARCH_VERSION,
+            AssetVersion::forRelativePath('assets/admin.js'),
             true
         );
 

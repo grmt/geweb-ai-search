@@ -15,6 +15,7 @@ class AdminSettingsManager {
     private const OPTION_MODEL_PROMPT_NAMES = 'geweb_aisearch_model_prompt_names';
     private const OPTION_MODEL_PROMPT_MODES = 'geweb_aisearch_model_prompt_modes';
     private const OPTION_PROVIDER = 'geweb_aisearch_provider';
+    private const OPTION_MODEL_SELECTION_MODE = 'geweb_aisearch_model_selection_mode';
     private const OPTION_INCLUDE_REFERENCED_DOCUMENTS = 'geweb_aisearch_include_referenced_documents';
     private const OPTION_PRESERVE_DATA_ON_UNINSTALL = 'geweb_aisearch_preserve_data_on_uninstall';
     private const OPTION_FRONTEND_AI_INTERFACE = 'geweb_aisearch_frontend_ai_interface';
@@ -27,6 +28,8 @@ class AdminSettingsManager {
     private const DEFAULT_CONVERSATION_TRIM_MESSAGE_LIMIT = 12;
     private const DEFAULT_CONVERSATION_TRIM_CHAR_LIMIT = 12000;
     private const DEFAULT_LOCAL_CONVERSATION_ARCHIVE_LIMIT = 12;
+    private const MODEL_SELECTION_MODE_DEFAULT = 'default';
+    private const MODEL_SELECTION_MODE_CUSTOM = 'custom';
 
     /**
      * @return void
@@ -97,7 +100,14 @@ class AdminSettingsManager {
         update_option('geweb_aisearch_post_types', $postTypes);
 
         if (isset($_POST['geweb_ai_search_model'])) {
-            update_option('geweb_aisearch_model', sanitize_text_field(wp_unslash($_POST['geweb_ai_search_model'])));
+            $submittedModel = sanitize_text_field(wp_unslash($_POST['geweb_ai_search_model']));
+            update_option('geweb_aisearch_model', $submittedModel);
+
+            $provider = ProviderFactory::make();
+            $selectionMode = $submittedModel === $provider->getDefaultModel()
+                ? self::MODEL_SELECTION_MODE_DEFAULT
+                : self::MODEL_SELECTION_MODE_CUSTOM;
+            update_option(self::OPTION_MODEL_SELECTION_MODE, $selectionMode);
         }
 
         update_option(self::OPTION_INCLUDE_REFERENCED_DOCUMENTS, !empty($_POST['geweb_ai_search_include_referenced_documents']) ? '1' : '0');

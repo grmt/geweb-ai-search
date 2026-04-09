@@ -195,13 +195,15 @@ class ReferencedDocumentOverviewBuilder {
      */
     private function finalizeReferencedDocumentOverviewItems(array $overview, array $uploadedByHash): array {
         $selectionTargets = (new ReferencedDocumentManager($this->documentStore))->getReferencedDocumentSelectionTargets();
-        $items = array_values(array_map(function (array $item) use ($selectionTargets): array {
-            return $this->finalizeReferencedDocumentOverviewItem($item, $selectionTargets);
+        $operationStatuses = (new ReferencedDocumentManager($this->documentStore))->getReferencedDocumentOperationStatuses();
+        $items = array_values(array_map(function (array $item) use ($selectionTargets, $operationStatuses): array {
+            return $this->finalizeReferencedDocumentOverviewItem($item, $selectionTargets, $operationStatuses);
         }, $overview));
 
         foreach ($uploadedByHash as $hash => $document) {
             if (!isset($overview[$hash])) {
-                $items[] = $this->buildUploadedNotReferencedItem((string) $hash, $document);
+                $item = $this->buildUploadedNotReferencedItem((string) $hash, $document);
+                $items[] = $this->finalizeReferencedDocumentOverviewItem($item, $selectionTargets, $operationStatuses);
             }
         }
 
@@ -213,7 +215,7 @@ class ReferencedDocumentOverviewBuilder {
      * @param array<string,bool> $selectionTargets
      * @return array<string,mixed>
      */
-    private function finalizeReferencedDocumentOverviewItem(array $item, array $selectionTargets): array {
+    private function finalizeReferencedDocumentOverviewItem(array $item, array $selectionTargets, array $operationStatuses): array {
         $item['posts'] = array_values($item['posts']);
         $item['reference_count'] = count($item['posts']);
         if (!empty($item['managed_by_simple_file_list'])) {
@@ -228,6 +230,10 @@ class ReferencedDocumentOverviewBuilder {
 
         $item['include_in_store_target'] = $includeTarget;
         $item['default_include_in_store_target'] = $defaultTarget;
+        $operation = $operationStatuses[$fileHash] ?? null;
+        $item['operation_status'] = is_array($operation) ? (string) ($operation['status'] ?? '') : '';
+        $item['operation_error'] = is_array($operation) ? (string) ($operation['error'] ?? '') : '';
+        $item['operation_updated_at'] = is_array($operation) ? (int) ($operation['updated_at'] ?? 0) : 0;
 
         return $item;
     }

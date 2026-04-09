@@ -29,6 +29,7 @@ class Gemini implements AIProviderInterface {
      * Option key for Model
      */
     private const OPTION_MODEL = 'geweb_aisearch_model';
+    private const OPTION_MODEL_SELECTION_MODE = 'geweb_aisearch_model_selection_mode';
     private const OPTION_MODEL_STATUS = 'geweb_aisearch_model_status';
     private const OPTION_MODEL_PROMPTS = 'geweb_aisearch_model_prompts';
     private const OPTION_MODEL_PROMPT_NAMES = 'geweb_aisearch_model_prompt_names';
@@ -72,7 +73,12 @@ class Gemini implements AIProviderInterface {
     /**
      * Default model name
      */
-    private const DEFAULT_MODEL = 'gemini-2.5-flash';
+    private const DEFAULT_MODEL = 'gemini-3-flash-preview';
+    private const LEGACY_DEFAULT_MODELS = [
+        'gemini-2.5-flash',
+    ];
+    private const MODEL_SELECTION_MODE_DEFAULT = 'default';
+    private const MODEL_SELECTION_MODE_CUSTOM = 'custom';
     private const TRANSIENT_MODELS = 'geweb_aisearch_gemini_models';
     private const MODEL_PRICING_USD_PER_MILLION = [
         'gemini-2.5-flash' => [
@@ -640,7 +646,7 @@ class Gemini implements AIProviderInterface {
      * @return array Response ['answer' => '...', 'sources' => [...]] or ['answer' => '...']
      * @throws \Exception On API or network error
      */
-    public function search(array $messages, ?string $model = null, ?string $promptOverride = null): array {
+    public function search(array $messages, ?string $model = null, ?string $promptOverride = null, array $excludedSources = []): array {
         $storeName = $this->getStoreData();
         if (empty($this->apiKey) || empty($storeName)) {
             throw new ConfigurationException('Configuration error');
@@ -654,7 +660,12 @@ class Gemini implements AIProviderInterface {
 
         // Build request body
         $promptDescriptor = $this->getPromptDescriptor($requestModel, $promptOverride);
-        $body = $this->buildSearchBody($messages, $storeName, $requestModel, $promptDescriptor['instruction']);
+        $body = $this->buildSearchBody(
+            $messages,
+            $storeName,
+            $requestModel,
+            $this->appendExcludedSourcesInstruction($promptDescriptor['instruction'], $excludedSources)
+        );
 
         try {
             $result = $this->executeSearchRequest($requestModel, $body);
@@ -805,6 +816,44 @@ class Gemini implements AIProviderInterface {
         }
 
         return $body;
+    }
+
+    /**
+     * @param string $systemInstruction
+     * @param array<int,array<string,string>> $excludedSources
+     * @return string
+     */
+    private function appendExcludedSourcesInstruction(string $systemInstruction, array $excludedSources): string {
+        $lines = [];
+
+        foreach ($excludedSources as $source) {
+            if (!is_array($source)) {
+                continue;
+            }
+
+            $title = isset($source['title']) ? trim((string) $source['title']) : '';
+            $url = isset($source['url']) ? trim((string) $source['url']) : '';
+            $label = $title !== '' && $url !== ''
+                ? $title . ' (' . $url . ')'
+                : ($title !== '' ? $title : $url);
+
+            if ($label === '') {
+                continue;
+            }
+
+            $lines[] = '- ' . $label;
+        }
+
+        if (!$lines) {
+            return $systemInstruction;
+        }
+
+        return rtrim($systemInstruction) . "\n\n" .
+            "Temporary source exclusions for this chat request:\n" .
+            implode("\n", array_values(array_unique($lines))) . "\n\n" .
+            "Treat every source listed above as unavailable for this request.\n" .
+            "Do not use, quote, summarize, cite, or rely on those excluded sources, even if they would otherwise be relevant.\n" .
+            "If the remaining allowed sources are insufficient, say so briefly instead of using an excluded source.\n";
     }
 
     /**
@@ -1240,9 +1289,10 @@ class Gemini implements AIProviderInterface {
     private function getDefaultModels(): array {
         return [
             self::DEFAULT_MODEL,
-            'gemini-2.5-pro',
             'gemini-3-flash-preview',
-            'gemini-3-pro-preview',
+            'gemini-3.1-flash-lite-preview',
+            'gemini-2.5-pro',
+            'gemini-2.5-flash',
             'gemini-2.5-flash-lite',
         ];
     }
@@ -1253,13 +1303,42 @@ class Gemini implements AIProviderInterface {
      * @return string Model
      */
     public function getModel(): string {
+        $selectionMode = $this->getModelSelectionMode();
         $storedModel = (string) get_option(self::OPTION_MODEL, '');
+
+        if ($selectionMode === self::MODEL_SELECTION_MODE_DEFAULT) {
+            if ($storedModel !== self::DEFAULT_MODEL) {
+                update_option(self::OPTION_MODEL, self::DEFAULT_MODEL);
+            }
+
+            return self::DEFAULT_MODEL;
+        }
+
         if ($storedModel !== '') {
             return $storedModel;
         }
 
         $models = $this->getModels();
         return $this->getDefaultModel($models);
+    }
+
+    /**
+     * @return string
+     */
+    private function getModelSelectionMode(): string {
+        $storedMode = (string) get_option(self::OPTION_MODEL_SELECTION_MODE, '');
+        if (in_array($storedMode, [self::MODEL_SELECTION_MODE_DEFAULT, self::MODEL_SELECTION_MODE_CUSTOM], true)) {
+            return $storedMode;
+        }
+
+        $storedModel = (string) get_option(self::OPTION_MODEL, '');
+        $resolvedMode = in_array($storedModel, array_merge([''], self::LEGACY_DEFAULT_MODELS), true)
+            ? self::MODEL_SELECTION_MODE_DEFAULT
+            : self::MODEL_SELECTION_MODE_CUSTOM;
+
+        update_option(self::OPTION_MODEL_SELECTION_MODE, $resolvedMode);
+
+        return $resolvedMode;
     }
 
     /**
@@ -1541,9 +1620,11 @@ class Gemini implements AIProviderInterface {
      * Determine whether a model supports Gemini File Search.
      *
      * Based on Google's File Search docs:
-     * gemini-3-pro-preview, gemini-3-flash-preview,
-     * gemini-2.5-pro, gemini-2.5-flash (+ preview versions),
-     * gemini-2.5-flash-lite (+ preview versions).
+     * gemini-3-flash-preview, gemini-3.1-flash-lite-preview,
+     * gemini-2.5-pro, gemini-2.5-flash, and gemini-2.5-flash-lite.
+     *
+     * Note: Gemini 3.1 Pro Preview currently lists file search as
+     * "Supported (AI Studio only)", so it's intentionally excluded here.
      *
      * @param string $model
      * @return bool
@@ -1565,8 +1646,8 @@ class Gemini implements AIProviderInterface {
         }
 
         $allowedPrefixes = [
-            'gemini-3-pro-preview',
             'gemini-3-flash-preview',
+            'gemini-3.1-flash-lite-preview',
             'gemini-2.5-pro',
             'gemini-2.5-flash',
             'gemini-2.5-flash-lite',
