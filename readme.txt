@@ -4,7 +4,7 @@ Tags: search, ai, gemini, artificial intelligence, semantic search
 Requires at least: 6.0
 Tested up to: 6.9
 Requires PHP: 7.2
-Stable tag: 2.1.4.3
+Stable tag: 2.1.4.31
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 Text Domain: geweb-ai-search
@@ -168,6 +168,13 @@ Available filters:
 
 == Changelog ==
 
+= 2.1.4.31 =
+* Added: Persistent Markdown cache storage, inspection modal, and shared Markdown renderer
+* Improved: HTML-to-Markdown conversion for WordPress tables, headings, anchors, and source reconstruction
+* Added: OCR/describe support for selected media-library images used during indexing
+* Improved: Gemini upload logging, model administration, and storage estimation tooling
+* Improved: Admin and frontend workspace rendering, status feedback, and source-context display
+
 = 2.1.4 =
 * Fixed: Nonce compatibility with page caching plugins
 
@@ -181,10 +188,7 @@ Available filters:
 
 = 2.1.2 =
 * Improved: AI response display and formatting
-=======
-= 2.1.2 =
 * Changed: Restored native WordPress search results flow and made AI search optional from the search form
->>>>>>> be178eb (bump version to 2.1.2)
 
 = 2.1.1 =
 * Fixed: Changed method visibility from private to public for better extensibility
