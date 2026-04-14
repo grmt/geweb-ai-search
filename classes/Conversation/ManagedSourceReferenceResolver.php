@@ -48,6 +48,15 @@ class ManagedSourceReferenceResolver {
         ];
     }
 
+    public function extractPostIdFromUrl(string $url): int {
+        $normalizedUrl = $this->normalizeManagedSourceUrl($url);
+        if ($normalizedUrl === '') {
+            return 0;
+        }
+
+        return $this->extractPostIdFromManagedUrl($normalizedUrl);
+    }
+
     private function buildManagedSourceLabelFromPost(int $postId, string $url, string $title): string {
         $label = $this->formatManagedSourcePath($url);
         if ($label === '') {
@@ -84,13 +93,17 @@ class ManagedSourceReferenceResolver {
             if (
                 !empty($siteParts['host']) &&
                 !empty($candidateParts['host']) &&
-                strtolower((string) $siteParts['host']) === strtolower((string) $candidateParts['host'])
+                $this->normalizeHost((string) $siteParts['host']) === $this->normalizeHost((string) $candidateParts['host'])
             ) {
                 $normalizedUrl = $candidate;
             }
         }
 
         return $normalizedUrl;
+    }
+
+    private function normalizeHost(string $host): string {
+        return preg_replace('/^www\./i', '', trim(strtolower($host))) ?: '';
     }
 
     private function extractPostIdFromManagedUrl(string $url): int {

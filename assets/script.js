@@ -16,6 +16,62 @@ function normalizeInlineMatchText(text) {
 	return String(text || '').replaceAll(/\s+/g, ' ').trim().toLowerCase();
 }
 
+function findInlineMatchRangeInText(rawText, phrase) {
+	const sourceText = String(rawText || '');
+	const targetPhrase = String(phrase || '').trim();
+	if (!sourceText || !targetPhrase) {
+		return null;
+	}
+
+	let normalizedText = '';
+	const normalizedToRawIndex = [];
+	let previousWasSpace = false;
+
+	for (let index = 0; index < sourceText.length; index += 1) {
+		const character = sourceText[index];
+		if (/\s/.test(character)) {
+			if (!normalizedText.length || previousWasSpace) {
+				continue;
+			}
+			normalizedText += ' ';
+			normalizedToRawIndex.push(index);
+			previousWasSpace = true;
+			continue;
+		}
+
+		normalizedText += character.toLowerCase();
+		normalizedToRawIndex.push(index);
+		previousWasSpace = false;
+	}
+
+	normalizedText = normalizedText.trimEnd();
+	while (normalizedToRawIndex.length > normalizedText.length) {
+		normalizedToRawIndex.pop();
+	}
+
+	const normalizedPhrase = normalizeInlineMatchText(targetPhrase);
+	if (!normalizedPhrase) {
+		return null;
+	}
+
+	const normalizedStart = normalizedText.indexOf(normalizedPhrase);
+	if (normalizedStart < 0) {
+		return null;
+	}
+
+	const normalizedEnd = normalizedStart + normalizedPhrase.length - 1;
+	const rawStart = normalizedToRawIndex[normalizedStart];
+	const rawEnd = normalizedToRawIndex[normalizedEnd];
+	if (!Number.isInteger(rawStart) || !Number.isInteger(rawEnd) || rawEnd < rawStart) {
+		return null;
+	}
+
+	return {
+		start: rawStart,
+		length: (rawEnd - rawStart) + 1,
+	};
+}
+
 function escapeInlineMatchHtml(text) {
 	return String(text || '')
 		.replaceAll('&', '&amp;')
@@ -118,19 +174,19 @@ function highlightFirstPageMatch() {
 			continue;
 		}
 
-		const matchIndex = rawText.toLowerCase().indexOf(matchedPhrase.toLowerCase());
-		if (matchIndex < 0) {
+		const matchRange = findInlineMatchRangeInText(rawText, matchedPhrase);
+		if (!matchRange) {
 			continue;
 		}
 
 		const range = document.createRange();
-		range.setStart(matchedNode, matchIndex);
-		range.setEnd(matchedNode, matchIndex + matchedPhrase.length);
+		range.setStart(matchedNode, matchRange.start);
+		range.setEnd(matchedNode, matchRange.start + matchRange.length);
 		selectPageMatchRange(range);
 		const highlight = document.createElement('mark');
 		highlight.className = 'geweb-ai-inline-match';
 		range.surroundContents(highlight);
-		showPageMatchPreview(buildPageMatchSnippet(rawText, matchIndex, matchedPhrase.length));
+		showPageMatchPreview(buildPageMatchSnippet(rawText, matchRange.start, matchRange.length));
 		if (typeof highlight.scrollIntoView === 'function') {
 			globalThis.setTimeout(() => {
 				highlight.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -178,7 +234,7 @@ jQuery(document).ready(function($) {
 	ensureSearchNonce().catch(function() {
 		return null;
 	});
-	
+
 	const GewebModal = {
 	    ai: document.getElementById('geweb-ai-modal'),
 
@@ -369,7 +425,7 @@ jQuery(document).ready(function($) {
 	        if (!this.isPageView()) {
 	            return;
 	        }
-	
+
 	        document.body.classList.add('geweb-ai-page', 'geweb-ai-page-open');
 	        this.initPageHeightPersistence();
 	        this.bindPageToolbarControls();
@@ -388,14 +444,42 @@ jQuery(document).ready(function($) {
 	    },
 
 	    getWorkspaceAutoCollapseThreshold() {
+	        return 1023;
+	    },
+
+	    getMobilePaneFooterThreshold() {
 	        return 767;
 	    },
 
 	    isMobileWorkspaceNavigationActive(workspace = this.getWorkspaceElement()) {
+	        const isWidthBasedMobile = !!globalThis.matchMedia
+	            && globalThis.matchMedia(`(max-width: ${this.getMobilePaneFooterThreshold()}px)`).matches;
+	        const isTouchLikeDevice = !!globalThis.matchMedia
+	            && globalThis.matchMedia('(hover: none) and (pointer: coarse)').matches;
+
 	        return !!workspace
 	            && this.isPageView()
 	            && !!globalThis.matchMedia
-	            && globalThis.matchMedia(`(max-width: ${this.getWorkspaceAutoCollapseThreshold()}px)`).matches;
+	            && isWidthBasedMobile
+	            && isTouchLikeDevice;
+	    },
+
+	    shouldShowQuestionInfoButton(workspace = this.getWorkspaceElement()) {
+	        const hasTouchPoints = Number(globalThis.navigator?.maxTouchPoints || 0) > 0;
+	        const isTouchLikeDevice = !!globalThis.matchMedia
+	            && (
+	                globalThis.matchMedia('(hover: none)').matches
+	                || globalThis.matchMedia('(pointer: coarse)').matches
+	            );
+
+	        return this.isMobileWorkspaceNavigationActive(workspace) || isTouchLikeDevice || hasTouchPoints;
+	    },
+
+	    shouldAutoCollapseDesktopPanels(workspace = this.getWorkspaceElement()) {
+	        return !!workspace
+	            && this.isPageView()
+	            && !this.isMobileWorkspaceNavigationActive(workspace)
+	            && workspace.clientWidth <= this.getWorkspaceAutoCollapseThreshold();
 	    },
 
 	    getMobileWorkspacePaneIndex(pane) {
@@ -555,10 +639,12 @@ jQuery(document).ready(function($) {
 	    syncMobilePaneFooter(activePane = 'main') {
 	        const workspace = this.getWorkspaceElement();
 	        const isMobile = this.isMobileWorkspaceNavigationActive(workspace);
+	        const isSmallScreen = !!globalThis.matchMedia
+	            && globalThis.matchMedia(`(max-width: ${this.getMobilePaneFooterThreshold()}px)`).matches;
 	        const $footer = $(this.ai).find('.geweb-ai-mobile-pane-footer');
 	        const $tabs = $footer.find('.geweb-ai-mobile-pane-tab');
 
-	        $footer.toggleClass('is-visible', isMobile);
+	        $footer.toggleClass('is-visible', isMobile && isSmallScreen);
 	        $tabs.each((_, element) => {
 	            const $tab = $(element);
 	            const isActive = String($tab.data('mobile-pane-target') || '') === activePane;
@@ -582,7 +668,12 @@ jQuery(document).ready(function($) {
 	        }
 
 	        if (this.isMobileWorkspaceNavigationActive(workspace)) {
+	            if (workspace.dataset.autoCollapseMode !== 'mobile') {
+	                workspace.dataset.manualLeftCollapsed = workspace.classList.contains('is-left-collapsed') ? '1' : '0';
+	                workspace.dataset.manualRightCollapsed = workspace.classList.contains('is-right-collapsed') ? '1' : '0';
+	            }
 	            workspace.dataset.autoCollapseActive = '1';
+	            workspace.dataset.autoCollapseMode = 'mobile';
 	            this.setWorkspacePanelCollapsed(workspace, 'left', false);
 	            this.setWorkspacePanelCollapsed(workspace, 'right', false);
 	            this.setMobileWorkspacePane(workspace.dataset.mobilePane || 'main');
@@ -590,22 +681,28 @@ jQuery(document).ready(function($) {
 	            return;
 	        }
 
-	        const shouldAutoCollapse = workspace.clientWidth <= this.getWorkspaceAutoCollapseThreshold();
-	        const autoCollapseWasActive = workspace.dataset.autoCollapseActive === '1';
-
-	        if (shouldAutoCollapse) {
-	            if (!autoCollapseWasActive) {
+	        if (this.shouldAutoCollapseDesktopPanels(workspace)) {
+	            if (workspace.dataset.autoCollapseMode !== 'desktop') {
 	                workspace.dataset.manualLeftCollapsed = workspace.classList.contains('is-left-collapsed') ? '1' : '0';
 	                workspace.dataset.manualRightCollapsed = workspace.classList.contains('is-right-collapsed') ? '1' : '0';
+	                this.setWorkspacePanelCollapsed(workspace, 'left', true);
+	                this.setWorkspacePanelCollapsed(workspace, 'right', true);
 	            }
 
 	            workspace.dataset.autoCollapseActive = '1';
-	            this.setWorkspacePanelCollapsed(workspace, 'left', true);
-	            this.setWorkspacePanelCollapsed(workspace, 'right', true);
-	        } else if (autoCollapseWasActive) {
+	            workspace.dataset.autoCollapseMode = 'desktop';
+	            delete workspace.dataset.mobilePane;
+	            this.syncPanelCollapseButtons();
+	            return;
+	        }
+
+	        const autoCollapseWasActive = workspace.dataset.autoCollapseActive === '1';
+
+	        if (autoCollapseWasActive) {
 	            this.setWorkspacePanelCollapsed(workspace, 'left', workspace.dataset.manualLeftCollapsed === '1');
 	            this.setWorkspacePanelCollapsed(workspace, 'right', workspace.dataset.manualRightCollapsed === '1');
 	            delete workspace.dataset.autoCollapseActive;
+	            delete workspace.dataset.autoCollapseMode;
 	            delete workspace.dataset.manualLeftCollapsed;
 	            delete workspace.dataset.manualRightCollapsed;
 	        }
@@ -860,24 +957,88 @@ jQuery(document).ready(function($) {
 
 	    bindPageToolbarControls() {
 	        const alignButton = document.getElementById('geweb-ai-align-workspace');
-	        if (!alignButton || alignButton.dataset.gewebAiBound === '1') {
+	        if (alignButton && alignButton.dataset.gewebAiBound !== '1') {
+	            alignButton.dataset.gewebAiBound = '1';
+	            alignButton.addEventListener('click', (event) => {
+	                event.preventDefault();
+	                const now = Date.now();
+	                const lastClickAt = Number(alignButton.dataset.gewebLastClickAt || 0);
+	                if (lastClickAt > 0 && (now - lastClickAt) < 1200) {
+	                    alignButton.dataset.gewebLastClickAt = '0';
+	                    this.togglePageAdminBarVisibility();
+	                    return;
+	                }
+
+	                alignButton.dataset.gewebLastClickAt = String(now);
+	                this.resetPageViewToViewport();
+	            });
+	        }
+
+	        const fullscreenButton = document.getElementById('geweb-ai-toggle-fullscreen');
+	        if (fullscreenButton && fullscreenButton.dataset.gewebAiBound !== '1') {
+	            fullscreenButton.dataset.gewebAiBound = '1';
+	            fullscreenButton.addEventListener('click', async (event) => {
+	                event.preventDefault();
+	                await this.togglePageFullscreen();
+	            });
+
+	            const syncFullscreenState = () => this.syncPageToolbarFullscreenState(fullscreenButton);
+	            document.addEventListener('fullscreenchange', syncFullscreenState);
+	            document.addEventListener('webkitfullscreenchange', syncFullscreenState);
+	            syncFullscreenState();
+	        }
+	    },
+
+	    getPageFullscreenElement() {
+	        return document.fullscreenElement || document.webkitFullscreenElement || null;
+	    },
+
+	    isPageFullscreenActive() {
+	        return this.getPageFullscreenElement() === this.ai;
+	    },
+
+	    syncPageToolbarFullscreenState(fullscreenButton = document.getElementById('geweb-ai-toggle-fullscreen')) {
+	        if (!fullscreenButton) {
 	            return;
 	        }
 
-	        alignButton.dataset.gewebAiBound = '1';
-	        alignButton.addEventListener('click', (event) => {
-	            event.preventDefault();
-	            const now = Date.now();
-	            const lastClickAt = Number(alignButton.dataset.gewebLastClickAt || 0);
-	            if (lastClickAt > 0 && (now - lastClickAt) < 1200) {
-	                alignButton.dataset.gewebLastClickAt = '0';
-	                this.togglePageAdminBarVisibility();
+	        const isActive = this.isPageFullscreenActive();
+	        const nextLabel = isActive ? 'Exit fullscreen' : 'Enter fullscreen';
+	        const nextIcon = isActive ? '🗗' : '⛶';
+	        fullscreenButton.classList.toggle('is-active', isActive);
+	        fullscreenButton.setAttribute('aria-label', nextLabel);
+	        fullscreenButton.setAttribute('title', nextLabel);
+	        const icon = fullscreenButton.querySelector('.geweb-ai-page-toolbar-button-icon');
+	        if (icon) {
+	            icon.textContent = nextIcon;
+	        }
+	    },
+
+	    async togglePageFullscreen() {
+	        if (!this.ai) {
+	            return;
+	        }
+
+	        try {
+	            if (this.isPageFullscreenActive()) {
+	                if (document.exitFullscreen) {
+	                    await document.exitFullscreen();
+	                } else if (document.webkitExitFullscreen) {
+	                    document.webkitExitFullscreen();
+	                }
 	                return;
 	            }
 
-	            alignButton.dataset.gewebLastClickAt = String(now);
-	            this.resetPageViewToViewport();
-	        });
+	            if (this.ai.requestFullscreen) {
+	                await this.ai.requestFullscreen();
+	            } else if (this.ai.webkitRequestFullscreen) {
+	                this.ai.webkitRequestFullscreen();
+	            }
+	        } catch (error) {
+	            console.debug('Toggling page fullscreen failed.', error);
+	        } finally {
+	            this.syncPageToolbarFullscreenState();
+	        }
 	    },
 
 	    togglePageAdminBarVisibility() {
@@ -1083,18 +1244,10 @@ jQuery(document).ready(function($) {
 	                    GewebModal.syncPanelCollapseButtons();
 	                    return;
 	                }
-	                if (workspace.dataset.autoCollapseActive === '1') {
-	                    GewebModal.syncPanelCollapseButtons();
-	                    return;
-	                }
 	                workspace.classList.toggle('is-left-collapsed');
 	            } else if (target === 'right') {
 	                if (GewebModal.isMobileWorkspaceNavigationActive(workspace)) {
 	                    GewebModal.setMobileWorkspacePane(workspace.dataset.mobilePane === 'right' ? 'main' : 'right', { focusPane: true });
-	                    GewebModal.syncPanelCollapseButtons();
-	                    return;
-	                }
-	                if (workspace.dataset.autoCollapseActive === '1') {
 	                    GewebModal.syncPanelCollapseButtons();
 	                    return;
 	                }
@@ -1233,6 +1386,7 @@ jQuery(document).ready(function($) {
 		    $answerBox: $('.answer-box'),
 	    $conversationOverview: $('#geweb-ai-conversation-overview'),
 	    $sourcesBox: $('#geweb-ai-sources'),
+	    $searchResultsContent: $('.geweb-ai-search-results-content'),
 	    $currentConversationSummary: $('#geweb-ai-current-conversation-summary'),
 	    $copyConversationBtn: $('#geweb-ai-copy-conversation'),
 	    $renameConversationBtn: $('#geweb-ai-rename-conversation'),
@@ -1242,17 +1396,20 @@ jQuery(document).ready(function($) {
 	    conversationId: '',
 	    requestInFlight: false,
 	    compactedConversation: false,
+	    currentContextSummary: '',
 	    excludedSourceKeysByConversation: {},
 		    conversationArchive: [],
 		    conversationOverviewPageSize: 10,
 		    conversationOverviewRenderedCount: 0,
 		    sourceReferenceCache: {},
+		    $messageInfoPopover: null,
+		    $messageInfoPopoverAnchor: null,
 
 		    init() {
 		        if (!this.$textarea.length) return;
 
 		        this.$textarea.on('input', () => this.toggleSubmitButton());
-		        this.$submitBtn.on('click', () => this.sendMessage());
+		        this.$submitBtn.on('click', (event) => this.handleSubmitButtonClick(event));
 		        this.$settingsToggle.on('click', () => this.toggleTemporarySettings());
 		        this.$closeSettingsBtn.on('click', () => this.toggleTemporarySettings(false));
 		        this.$resetSettingsBtn.on('click', () => this.resetTemporarySettings(true));
@@ -1265,28 +1422,89 @@ jQuery(document).ready(function($) {
 		        this.$renameConversationBtn.on('click', () => { void this.renameCurrentConversation(); });
 		        this.$deleteConversationBtn.on('click', () => { void this.deleteCurrentConversation(); });
 		        this.$newConversationBtn.on('click', () => this.createNewConversation(true));
-		        this.$conversationOverview.on('click', (event) => {
+		        this.$conversationOverview.off('click.gewebPaneActivate').on('click.gewebPaneActivate', (event) => {
 		            event.stopPropagation();
-		            this.toggleConversationOverviewScrollActive();
-		        });
-		        this.$answerBox.on('click', (event) => {
-		            event.stopPropagation();
-		            if (this.isMobileAnswerBoxTouchMode()) {
+		            const isActive = this.$conversationOverview.hasClass('is-scroll-active');
+		            const isInteractiveClick = this.isPaneInteractiveClick(event);
+		            if (!isActive) {
+		                this.setConversationOverviewScrollActive(true);
 		                return;
 		            }
+		            if (isInteractiveClick) {
+		                return;
+		            }
+		            this.setConversationOverviewScrollActive(false);
+		        });
+		        this.$answerBox.off('click.gewebPaneActivate').on('click.gewebPaneActivate', (event) => {
+		            event.stopPropagation();
+		            const isActive = this.$answerBox.hasClass('is-scroll-active');
+		            const isInteractiveClick = this.isPaneInteractiveClick(event);
+		            if (!isActive) {
+		                this.setAnswerBoxScrollActive(true);
+		                return;
+		            }
+		            if (isInteractiveClick) {
+		                return;
+		            }
+		            this.setAnswerBoxScrollActive(false);
+		        });
+		        this.$answerBox.closest('.geweb-ai-main-panel').off('click.gewebPaneActivate').on('click.gewebPaneActivate', (event) => {
+		            if (GewebModal.isMobileWorkspaceNavigationActive()) {
+		                return;
+		            }
+
+		            if (event.target !== event.currentTarget) {
+		                return;
+		            }
+
+		            if ($(event.target).closest('.question-box').length) {
+		                return;
+		            }
+
+		            event.stopPropagation();
 		            this.toggleAnswerBoxScrollActive();
 		        });
-		        this.$sourcesBox.on('click', (event) => {
+		        this.$sourcesBox.off('click.gewebPaneActivate').on('click.gewebPaneActivate', (event) => {
 		            event.stopPropagation();
-		            if (this.isMobileWorkspaceNavigationActive()) {
+		            if (GewebModal.isMobileWorkspaceNavigationActive()) {
 		                return;
 		            }
-		            this.toggleSourcesScrollActive();
+		            const isActive = this.$sourcesBox.hasClass('is-scroll-active');
+		            const isInteractiveClick = this.isPaneInteractiveClick(event);
+		            if (!isActive) {
+		                this.setSourcesScrollActive(true);
+		                return;
+		            }
+		            if (isInteractiveClick) {
+		                return;
+		            }
+		            this.setSourcesScrollActive(false);
 		        });
+		        this.$searchResultsContent.off('click.gewebPaneActivate').on('click.gewebPaneActivate', (event) => {
+		            event.stopPropagation();
+		            const isActive = this.$searchResultsContent.hasClass('is-scroll-active');
+		            const isInteractiveClick = this.isPaneInteractiveClick(event);
+		            if (!isActive) {
+		                this.setSearchResultsScrollActive(true);
+		                return;
+		            }
+		            if (isInteractiveClick) {
+		                return;
+		            }
+		            this.setSearchResultsScrollActive(false);
+		        });
+		        this.bindConversationScrollLock();
+		        this.bindSourcesScrollLock();
+		        this.bindSearchResultsScrollLock();
 		        this.bindAnswerBoxTouchScrollActivation();
+		        this.bindAnswerBoxEdgeScrollPropagation();
 		        this.$conversationOverview.on('scroll', () => this.handleConversationOverviewScroll());
-		        $(document).on('click', (event) => this.handleDocumentClick(event));
-		        document.addEventListener('scroll', () => this.hideFootnotePreview(), true);
+		        $(document).off('click.gewebPaneActivate').on('click.gewebPaneActivate', (event) => this.handleDocumentClick(event));
+		        document.addEventListener('scroll', () => {
+		            this.hideFootnotePreview();
+		            this.hideMessageInfoPopover();
+		        }, true);
+		        globalThis.addEventListener('resize', () => this.hideMessageInfoPopover());
 		        this.$textarea.on('keydown', (event) => this.handleQuestionBoxKeydown(event));
 		        this.$textarea.on('beforeinput', (event) => this.handleQuestionBoxBeforeInput(event));
 		        globalThis.addEventListener('pageshow', (event) => this.handlePageShow(event));
@@ -1381,6 +1599,9 @@ jQuery(document).ready(function($) {
 	                key: 'conversation',
 	                $element: this.$conversationOverview,
 	                activeClass: 'is-scroll-active',
+	                onChange: (isActive) => {
+	                    this.$conversationOverview.find('.geweb-ai-overview-list').toggleClass('is-scroll-active', !!isActive);
+	                },
 	            },
 	            {
 	                key: 'answer',
@@ -1396,6 +1617,15 @@ jQuery(document).ready(function($) {
 	                activeClass: 'is-scroll-active',
 	                onChange: (isActive) => {
 	                    this.$sourcesBox.closest('.geweb-ai-sources-panel').toggleClass('is-sources-scroll-active', !!isActive);
+	                    this.$sourcesBox.find('.geweb-ai-source-list').toggleClass('is-scroll-active', !!isActive);
+	                },
+	            },
+	            {
+	                key: 'search',
+	                $element: this.$searchResultsContent,
+	                activeClass: 'is-scroll-active',
+	                onChange: (isActive) => {
+	                    this.$searchResultsContent.closest('.geweb-ai-search-results-panel').toggleClass('is-search-scroll-active', !!isActive);
 	                },
 	            },
 	        ];
@@ -1433,6 +1663,25 @@ jQuery(document).ready(function($) {
 	        this.setScrollablePaneActive(isActive ? 'answer' : null);
 	    },
 
+	    setSourcesScrollActive(isActive) {
+	        this.setScrollablePaneActive(isActive ? 'sources' : null);
+	    },
+
+	    setSearchResultsScrollActive(isActive) {
+	        this.setScrollablePaneActive(isActive ? 'search' : null);
+	    },
+
+	    isPaneInteractiveClick(event) {
+	        const target = event?.target;
+	        if (!target || !target.closest) {
+	            return false;
+	        }
+
+	        return !!target.closest(
+	            'a, button, input, textarea, select, option, label, summary, details, .geweb-ai-footnote-ref, .user-message, .geweb-ai-user-message-remove'
+	        );
+	    },
+
 	    toggleConversationOverviewScrollActive() {
 	        this.toggleScrollablePane('conversation');
 	    },
@@ -1445,8 +1694,12 @@ jQuery(document).ready(function($) {
 	        this.toggleScrollablePane('sources');
 	    },
 
+	    toggleSearchResultsScrollActive() {
+	        this.toggleScrollablePane('search');
+	    },
+
 		    isMobileAnswerBoxTouchMode() {
-		        return this.isMobileWorkspaceNavigationActive();
+		        return GewebModal.isMobileWorkspaceNavigationActive();
 		    },
 
 		    bindAnswerBoxTouchScrollActivation() {
@@ -1471,6 +1724,10 @@ jQuery(document).ready(function($) {
 		        answerBox.addEventListener('touchstart', (event) => {
 		            if (!this.isMobileAnswerBoxTouchMode() || event.touches.length !== 1) {
 		                return;
+		            }
+
+		            if (!this.$answerBox.hasClass('is-scroll-active')) {
+		                this.setAnswerBoxScrollActive(true);
 		            }
 
 		            const touch = event.touches[0];
@@ -1505,6 +1762,176 @@ jQuery(document).ready(function($) {
 		        answerBox.addEventListener('touchcancel', finishTouch, { passive: true });
 		    },
 
+		    bindAnswerBoxEdgeScrollPropagation() {
+		        const answerBox = this.$answerBox.get(0);
+		        if (!answerBox || answerBox.dataset.gewebEdgeScrollBound === '1') {
+		            return;
+		        }
+
+		        answerBox.dataset.gewebEdgeScrollBound = '1';
+
+		        const isAnswerActive = () => this.$answerBox.hasClass('is-scroll-active');
+	        const isAtTop = () => answerBox.scrollTop <= 1;
+	        const isAtBottom = () => answerBox.scrollTop + answerBox.clientHeight >= answerBox.scrollHeight - 1;
+
+		        this.$answerBox.on('wheel.gewebEdgeScroll', (event) => {
+		            if (!isAnswerActive()) {
+		                return;
+		            }
+
+		            const originalEvent = event.originalEvent;
+		            const deltaY = Number(originalEvent?.deltaY || 0);
+		            if (!Number.isFinite(deltaY) || deltaY === 0) {
+		                return;
+		            }
+
+		            if ((deltaY < 0 && isAtTop()) || (deltaY > 0 && isAtBottom())) {
+		                event.preventDefault();
+		                if (typeof globalThis.scrollBy === 'function') {
+		                    globalThis.scrollBy({ top: deltaY, left: 0, behavior: 'auto' });
+		                }
+		            }
+		        });
+
+		        let lastTouchY = 0;
+		        answerBox.addEventListener('touchstart', (event) => {
+		            if (!isAnswerActive() || event.touches.length !== 1) {
+		                return;
+		            }
+
+		            lastTouchY = Number(event.touches[0]?.clientY || 0);
+		        }, { passive: true });
+
+		        answerBox.addEventListener('touchmove', (event) => {
+		            if (!isAnswerActive() || event.touches.length !== 1) {
+		                return;
+		            }
+
+		            const currentY = Number(event.touches[0]?.clientY || 0);
+		            const deltaY = lastTouchY - currentY;
+		            lastTouchY = currentY;
+
+		            if ((deltaY < 0 && isAtTop()) || (deltaY > 0 && isAtBottom())) {
+		                event.preventDefault();
+		                if (typeof globalThis.scrollBy === 'function') {
+		                    globalThis.scrollBy({ top: deltaY, left: 0, behavior: 'auto' });
+		                }
+		            }
+		        }, { passive: false });
+		    },
+
+		    bindSearchResultsScrollLock() {
+		        const resultsElement = this.$searchResultsContent.get(0);
+		        if (!resultsElement || resultsElement.dataset.gewebSearchScrollBound === '1') {
+		            return;
+		        }
+
+		        resultsElement.dataset.gewebSearchScrollBound = '1';
+
+		        const isSearchActive = () => this.$searchResultsContent.hasClass('is-scroll-active');
+
+		        this.$searchResultsContent.on('wheel.gewebSearchScroll', (event) => {
+		            if (!isSearchActive()) {
+		                return;
+		            }
+
+		            const originalEvent = event.originalEvent;
+		            const deltaY = Number(originalEvent?.deltaY || 0);
+		            if (!Number.isFinite(deltaY) || deltaY === 0) {
+		                return;
+		            }
+
+		            event.preventDefault();
+		            resultsElement.scrollTop += deltaY;
+		        });
+
+		        let lastTouchY = 0;
+		        resultsElement.addEventListener('touchstart', (event) => {
+		            if (!isSearchActive() || event.touches.length !== 1) {
+		                return;
+		            }
+
+		            lastTouchY = Number(event.touches[0]?.clientY || 0);
+		        }, { passive: true });
+
+		        resultsElement.addEventListener('touchmove', (event) => {
+		            if (!isSearchActive() || event.touches.length !== 1) {
+		                return;
+		            }
+
+		            const currentY = Number(event.touches[0]?.clientY || 0);
+		            const deltaY = lastTouchY - currentY;
+		            lastTouchY = currentY;
+
+		            event.preventDefault();
+		            resultsElement.scrollTop += deltaY;
+		        }, { passive: false });
+		    },
+
+		    bindConversationScrollLock() {
+		        this.bindScrollablePaneScrollLock({
+		            $element: this.$conversationOverview,
+		            activeCheck: () => this.$conversationOverview.hasClass('is-scroll-active'),
+		            boundKey: 'gewebConversationScrollBound',
+		            namespace: 'gewebConversationScroll',
+		        });
+		    },
+
+		    bindSourcesScrollLock() {
+		        this.bindScrollablePaneScrollLock({
+		            $element: this.$sourcesBox,
+		            activeCheck: () => this.$sourcesBox.hasClass('is-scroll-active'),
+		            boundKey: 'gewebSourcesScrollBound',
+		            namespace: 'gewebSourcesScroll',
+		        });
+		    },
+
+		    bindScrollablePaneScrollLock({ $element, activeCheck, boundKey, namespace }) {
+		        const element = $element?.get?.(0);
+		        if (!element || !boundKey || !namespace || element.dataset[boundKey] === '1') {
+		            return;
+		        }
+
+		        element.dataset[boundKey] = '1';
+
+		        $element.on(`wheel.${namespace}`, (event) => {
+		            if (typeof activeCheck !== 'function' || !activeCheck()) {
+		                return;
+		            }
+
+		            const originalEvent = event.originalEvent;
+		            const deltaY = Number(originalEvent?.deltaY || 0);
+		            if (!Number.isFinite(deltaY) || deltaY === 0) {
+		                return;
+		            }
+
+		            event.preventDefault();
+		            element.scrollTop += deltaY;
+		        });
+
+		        let lastTouchY = 0;
+		        element.addEventListener('touchstart', (event) => {
+		            if (typeof activeCheck !== 'function' || !activeCheck() || event.touches.length !== 1) {
+		                return;
+		            }
+
+		            lastTouchY = Number(event.touches[0]?.clientY || 0);
+		        }, { passive: true });
+
+		        element.addEventListener('touchmove', (event) => {
+		            if (typeof activeCheck !== 'function' || !activeCheck() || event.touches.length !== 1) {
+		                return;
+		            }
+
+		            const currentY = Number(event.touches[0]?.clientY || 0);
+		            const deltaY = lastTouchY - currentY;
+		            lastTouchY = currentY;
+
+		            event.preventDefault();
+		            element.scrollTop += deltaY;
+		        }, { passive: false });
+		    },
+
 	    submitQuestionBoxFromKeyboard(event) {
 	        if (event) {
 	            event.preventDefault();
@@ -1512,6 +1939,20 @@ jQuery(document).ready(function($) {
 	        }
 
 	        if (this.$submitBtn.prop('disabled')) {
+	            return;
+	        }
+
+	        if (event?.altKey) {
+	            void this.sendMessageToNewConversation();
+	            return;
+	        }
+
+	        void this.sendMessage();
+	    },
+
+	    handleSubmitButtonClick(event) {
+	        if (event?.altKey) {
+	            void this.sendMessageToNewConversation();
 	            return;
 	        }
 
@@ -1539,6 +1980,19 @@ jQuery(document).ready(function($) {
 	        }
 
 	        this.submitQuestionBoxFromKeyboard(event);
+	    },
+
+	    async sendMessageToNewConversation(prefilledMessage) {
+	        const message = typeof prefilledMessage === 'string'
+	            ? prefilledMessage.trim()
+	            : String(this.$textarea.val() || '').trim();
+
+	        if (!message || this.requestInFlight) {
+	            return;
+	        }
+
+	        this.createNewConversation(false);
+	        await this.sendMessage(message);
 	    },
 
 	    syncFrontendPageConversationState() {
@@ -1633,9 +2087,11 @@ jQuery(document).ready(function($) {
 	            role: item.role,
 	            content: item.content,
 	            sources: Array.isArray(item.sources) ? item.sources : [],
-	            meta: item.meta && typeof item.meta === 'object' ? item.meta : {}
+	            meta: item.meta && typeof item.meta === 'object' ? item.meta : {},
+	            created_at: this.normalizeEpochSeconds(item.created_at ?? item.createdAt)
 	        }));
 	        this.compactedConversation = !!entry.compacted;
+	        this.currentContextSummary = String(entry.contextSummary || '').trim();
 	        this.requestInFlight = false;
 	        this.renderConversationMessages();
 
@@ -1654,21 +2110,31 @@ jQuery(document).ready(function($) {
 
 	        this.$answerBox.empty();
 
-	        if (this.compactedConversation) {
-	            this.appendSystemNote(t('earlierTrimmed', 'Earlier messages were trimmed to keep the chat context compact.'));
-	        }
-
 	        this.conversationHistory.forEach((item, index) => {
 	            if (item.role === 'model') {
+	                const requestContext = item.meta && typeof item.meta.request === 'object'
+	                    ? item.meta.request
+	                    : {};
+	                const requestSummary = String(requestContext.context_summary || '').trim();
+	                if (requestSummary) {
+	                    this.appendContextSummaryNote(requestSummary);
+	                } else if (index === 0 && this.compactedConversation && this.currentContextSummary) {
+	                    // Backward compatibility for chats saved before per-response request metadata.
+	                    this.appendContextSummaryNote(this.currentContextSummary);
+	                }
+
 	                this.appendMessage({
 	                    answer: item.content,
 	                    sources: item.sources || [],
 	                    meta: item.meta || {}
-	                }, 'ai', { historyIndex: index });
+	                }, 'ai', { historyIndex: index, messageData: item });
 	                return;
 	            }
 
-	            this.appendMessage(item.content, 'user', { historyIndex: index });
+	            const linkedResponseMeta = this.conversationHistory[index + 1]?.role === 'model'
+	                ? (this.conversationHistory[index + 1].meta || {})
+	                : {};
+	            this.appendMessage(item.content, 'user', { historyIndex: index, messageData: item, responseMeta: linkedResponseMeta });
 	        });
 	    },
 
@@ -1870,6 +2336,32 @@ jQuery(document).ready(function($) {
 	        return fallbackMessage;
 	    },
 
+	    normalizeAiErrorMessage(message, fallbackMessage = '') {
+	        const rawMessage = String(message || '').trim();
+	        const fallback = String(fallbackMessage || '').trim() || t('answerError', 'Error: Unable to get response');
+	        const normalized = rawMessage || fallback;
+	        const lowerMessage = normalized.toLowerCase();
+	        const isTimeout = lowerMessage.includes('timed out')
+	            || lowerMessage.includes('curl error 28')
+	            || lowerMessage.includes('operation timed out')
+	            || lowerMessage.includes('timeout');
+
+	        if (isTimeout) {
+	            return [
+	                '<div class="geweb-ai-error-card geweb-ai-error-card--timeout">',
+	                `<div class="geweb-ai-error-card-title">${this.escapeHtml(t('requestTimedOutTitle', 'The AI request timed out'))}</div>`,
+	                `<div class="geweb-ai-error-card-body">${this.escapeHtml(t('requestTimedOutBody', 'The request to the AI service took too long and no answer was returned.'))}</div>`,
+	                '<ul class="geweb-ai-error-card-tips">',
+	                `<li>${this.escapeHtml(t('requestTimedOutRetry', 'Please try again.'))}</li>`,
+	                `<li>${this.escapeHtml(t('requestTimedOutModelTip', 'If it keeps happening, retry with a different model.'))}</li>`,
+	                '</ul>',
+	                '</div>',
+	            ].join('');
+	        }
+
+	        return this.escapeHtml(normalized);
+	    },
+
 	    isNonceFailureResponse(xhr) {
 	        const responseText = typeof xhr?.responseText === 'string'
 	            ? String(xhr.responseText).trim()
@@ -1980,17 +2472,28 @@ jQuery(document).ready(function($) {
 		            : this.$temporaryPromptEditor.prop('hidden');
 
 		        this.$temporaryPromptEditor.prop('hidden', !shouldOpen);
-
-		        if (this.$togglePromptEditorBtn.length) {
-		            this.$togglePromptEditorBtn.text(
-		                shouldOpen
-		                    ? t('composerHidePromptEditor', 'Hide prompt editor')
-		                    : t('composerEditPrompt', 'Edit prompt')
-		            );
-		        }
+		        this.updatePromptEditorToggleButtonState(shouldOpen);
 
 		        if (shouldOpen && this.$temporaryPrompt.length) {
 		            this.$temporaryPrompt.trigger('focus');
+		        }
+		    },
+
+		    updatePromptEditorToggleButtonState(isOpen) {
+		        if (!this.$togglePromptEditorBtn.length) {
+		            return;
+		        }
+
+		        const label = isOpen
+		            ? t('composerHidePromptEditor', 'Hide prompt editor')
+		            : t('composerEditPrompt', 'Edit prompt');
+		        this.$togglePromptEditorBtn.attr('aria-label', label);
+		        this.$togglePromptEditorBtn.attr('title', label);
+		        this.$togglePromptEditorBtn.attr('aria-expanded', isOpen ? 'true' : 'false');
+
+		        const $icon = this.$togglePromptEditorBtn.find('.geweb-ai-temporary-inline-action-icon--edit');
+		        if ($icon.length) {
+		            $icon.text(isOpen ? '▴' : '✎');
 		        }
 		    },
 
@@ -2040,6 +2543,12 @@ jQuery(document).ready(function($) {
 		            return;
 		        }
 
+		        if (globalThis.matchMedia && globalThis.matchMedia('(max-width: 1023px)').matches) {
+		            select.style.removeProperty('width');
+		            select.style.removeProperty('min-width');
+		            return;
+		        }
+
 		        const optionTexts = Array.from(select.options || []).map((option) => String(option.text || ''));
 		        const longest = optionTexts.reduce((best, text) => text.length > best.length ? text : best, '');
 		        if (!longest) {
@@ -2062,7 +2571,11 @@ jQuery(document).ready(function($) {
 		    handleDocumentClick(event) {
 		        this.hideFootnotePreview();
 		        const $target = $(event.target);
-		        const clickedInsideScrollablePane = $target.closest('#geweb-ai-conversation-overview, .answer-box, #geweb-ai-sources').length > 0;
+		        const clickedInsideInfoPopover = $target.closest('.geweb-ai-message-info-popover, .geweb-ai-message-info-toggle').length > 0;
+		        if (!clickedInsideInfoPopover) {
+		            this.hideMessageInfoPopover();
+		        }
+		        const clickedInsideScrollablePane = $target.closest('#geweb-ai-conversation-overview, .answer-box, #geweb-ai-sources, .geweb-ai-search-results-content').length > 0;
 		        if (!clickedInsideScrollablePane) {
 		            this.setScrollablePaneActive(null);
 		        }
@@ -2088,8 +2601,13 @@ jQuery(document).ready(function($) {
 
 	        if (!message || this.requestInFlight) return;
 
-	        this.conversationHistory.push({ role: 'user', content: message });
-	        this.appendMessage(message, 'user');
+	        const userEntry = {
+	            role: 'user',
+	            content: message,
+	            created_at: this.normalizeEpochSeconds(Math.floor(Date.now() / 1000))
+	        };
+	        this.conversationHistory.push(userEntry);
+	        this.appendMessage(message, 'user', { historyIndex: this.conversationHistory.length - 1, messageData: userEntry });
 	        this.renderConversationSummary();
 	        this.renderSources();
 
@@ -2121,7 +2639,8 @@ jQuery(document).ready(function($) {
 		            excluded_sources: JSON.stringify(this.getExcludedSourcesForRequest()),
 		            messages: [{
 		                role: 'user',
-		                content: message
+		                content: message,
+		                created_at: userEntry.created_at
 		            }]
 		        };
 		        let nonceRetried = false;
@@ -2154,7 +2673,6 @@ jQuery(document).ready(function($) {
 		        };
 
 		        sendAjaxRequest();
-		        this.resetTemporarySettings();
 		        this.toggleTemporarySettings(false);
 		    },
 
@@ -2162,25 +2680,35 @@ jQuery(document).ready(function($) {
 		    $loader.remove();
 		    this.requestInFlight = false;
 		    if (response?.success && response?.data) {
-		        const compactedBeforeAppend = this.compactedConversation;
 		        this.compactedConversation = !!response.data.context_compacted;
-		        this.conversationHistory.push({
+		        this.currentContextSummary = String(response.data.context_summary || '').trim();
+		        const aiEntry = {
 		            role: 'model',
 		            content: response.data.answer,
 		            sources: Array.isArray(response.data.sources) ? response.data.sources : [],
-		            meta: response.data?.meta && typeof response.data.meta === 'object' ? response.data.meta : {}
-		        });
-		        if (!compactedBeforeAppend && this.compactedConversation) {
-		            this.appendSystemNote(t('earlierTrimmed', 'Earlier messages were trimmed to keep the chat context compact.'));
+		            meta: response.data?.meta && typeof response.data.meta === 'object' ? response.data.meta : {},
+		            created_at: this.normalizeEpochSeconds(Math.floor(Date.now() / 1000))
+		        };
+		        this.conversationHistory.push(aiEntry);
+		        const responseRequestContext = response.data?.meta?.request && typeof response.data.meta.request === 'object'
+		            ? response.data.meta.request
+		            : {};
+		        const responseSummary = String(responseRequestContext.context_summary || response.data.context_summary || '').trim();
+		        if (responseSummary) {
+		            this.appendContextSummaryNote(responseSummary);
 		        }
-		        this.appendMessage(response.data, 'ai');
+		        this.appendMessage(response.data, 'ai', { messageData: aiEntry });
 		        this.renderSources();
 		        await this.persistConversation();
 		        await this.loadConversationArchive();
 		        this.renderConversationOverview();
 		        this.renderConversationSummary();
 			    } else {
-			        this.appendMessage({ answer: t('answerError', 'Error: Unable to get response'), sources: [] }, 'ai');
+		        const backendMessage = response?.data?.message ? String(response.data.message) : '';
+		        this.appendMessage({
+		            answer: this.normalizeAiErrorMessage(backendMessage, t('answerError', 'Error: Unable to get response')),
+		            sources: []
+		        }, 'ai');
 			    }
 			        this.toggleSubmitButton();
 				},
@@ -2188,7 +2716,13 @@ jQuery(document).ready(function($) {
 		handleError($loader, xhr) {
 		    $loader.remove();
 		    this.requestInFlight = false;
-		    this.appendMessage({ answer: this.getAjaxErrorMessage(xhr, t('connectionError', 'Connection error. Please try again.')), sources: [] }, 'ai');
+		    this.appendMessage({
+		        answer: this.normalizeAiErrorMessage(
+		            this.getAjaxErrorMessage(xhr, t('connectionError', 'Connection error. Please try again.')),
+		            t('connectionError', 'Connection error. Please try again.')
+		        ),
+		        sources: []
+		    }, 'ai');
 	        this.toggleSubmitButton();
 		},
 
@@ -2196,7 +2730,17 @@ jQuery(document).ready(function($) {
 	        if (type === 'user') {
 		        const questionText = String(text || '');
 		        const historyIndex = Number.isInteger(options?.historyIndex) ? options.historyIndex : -1;
+		        const messageData = options?.messageData && typeof options.messageData === 'object' ? options.messageData : {};
+		        const linkedResponseMetaFromHistory = historyIndex >= 0 && this.conversationHistory[historyIndex + 1]?.role === 'model'
+		            ? (this.conversationHistory[historyIndex + 1].meta || {})
+		            : {};
+		        const responseMeta = options?.responseMeta && typeof options.responseMeta === 'object'
+		            ? options.responseMeta
+		            : linkedResponseMetaFromHistory;
 		        const $msg = $(`<div class="user-message" role="button" tabindex="0"></div>`);
+		        if (historyIndex >= 0) {
+		            $msg.attr('data-history-index', String(historyIndex));
+		        }
 		        const $text = $('<span class="geweb-ai-user-message-text"></span>').html(this.escapeHtml(questionText));
 		        $msg.append($text);
 		        if (historyIndex >= 0) {
@@ -2208,7 +2752,23 @@ jQuery(document).ready(function($) {
 		            });
 		            $msg.append($removeButton);
 		        }
-		        $msg.attr('title', t('reuseQuestion', 'Reuse this question'));
+		        const userTooltip = this.buildMessageTooltip({
+		            type: 'user',
+		            content: questionText,
+		            messageData: messageData,
+		            responseMeta: responseMeta,
+		            includeReuseHint: true,
+		        });
+		        const $userInfoButton = GewebModal.shouldShowQuestionInfoButton()
+		            ? this.buildMessageInfoButton(userTooltip, {
+		                extraClass: 'geweb-ai-question-info-toggle',
+		                showActionLabel: false,
+		            })
+		            : null;
+		        if ($userInfoButton) {
+		            $msg.append($userInfoButton);
+		        }
+		        $msg.attr('title', userTooltip || t('reuseQuestion', 'Reuse this question'));
 		        $msg.attr('aria-label', t('reuseQuestion', 'Reuse this question'));
 		        $msg.on('click', () => {
 		            this.populateQuestionBox(questionText, { focus: true });
@@ -2225,7 +2785,18 @@ jQuery(document).ready(function($) {
 		        this.scrollElementIntoView($msg.get(0));
 		    } else {
 		        const $container = $('<div class="ai-message"></div>');
+		        const messageData = options?.messageData && typeof options.messageData === 'object' ? options.messageData : {};
 		        const responseMeta = text?.meta && typeof text.meta === 'object' ? text.meta : {};
+		        const aiTooltip = this.buildMessageTooltip({
+		            type: 'ai',
+		            content: text?.answer || '',
+		            messageData: messageData,
+		            responseMeta: responseMeta,
+		            includeReuseHint: false,
+		        });
+		        if (aiTooltip) {
+		            $container.attr('title', aiTooltip);
+		        }
 		        const sourceFootnoteMap = this.getResponseSourceFootnoteMap(text.sources || [], text.answer || '', responseMeta);
 		        const answerWithFootnotes = this.decorateAnswerWithGroundingFootnotes(String(text.answer || ''), responseMeta, sourceFootnoteMap, text.sources || []);
 		        const sanitizedAnswer = this.sanitizeAnswer(answerWithFootnotes);
@@ -2288,10 +2859,177 @@ jQuery(document).ready(function($) {
 		    this.scrollToBottom();
 		},
 
+	    ensureMessageInfoPopover() {
+	        if (this.$messageInfoPopover && this.$messageInfoPopover.length) {
+	            return this.$messageInfoPopover;
+	        }
+
+	        this.$messageInfoPopover = $('<div class="geweb-ai-message-info-popover" role="dialog" aria-hidden="true" hidden></div>');
+	        this.$messageInfoPopoverContent = $('<div class="geweb-ai-message-info-popover-content"></div>');
+	        this.$messageInfoPopover.append(this.$messageInfoPopoverContent);
+	        $('body').append(this.$messageInfoPopover);
+	        return this.$messageInfoPopover;
+	    },
+
+	    positionMessageInfoPopover($anchor) {
+	        if (!this.$messageInfoPopover || !this.$messageInfoPopover.length || !$anchor || !$anchor.length) {
+	            return;
+	        }
+
+	        const anchorRect = $anchor.get(0).getBoundingClientRect();
+	        const popover = this.$messageInfoPopover.get(0);
+	        const viewportWidth = globalThis.innerWidth || document.documentElement.clientWidth || 0;
+	        const viewportHeight = globalThis.innerHeight || document.documentElement.clientHeight || 0;
+	        const margin = 8;
+	        const spacing = 10;
+
+	        let left = anchorRect.right - popover.offsetWidth;
+	        left = Math.max(margin, Math.min(left, viewportWidth - popover.offsetWidth - margin));
+
+	        let top = anchorRect.top - popover.offsetHeight - spacing;
+	        if (top < margin) {
+	            top = anchorRect.bottom + spacing;
+	        }
+	        top = Math.max(margin, Math.min(top, viewportHeight - popover.offsetHeight - margin));
+
+	        this.$messageInfoPopover.css({ left: `${left}px`, top: `${top}px` });
+	    },
+
+	    showMessageInfoPopover($anchor, text) {
+	        const content = String(text || '').trim();
+	        if (!content || !$anchor || !$anchor.length) {
+	            return;
+	        }
+
+	        const $popover = this.ensureMessageInfoPopover();
+	        this.$messageInfoPopoverContent.text(content);
+	        $popover.prop('hidden', false).attr('aria-hidden', 'false').addClass('is-open');
+	        this.$messageInfoPopoverAnchor = $anchor;
+	        this.positionMessageInfoPopover($anchor);
+	    },
+
+	    hideMessageInfoPopover() {
+	        if (!this.$messageInfoPopover || !this.$messageInfoPopover.length) {
+	            return;
+	        }
+
+	        this.$messageInfoPopover.removeClass('is-open').attr('aria-hidden', 'true').prop('hidden', true);
+	        this.$messageInfoPopoverAnchor = null;
+	    },
+
+	    toggleMessageInfoPopover($anchor, text) {
+	        const isOpen = !!(this.$messageInfoPopover && this.$messageInfoPopover.hasClass('is-open'));
+	        const sameAnchor = !!(this.$messageInfoPopoverAnchor && $anchor && this.$messageInfoPopoverAnchor.get(0) === $anchor.get(0));
+	        if (isOpen && sameAnchor) {
+	            this.hideMessageInfoPopover();
+	            return;
+	        }
+
+	        this.showMessageInfoPopover($anchor, text);
+	    },
+
+	    buildMessageInfoButton(tooltipText, options = {}) {
+	        const text = String(tooltipText || '').trim();
+	        if (!text) {
+	            return null;
+	        }
+
+	        const extraClass = String(options?.extraClass || '').trim();
+	        const showActionLabel = options?.showActionLabel !== false;
+	        const buttonClassName = ['geweb-ai-message-info-toggle', extraClass].filter(Boolean).join(' ');
+	        const $button = $(`<button type="button" class="${buttonClassName}"></button>`);
+	        const infoLabel = t('messageInfo', 'Message info');
+	        $button.attr('aria-label', infoLabel);
+	        $button.attr('title', infoLabel);
+	        $button.append($('<span class="geweb-ai-message-action-icon geweb-ai-message-action-icon--details" aria-hidden="true">ⓘ</span>'));
+	        if (showActionLabel) {
+	            $button.append($('<span class="geweb-ai-message-action-label"></span>').text(infoLabel));
+	        }
+	        $button.on('click', (event) => {
+	            event.preventDefault();
+	            event.stopPropagation();
+	            this.toggleMessageInfoPopover($button, text);
+	        });
+	        return $button;
+	    },
+
 	    extractPlainTextFromHtml(html) {
 	        const container = document.createElement('div');
 	        container.innerHTML = String(html || '');
 	        return String(container.textContent || container.innerText || '').replaceAll(/\s+/g, ' ').trim();
+	    },
+
+	    normalizeEpochSeconds(value) {
+	        if (value === null || value === undefined || value === '') {
+	            return null;
+	        }
+
+	        const numeric = Number(value);
+	        if (!Number.isFinite(numeric) || numeric <= 0) {
+	            return null;
+	        }
+
+	        return numeric > 1000000000000 ? Math.floor(numeric / 1000) : Math.floor(numeric);
+	    },
+
+	    formatTooltipTimestamp(epochSeconds) {
+	        const normalized = this.normalizeEpochSeconds(epochSeconds);
+	        if (!normalized) {
+	            return '';
+	        }
+
+	        try {
+	            return new Date(normalized * 1000).toISOString().slice(0, 10);
+	        } catch (error) {
+	            return '';
+	        }
+	    },
+
+	    buildMessageTooltip({ type = 'user', content = '', messageData = {}, responseMeta = {}, includeReuseHint = false } = {}) {
+	        const lines = [];
+	        const normalizedType = String(type || '').toLowerCase() === 'ai' ? 'AI answer' : 'User question';
+	        lines.push(normalizedType);
+
+	        const createdAt = this.normalizeEpochSeconds(messageData?.created_at ?? messageData?.createdAt ?? responseMeta?.request?.created_at);
+	        const createdLabel = this.formatTooltipTimestamp(createdAt);
+	        if (createdLabel) {
+	            lines.push(`Time: ${createdLabel}`);
+	        }
+
+	        const plainContent = this.extractPlainTextFromHtml(String(content || ''));
+	        if (plainContent) {
+	            lines.push(`Chars: ${plainContent.length}`);
+	        }
+
+	        const isAiTooltip = String(type || '').toLowerCase() === 'ai';
+	        if (isAiTooltip || (responseMeta && typeof responseMeta === 'object' && Object.keys(responseMeta).length > 0)) {
+	            const usage = responseMeta?.usage && typeof responseMeta.usage === 'object' ? responseMeta.usage : {};
+	            const model = String(responseMeta?.model_version || responseMeta?.model || '').trim();
+	            if (model) {
+	                lines.push(isAiTooltip ? `Model: ${model}` : `Answer model: ${model}`);
+	            }
+	            if (usage.total_tokens) {
+	                lines.push(isAiTooltip ? `Tokens: ${usage.total_tokens}` : `Answer tokens: ${usage.total_tokens}`);
+	            }
+	            if (usage.input_tokens) {
+	                lines.push(isAiTooltip ? `Input tokens: ${usage.input_tokens}` : `Answer input tokens: ${usage.input_tokens}`);
+	            }
+	            if (usage.output_tokens) {
+	                lines.push(isAiTooltip ? `Output tokens: ${usage.output_tokens}` : `Answer output tokens: ${usage.output_tokens}`);
+	            }
+	            if (responseMeta?.estimated_cost_usd !== undefined && responseMeta?.estimated_cost_usd !== null) {
+	                const cost = Number(responseMeta.estimated_cost_usd);
+	                if (Number.isFinite(cost)) {
+	                    lines.push(isAiTooltip ? `Estimated cost: $${cost.toFixed(6)}` : `Answer estimated cost: $${cost.toFixed(6)}`);
+	                }
+	            }
+	        }
+
+	        if (includeReuseHint) {
+	            lines.push('Click on the question text to reuse this question.');
+	        }
+
+	        return lines.filter(Boolean).join('\n');
 	    },
 
 	    buildCopyButton(text) {
@@ -2549,6 +3287,7 @@ jQuery(document).ready(function($) {
 	                conversation_id: entry.id,
 	                summary: entry.summary,
 	                compacted: entry.compacted ? '1' : '0',
+	                context_summary: entry.contextSummary,
 	                messages: entry.messages
 	            });
 	            const savedConversation = response?.success ? response?.data?.conversation : null;
@@ -2614,11 +3353,18 @@ jQuery(document).ready(function($) {
 	            return;
 	        }
 
+	        this.$conversationOverview.append($('<div class="geweb-ai-overview-list"></div>'));
+
 	        this.renderMoreConversationOverviewItems();
 	    },
 
 	    renderMoreConversationOverviewItems() {
 	        if (!this.$conversationOverview.length) {
+	            return;
+	        }
+
+	        const $overviewList = this.$conversationOverview.find('.geweb-ai-overview-list').first();
+	        if (!$overviewList.length) {
 	            return;
 	        }
 
@@ -2633,7 +3379,7 @@ jQuery(document).ready(function($) {
 	                $item.addClass('is-current');
 	            }
 
-	            const dateLabel = entry.savedAt ? new Date(entry.savedAt).toLocaleString() : '';
+	            const dateLabel = entry.savedAt ? new Date(entry.savedAt).toISOString().slice(0, 10) : '';
 	            const summaryLabel = entry.summary || t('untitledConversation', 'Untitled chat');
 	            const tooltipLabel = dateLabel ? `${summaryLabel} (${dateLabel})` : summaryLabel;
 	            $item.attr('title', tooltipLabel);
@@ -2652,11 +3398,11 @@ jQuery(document).ready(function($) {
 	            $item.append($('<div class="geweb-ai-overview-preview"></div>').text(summaryLabel));
 	            $item.on('click', async () => {
 	                const loaded = await this.loadConversation(entry.id);
-	                if (loaded && this.isMobileWorkspaceNavigationActive()) {
-	                    this.setMobileWorkspacePane('main', { focusPane: true });
+	                if (loaded && GewebModal.isMobileWorkspaceNavigationActive()) {
+	                    GewebModal.setMobileWorkspacePane('main', { focusPane: true });
 	                }
 	            });
-	            this.$conversationOverview.append($item);
+	            $overviewList.append($item);
 	        });
 
 	        this.conversationOverviewRenderedCount += nextEntries.length;
@@ -2710,6 +3456,21 @@ jQuery(document).ready(function($) {
 	    appendSystemNote(message) {
 	        const $note = $('<p class="geweb-ai-system-message"></p>').text(message);
 	        this.$answerBox.append($note);
+	    },
+
+	    appendContextSummaryNote(summaryText) {
+	        const normalizedSummary = String(summaryText || '').trim();
+	        if (!normalizedSummary) {
+	            this.appendSystemNote(t('earlierTrimmed', 'Earlier messages were trimmed to keep the chat context compact.'));
+	            return;
+	        }
+
+	        const $details = $('<details class="geweb-ai-context-summary" role="note"></details>');
+	        const $summary = $('<summary class="geweb-ai-context-summary-toggle"></summary>')
+	            .text(t('contextSummaryCollapsed', 'Compacted context summary used. Click to expand.'));
+	        const $body = $('<div class="geweb-ai-context-summary-body"></div>').text(normalizedSummary);
+	        $details.append($summary, $body);
+	        this.$answerBox.append($details);
 	    },
 
 	    escapeHtml(text) {
@@ -2803,6 +3564,7 @@ jQuery(document).ready(function($) {
 	            globalThis.localStorage.setItem(this.getStoredChatStateKey(), JSON.stringify({
 	                conversationId: this.conversationId,
 	                compactedConversation: this.compactedConversation,
+	                currentContextSummary: this.currentContextSummary,
 	                excludedSourceKeysByConversation: this.excludedSourceKeysByConversation,
 	                conversationHistory: this.conversationHistory,
 	                conversationArchive: this.conversationArchive,
@@ -2833,7 +3595,8 @@ jQuery(document).ready(function($) {
 	                    role: entry.role === 'model' ? 'model' : 'user',
 	                    content: String(entry.content || ''),
 	                    sources: Array.isArray(entry.sources) ? entry.sources : [],
-	                    meta: entry.meta && typeof entry.meta === 'object' ? entry.meta : {}
+	                    meta: entry.meta && typeof entry.meta === 'object' ? entry.meta : {},
+	                    created_at: this.normalizeEpochSeconds(entry.created_at ?? entry.createdAt)
 	                }))
 	                .filter((entry) => entry.content.trim() !== '')
 	            : [];
@@ -2842,6 +3605,7 @@ jQuery(document).ready(function($) {
 	            this.conversationId = storedConversationId;
 	            this.conversationHistory = storedHistory;
 	            this.compactedConversation = !!storedState.compactedConversation;
+	            this.currentContextSummary = String(storedState.currentContextSummary || '').trim();
 	        }
 
 	        if (storedState.excludedSourceKeysByConversation && typeof storedState.excludedSourceKeysByConversation === 'object') {
@@ -2871,7 +3635,8 @@ jQuery(document).ready(function($) {
 	                role: item.role === 'model' ? 'model' : 'user',
 	                content: String(item.content || ''),
 	                sources: Array.isArray(item.sources) ? item.sources : [],
-	                meta: item.meta && typeof item.meta === 'object' ? item.meta : {}
+	                meta: item.meta && typeof item.meta === 'object' ? item.meta : {},
+	                created_at: this.normalizeEpochSeconds(item.created_at ?? item.createdAt)
 	            }))
 	            .filter((item) => item.content.trim() !== '');
 	        const summary = typeof entry.summary === 'string' && entry.summary.trim() !== ''
@@ -2882,6 +3647,7 @@ jQuery(document).ready(function($) {
 	            id: typeof entry.id === 'string' && entry.id ? entry.id : this.generateConversationId(),
 	            savedAt: Number(entry.savedAt || Date.now()),
 	            compacted: !!entry.compacted,
+	            contextSummary: String(entry.context_summary || entry.contextSummary || '').trim(),
 	            summary: summary,
 	            firstUserMessage: typeof entry.firstUserMessage === 'string' ? entry.firstUserMessage : this.getFirstUserMessageFromMessages(normalizedMessages),
 	            messages: normalizedMessages
@@ -2911,6 +3677,7 @@ jQuery(document).ready(function($) {
 	            id: id,
 	            savedAt: Date.now(),
 	            compacted: this.compactedConversation,
+	            contextSummary: String(this.currentContextSummary || '').trim(),
 	            summary: this.buildConversationSummaryFromMessages(this.conversationHistory),
 	            firstUserMessage: this.getFirstUserMessageFromMessages(this.conversationHistory),
 	            messages: this.conversationHistory
@@ -3008,29 +3775,37 @@ jQuery(document).ready(function($) {
 
 	    async loadConversation(conversationId) {
 	        try {
-	        let entry = this.conversationArchive.find((item) => item.id === conversationId);
-	        if (!entry?.messages?.length) {
-	            try {
-	                const response = await this.requestFrontendConversation('geweb_get_frontend_conversation', {
-	                    conversation_id: conversationId
-	                });
-		                if (!(response?.success && response?.data?.conversation)) {
-		                    this.conversationArchive = this.conversationArchive.filter((item) => item.id !== conversationId);
-		                    this.renderConversationOverview();
-		                    return false;
+	        const cachedEntry = this.conversationArchive.find((item) => item.id === conversationId);
+	        let entry = cachedEntry;
+	        try {
+	            const response = await this.requestFrontendConversation('geweb_get_frontend_conversation', {
+	                conversation_id: conversationId
+	            });
+	            if (!(response?.success && response?.data?.conversation)) {
+	                if (!cachedEntry?.messages?.length) {
+	                    this.conversationArchive = this.conversationArchive.filter((item) => item.id !== conversationId);
+	                    this.renderConversationOverview();
+	                    return false;
 	                }
+	            } else {
 	                entry = this.normalizeStoredConversation(response.data.conversation);
 	                this.conversationArchive = this.conversationArchive.map((item) => item.id === entry.id ? entry : item);
 	                if (!this.conversationArchive.some((item) => item.id === entry.id)) {
 	                    this.conversationArchive.unshift(entry);
 	                }
-		            } catch (error) {
-		                console.debug('Load conversation failed.', error);
-		                this.conversationArchive = this.conversationArchive.filter((item) => item.id !== conversationId);
+	            }
+	        } catch (error) {
+	            console.debug('Load conversation failed.', error);
+	            if (!cachedEntry?.messages?.length) {
+	                this.conversationArchive = this.conversationArchive.filter((item) => item.id !== conversationId);
 	                this.renderConversationOverview();
 	                this.renderConversationSummary();
 	                return false;
 	            }
+	        }
+
+	        if (!entry?.messages?.length) {
+	            return false;
 	        }
 
 	        this.conversationId = entry.id;
@@ -3038,9 +3813,11 @@ jQuery(document).ready(function($) {
 	            role: item.role,
 	            content: item.content,
 	            sources: Array.isArray(item.sources) ? item.sources : [],
-	            meta: item.meta && typeof item.meta === 'object' ? item.meta : {}
+	            meta: item.meta && typeof item.meta === 'object' ? item.meta : {},
+	            created_at: this.normalizeEpochSeconds(item.created_at ?? item.createdAt)
 	        }));
 	        this.compactedConversation = !!entry.compacted;
+	        this.currentContextSummary = String(entry.contextSummary || '').trim();
 	        this.requestInFlight = false;
 	        this.renderConversationMessages();
 
@@ -3069,6 +3846,7 @@ jQuery(document).ready(function($) {
 	        this.conversationId = this.generateConversationId();
 	        this.conversationHistory = [];
 	        this.compactedConversation = false;
+	        this.currentContextSummary = '';
 	        this.requestInFlight = false;
 	        this.$answerBox.empty();
 	        this.renderConversationOverview();

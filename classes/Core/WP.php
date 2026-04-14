@@ -13,6 +13,9 @@ class WP {
     private const FRONTEND_AI_REWRITE_SLUG = 'ai-search-workspace';
     private const FRONTEND_AI_REWRITE_VERSION = '2';
     private const MESSAGE_INSUFFICIENT_PERMISSIONS = 'Insufficient permissions';
+    private const TRIMMED_CONTEXT_RECENT_MESSAGE_LIMIT = 5;
+    private const TRIMMED_CONTEXT_SUMMARY_POINT_LIMIT = 5;
+    private const TRIMMED_CONTEXT_SUMMARY_RETRY_OLDER_MESSAGE_LIMIT = 12;
     private ConversationManager $conversationManager;
     private AdminPageSections $adminPageSections;
     private FrontendAiWorkspaceController $frontendAiWorkspaceController;
@@ -53,6 +56,8 @@ class WP {
         add_action('wp_ajax_nopriv_geweb_save_frontend_conversation', [$conversationAjaxController, 'ajaxSaveFrontendConversation']);
         add_action('wp_ajax_geweb_resolve_source_references', [$sourceReferenceAjaxController, 'ajaxResolveSourceReferences']);
         add_action('wp_ajax_nopriv_geweb_resolve_source_references', [$sourceReferenceAjaxController, 'ajaxResolveSourceReferences']);
+        add_action('wp_ajax_geweb_reconstruct_source_contexts', [$sourceReferenceAjaxController, 'ajaxReconstructSourceContexts']);
+        add_action('wp_ajax_nopriv_geweb_reconstruct_source_contexts', [$sourceReferenceAjaxController, 'ajaxReconstructSourceContexts']);
         add_action('wp_ajax_geweb_frontend_rename_conversation', [$conversationAjaxController, 'ajaxFrontendRenameConversation']);
         add_action('wp_ajax_nopriv_geweb_frontend_rename_conversation', [$conversationAjaxController, 'ajaxFrontendRenameConversation']);
         add_action('wp_ajax_geweb_frontend_delete_conversation', [$conversationAjaxController, 'ajaxFrontendDeleteConversation']);
@@ -63,6 +68,7 @@ class WP {
         add_action('wp_ajax_geweb_rename_conversation', [$conversationAjaxController, 'ajaxRenameConversation']);
         add_action('wp_ajax_geweb_delete_conversation', [$conversationAjaxController, 'ajaxDeleteConversation']);
         add_action('wp_ajax_geweb_refresh_referenced_documents', [$adminDataAjaxController, 'ajaxRefreshReferencedDocuments']);
+        add_action('wp_ajax_geweb_get_markdown_cache', [$adminDataAjaxController, 'ajaxGetMarkdownCache']);
         add_action('wp_ajax_geweb_update_referenced_document', [$adminDataAjaxController, 'ajaxUpdateReferencedDocument']);
         add_action('wp_ajax_geweb_toggle_referenced_document_exclude', [$adminDataAjaxController, 'ajaxToggleReferencedDocumentExclude']);
         add_action('wp_ajax_geweb_update_referenced_document_nice_name', [$adminDataAjaxController, 'ajaxUpdateReferencedDocumentNiceName']);
@@ -70,6 +76,7 @@ class WP {
         add_action('wp_ajax_geweb_refresh_gemini_store_documents', [$adminDataAjaxController, 'ajaxRefreshGeminiStoreDocuments']);
         add_action('wp_ajax_geweb_delete_gemini_store', [$adminDataAjaxController, 'ajaxDeleteGeminiStore']);
         add_action('wp_ajax_geweb_refresh_models', [$adminDataAjaxController, 'ajaxRefreshModels']);
+        add_action('wp_ajax_geweb_test_model', [$adminDataAjaxController, 'ajaxTestModel']);
 
         add_action('wp_ajax_geweb_get_nonce', [$this, 'ajaxGetNonce']);
         add_action('wp_ajax_nopriv_geweb_get_nonce', [$this, 'ajaxGetNonce']);
@@ -238,6 +245,15 @@ class WP {
             );
             wp_safe_redirect($redirectUrl);
             exit;
+        } catch (\InvalidArgumentException $e) {
+            $redirectUrl = add_query_arg(
+                [
+                    'geweb_conflict' => $e->getMessage(),
+                ],
+                wp_get_referer() ?: admin_url('admin.php?page=geweb-ai-search')
+            );
+            wp_safe_redirect($redirectUrl);
+            exit;
         }
 
         wp_safe_redirect(wp_get_referer());
@@ -335,6 +351,10 @@ class WP {
         $requestedModel = isset($_POST['model']) ? sanitize_text_field(wp_unslash($_POST['model'])) : '';
         $temporaryPrompt = isset($_POST['temporary_prompt']) ? PromptSupport::normalizePromptInput($_POST['temporary_prompt']) : '';
 
+        if ($temporaryPrompt !== '' && PromptSupport::containsDisallowedUrl($temporaryPrompt)) {
+            wp_send_json_error(['message' => 'Temporary prompt cannot contain URLs. Remove links and try again.'], 400);
+        }
+
         if (empty($rawMessages)) {
             wp_send_json_error(['message' => 'No messages provided']);
         }
@@ -348,6 +368,7 @@ class WP {
             $latestUserMessage = $this->conversationManager->extractLatestUserMessage($messages);
             $fullMessages = $this->conversationManager->buildFullConversationMessages($conversationId, $messages, $latestUserMessage);
             $context = $this->conversationManager->compactConversationForRequest($fullMessages);
+            $context = $this->refineTrimmedContext($context, $fullMessages, $provider, $selectedModel, $conversationId);
 
             $excludedSources = $this->extractExcludedSourcesFromRequest();
             $result = $provider->search(
@@ -356,11 +377,13 @@ class WP {
                 $temporaryPrompt !== '' ? $temporaryPrompt : null,
                 $excludedSources
             );
+            $result = $this->attachRequestDebugMeta($result, $context, $selectedModel, $temporaryPrompt, $excludedSources);
             $this->appendAiResponseToConversation($fullMessages, $result);
 
             $this->conversationManager->recordConversationUsage($conversationId, $fullMessages, $context['summary'], $result, $provider);
 
             $result['context_compacted'] = !empty($context['compacted']);
+            $result['context_summary'] = (string) ($context['summary'] ?? '');
             wp_send_json_success($result);
         } catch (\Exception $e) {
             wp_send_json_error(['message' => $e->getMessage()]);
@@ -368,8 +391,198 @@ class WP {
     }
 
     /**
-     * @param array<int,mixed> $rawMessages
+     * @param array<string,mixed> $result
+     * @param array{messages:array<int,array<string,mixed>>,summary:string,compacted:bool} $context
+     * @param string $selectedModel
+     * @param string $temporaryPrompt
+     * @param array<int,array{key:string,title:string,url:string}> $excludedSources
+     * @return array<string,mixed>
+     */
+    private function attachRequestDebugMeta(array $result, array $context, string $selectedModel, string $temporaryPrompt, array $excludedSources): array {
+        $meta = isset($result['meta']) && is_array($result['meta']) ? $result['meta'] : [];
+
+        $meta['request'] = [
+            'created_at' => time(),
+            'compacted' => !empty($context['compacted']),
+            'context_summary' => trim((string) ($context['summary'] ?? '')),
+            'context_message_count' => count($context['messages']),
+            'model' => trim($selectedModel),
+            'temporary_prompt_active' => trim($temporaryPrompt) !== '',
+            'excluded_source_count' => count($excludedSources),
+            'excluded_sources' => $this->buildExcludedSourceDebugLabels($excludedSources),
+            'messages_preview' => $this->buildContextMessagePreview($context['messages']),
+        ];
+
+        $result['meta'] = $meta;
+        return $result;
+    }
+
+    /**
+     * @param array<int,array{key:string,title:string,url:string}> $excludedSources
+     * @return array<int,string>
+     */
+    private function buildExcludedSourceDebugLabels(array $excludedSources): array {
+        $labels = [];
+
+        foreach ($excludedSources as $source) {
+            if (!is_array($source)) {
+                continue;
+            }
+
+            $title = trim((string) ($source['title'] ?? ''));
+            $url = trim((string) ($source['url'] ?? ''));
+            $label = $title !== ''
+                ? $title
+                : ($url !== '' ? $url : trim((string) ($source['key'] ?? '')));
+            if ($label !== '') {
+                $labels[] = $label;
+            }
+        }
+
+        return array_values(array_unique($labels));
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $messages
      * @return array<int,array{role:string,content:string}>
+     */
+    private function buildContextMessagePreview(array $messages): array {
+        $preview = [];
+
+        foreach ($messages as $message) {
+            if (!is_array($message)) {
+                continue;
+            }
+
+            $content = trim((string) ($message['content'] ?? ''));
+            if ($content === '') {
+                continue;
+            }
+
+            if (function_exists('mb_strimwidth')) {
+                $content = mb_strimwidth($content, 0, 320, '...');
+            } elseif (strlen($content) > 320) {
+                $content = substr($content, 0, 317) . '...';
+            }
+
+            $preview[] = [
+                'role' => (string) ($message['role'] ?? 'user'),
+                'content' => $content,
+            ];
+        }
+
+        return $preview;
+    }
+
+    /**
+     * @param array{messages:array<int,array<string,mixed>>,summary:string,compacted:bool} $context
+     * @param array<int,array<string,mixed>> $fullMessages
+     * @param AIProviderInterface $provider
+     * @param string $selectedModel
+    * @param string $conversationId
+     * @return array{messages:array<int,array<string,mixed>>,summary:string,compacted:bool}
+     */
+    private function refineTrimmedContext(array $context, array $fullMessages, AIProviderInterface $provider, string $selectedModel, string $conversationId): array {
+        if (empty($context['compacted'])) {
+            return $context;
+        }
+
+        $recentMessages = array_slice($fullMessages, -self::TRIMMED_CONTEXT_RECENT_MESSAGE_LIMIT);
+        $olderCount = max(0, count($fullMessages) - count($recentMessages));
+        $olderMessages = $olderCount > 0 ? array_slice($fullMessages, 0, $olderCount) : [];
+        $previousSummary = $this->conversationManager->getConversationContextSummary($conversationId);
+
+        $summaryText = trim((string) ($context['summary'] ?? ''));
+        if ($provider instanceof Gemini && !empty($olderMessages)) {
+            $apiSummary = $this->buildApiContextSummaryWithRetry($provider, $olderMessages, $selectedModel, $previousSummary);
+            if ($apiSummary !== '') {
+                $summaryText = $apiSummary;
+            }
+        }
+
+        $contextMessages = [];
+        if ($summaryText !== '') {
+            $contextMessages[] = [
+                'role' => 'user',
+                'content' => $summaryText,
+            ];
+        }
+
+        foreach ($recentMessages as $message) {
+            if (!is_array($message)) {
+                continue;
+            }
+
+            $role = isset($message['role']) ? (string) $message['role'] : 'user';
+            $content = trim((string) ($message['content'] ?? ''));
+            if ($content === '') {
+                continue;
+            }
+
+            $contextMessages[] = [
+                'role' => $role === 'model' ? 'model' : 'user',
+                'content' => $content,
+            ];
+        }
+
+        return [
+            'messages' => $contextMessages,
+            'summary' => $summaryText,
+            'compacted' => true,
+        ];
+    }
+
+    /**
+     * @param Gemini $provider
+     * @param array<int,array<string,mixed>> $olderMessages
+     * @param string $selectedModel
+     * @param string $previousSummary
+     * @return string
+     */
+    private function buildApiContextSummaryWithRetry(Gemini $provider, array $olderMessages, string $selectedModel, string $previousSummary): string {
+        $attempts = [
+            [
+                'messages' => $olderMessages,
+                'max_items' => self::TRIMMED_CONTEXT_SUMMARY_POINT_LIMIT,
+            ],
+            [
+                'messages' => array_slice($olderMessages, -self::TRIMMED_CONTEXT_SUMMARY_RETRY_OLDER_MESSAGE_LIMIT),
+                'max_items' => max(3, self::TRIMMED_CONTEXT_SUMMARY_POINT_LIMIT - 1),
+            ],
+        ];
+
+        foreach ($attempts as $attempt) {
+            $candidateMessages = isset($attempt['messages']) && is_array($attempt['messages'])
+                ? $attempt['messages']
+                : [];
+            if (empty($candidateMessages)) {
+                continue;
+            }
+
+            $maxItems = isset($attempt['max_items']) ? (int) $attempt['max_items'] : self::TRIMMED_CONTEXT_SUMMARY_POINT_LIMIT;
+
+            try {
+                $summary = trim((string) $provider->summarizeConversationForContext(
+                    $candidateMessages,
+                    $selectedModel,
+                    $maxItems,
+                    $previousSummary
+                ));
+
+                if ($summary !== '') {
+                    return $summary;
+                }
+            } catch (\Exception $e) {
+                // Retry with the next smaller attempt payload.
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * @param array<int,mixed> $rawMessages
+     * @return array<int,array{role:string,content:string,created_at?:int}>
      */
     private function normalizeAjaxChatMessages(array $rawMessages): array {
         $allowedRoles = ['user', 'model'];
@@ -390,10 +603,24 @@ class WP {
                 $role = 'user';
             }
 
-            $messages[] = [
+            $normalizedMessage = [
                 'role' => $role,
                 'content' => $content,
             ];
+
+            $createdAtRaw = $rawMessage['created_at'] ?? $rawMessage['createdAt'] ?? null;
+            if ($createdAtRaw !== null && is_numeric($createdAtRaw)) {
+                $createdAt = (int) $createdAtRaw;
+                if ($createdAt > 1000000000000) {
+                    $createdAt = (int) floor($createdAt / 1000);
+                }
+
+                if ($createdAt > 0) {
+                    $normalizedMessage['created_at'] = $createdAt;
+                }
+            }
+
+            $messages[] = $normalizedMessage;
         }
 
         return $messages;
@@ -463,6 +690,7 @@ class WP {
             'content' => $answer,
             'sources' => isset($result['sources']) && is_array($result['sources']) ? $result['sources'] : [],
             'meta' => isset($result['meta']) && is_array($result['meta']) ? $result['meta'] : [],
+            'created_at' => time(),
         ];
     }
 
@@ -484,9 +712,17 @@ class WP {
      */
     public function enqueueAdminScripts(): void {
         wp_enqueue_script(
+            'geweb-ai-search-markdown-renderer',
+            GEWEB_AI_SEARCH_URL . 'assets/js/markdown-renderer.js',
+            [],
+            AssetVersion::forRelativePath('assets/js/markdown-renderer.js'),
+            true
+        );
+
+        wp_enqueue_script(
             'geweb-ai-search-admin',
             GEWEB_AI_SEARCH_URL . 'assets/admin.js',
-            ['jquery'],
+            ['jquery', 'geweb-ai-search-markdown-renderer'],
             AssetVersion::forRelativePath('assets/admin.js'),
             true
         );

@@ -77,13 +77,13 @@ class ConversationManager {
      * @param bool $compacted
      * @return array<string,mixed>
      */
-    public function saveFrontendConversation(string $conversationId, array $messages, string $summary = '', bool $compacted = false): array {
+    public function saveFrontendConversation(string $conversationId, array $messages, string $summary = '', bool $compacted = false, string $contextSummary = ''): array {
         $conversationId = trim($conversationId);
         if ($conversationId === '') {
             $conversationId = 'geweb-ai-' . wp_generate_password(12, false, false);
         }
 
-        $normalizedMessages = $this->normalizeConversationMessages($messages);
+        $normalizedMessages = $this->enforceStoredContextLimits($this->normalizeConversationMessages($messages));
         $normalizedSummary = trim($summary);
         if ($normalizedSummary === '') {
             $normalizedSummary = $this->buildConversationSummary($normalizedMessages);
@@ -94,6 +94,13 @@ class ConversationManager {
             ? $conversations[$conversationId]
             : [];
         $now = time();
+        $normalizedContextSummary = trim($contextSummary);
+        if ($normalizedContextSummary === '' && $compacted) {
+            $existingContextSummary = trim((string) ($existing['context_summary'] ?? ''));
+            $normalizedContextSummary = $existingContextSummary !== ''
+                ? $existingContextSummary
+                : '__frontend_compacted__';
+        }
 
         $conversation = [
             'id' => $conversationId,
@@ -108,7 +115,7 @@ class ConversationManager {
             'total_tokens' => (int) ($existing['total_tokens'] ?? 0),
             'estimated_cost_usd' => (float) ($existing['estimated_cost_usd'] ?? 0),
             'messages' => $normalizedMessages,
-            'context_summary' => $compacted ? '__frontend_compacted__' : '',
+            'context_summary' => $normalizedContextSummary,
         ];
 
         $conversations[$conversationId] = $conversation;
@@ -123,7 +130,7 @@ class ConversationManager {
 
     /**
      * @param array<int,array<string,mixed>> $messages
-     * @return array{role:string,content:string}|null
+     * @return array{role:string,content:string,created_at?:int}|null
      */
     public function extractLatestUserMessage(array $messages): ?array {
         for ($index = count($messages) - 1; $index >= 0; $index -= 1) {
@@ -138,10 +145,17 @@ class ConversationManager {
                 continue;
             }
 
-            return [
+            $result = [
                 'role' => 'user',
                 'content' => $content,
             ];
+
+            $createdAt = $this->normalizeMessageCreatedAt($message);
+            if ($createdAt !== null) {
+                $result['created_at'] = $createdAt;
+            }
+
+            return $result;
         }
 
         return null;
@@ -150,15 +164,17 @@ class ConversationManager {
     /**
      * @param string $conversationId
      * @param array<int,array<string,mixed>> $incomingMessages
-     * @param array{role:string,content:string}|null $latestUserMessage
+     * @param array{role:string,content:string,created_at?:int}|null $latestUserMessage
      * @return array<int,array<string,mixed>>
      */
     public function buildFullConversationMessages(string $conversationId, array $incomingMessages, ?array $latestUserMessage): array {
         $existing = $conversationId !== '' ? $this->getConversationById($conversationId) : null;
-        $storedMessages = $this->normalizeConversationMessages(isset($existing['messages']) && is_array($existing['messages']) ? $existing['messages'] : []);
+        $storedMessages = $this->enforceStoredContextLimits($this->normalizeConversationMessages(isset($existing['messages']) && is_array($existing['messages']) ? $existing['messages'] : []));
 
         if (empty($storedMessages)) {
-            return !empty($incomingMessages) ? $this->normalizeConversationMessages($incomingMessages) : [];
+            return !empty($incomingMessages)
+                ? $this->enforceStoredContextLimits($this->normalizeConversationMessages($incomingMessages))
+                : [];
         }
 
         if ($latestUserMessage === null) {
@@ -170,7 +186,26 @@ class ConversationManager {
             $storedMessages[] = $latestUserMessage;
         }
 
-        return $storedMessages;
+        return $this->enforceStoredContextLimits($storedMessages);
+    }
+
+    /**
+     * @param string $conversationId
+     * @return string
+     */
+    public function getConversationContextSummary(string $conversationId): string {
+        $conversationId = trim($conversationId);
+        if ($conversationId === '') {
+            return '';
+        }
+
+        $conversation = $this->getConversationById($conversationId);
+        if ($conversation === null) {
+            return '';
+        }
+
+        $summary = trim((string) ($conversation['context_summary'] ?? ''));
+        return $summary === '__frontend_compacted__' ? '' : $summary;
     }
 
     /**
@@ -294,7 +329,7 @@ class ConversationManager {
         $existing['output_tokens'] = (int) ($existing['output_tokens'] ?? 0) + (int) ($usage['output_tokens'] ?? 0);
         $existing['total_tokens'] = (int) ($existing['total_tokens'] ?? 0) + (int) ($usage['total_tokens'] ?? 0);
         $existing['estimated_cost_usd'] = (float) ($existing['estimated_cost_usd'] ?? 0) + (float) ($meta['estimated_cost_usd'] ?? 0);
-        $existing['messages'] = $this->normalizeConversationMessages($messages);
+        $existing['messages'] = $this->enforceStoredContextLimits($this->normalizeConversationMessages($messages));
         $existing['context_summary'] = $contextSummary;
 
         $conversations[$conversationId] = $existing;
@@ -351,7 +386,26 @@ class ConversationManager {
             'content' => $isModelMessage ? wp_kses_post($content) : sanitize_textarea_field($content),
             'sources' => $sources,
             'meta' => $isModelMessage ? $meta : [],
+            'created_at' => $this->normalizeMessageCreatedAt($message),
         ];
+    }
+
+    /**
+     * @param array<string,mixed> $message
+     * @return int|null
+     */
+    private function normalizeMessageCreatedAt(array $message): ?int {
+        $raw = $message['created_at'] ?? $message['createdAt'] ?? null;
+        if ($raw === null || !is_numeric($raw)) {
+            return null;
+        }
+
+        $createdAt = (int) $raw;
+        if ($createdAt > 1000000000000) {
+            $createdAt = (int) floor($createdAt / 1000);
+        }
+
+        return $createdAt > 0 ? $createdAt : null;
     }
 
     /**
@@ -365,6 +419,30 @@ class ConversationManager {
         }
 
         return $total;
+    }
+
+    /**
+     * Enforce a hard upper bound for stored conversation context.
+     * Oldest messages are dropped first when limits are exceeded.
+     *
+     * @param array<int,array<string,mixed>> $messages
+     * @return array<int,array<string,mixed>>
+     */
+    private function enforceStoredContextLimits(array $messages): array {
+        if (empty($messages)) {
+            return [];
+        }
+
+        $maxMessages = FrontendAiContext::getStoredContextMessageLimit();
+        $maxChars = FrontendAiContext::getStoredContextCharLimit();
+
+        $messages = array_values(array_slice($messages, -$maxMessages));
+
+        while ($this->getConversationMessageLength($messages) > $maxChars && count($messages) > 2) {
+            array_shift($messages);
+        }
+
+        return array_values($messages);
     }
 
     /**
@@ -417,6 +495,9 @@ class ConversationManager {
             'summary' => trim((string) ($conversation['summary'] ?? '')) !== '' ? (string) $conversation['summary'] : 'Untitled conversation',
             'savedAt' => (int) (($conversation['last_used_at'] ?? $conversation['started_at'] ?? time()) * 1000),
             'compacted' => trim((string) ($conversation['context_summary'] ?? '')) !== '',
+            'context_summary' => trim((string) ($conversation['context_summary'] ?? '')) === '__frontend_compacted__'
+                ? ''
+                : trim((string) ($conversation['context_summary'] ?? '')),
             'firstUserMessage' => $this->extractFirstUserMessageText($messages),
         ];
     }

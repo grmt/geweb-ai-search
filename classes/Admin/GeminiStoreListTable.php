@@ -313,6 +313,9 @@ class GeminiStoreListTable extends \WP_List_Table {
             $urls = $this->resolveDocumentUrls($displayName, is_array($referencedItem) ? $referencedItem : null);
             $slugs = $this->resolveDocumentSlugs(is_array($referencedItem) ? $referencedItem : null, $displayName);
             $typeLabel = $this->resolveTypeLabel($mimeType, $displayName);
+            $formatValue = $this->resolveFormatFilterValue($mimeType, $displayName);
+            $sizeBytes = isset($document['size_bytes']) ? (int) $document['size_bytes'] : 0;
+            $sizeLabel = $sizeBytes > 0 ? GeminiStorageEstimator::formatBytes($sizeBytes) : '—';
             $urlSortValue = implode(', ', array_map([$this, 'formatDocumentUrlLabel'], $urls));
             $slugValue = implode(', ', $slugs);
             $actionsHtml = is_array($referencedItem) ? $referencedTable->renderActionsCell($referencedItem) : '—';
@@ -330,7 +333,8 @@ class GeminiStoreListTable extends \WP_List_Table {
             }
 
             $rows[] = sprintf(
-                '<tr data-name="%s" data-id="%s" data-slug="%s" data-type="%s" data-url="%s" data-doc-name="%s">' .
+                '<tr data-name="%s" data-id="%s" data-slug="%s" data-type="%s" data-format="%s" data-size="%s" data-url="%s" data-doc-name="%s">' .
+                '<td>%s</td>' .
                 '<td>%s</td>' .
                 '<td>%s</td>' .
                 '<td>%s</td>' .
@@ -342,12 +346,15 @@ class GeminiStoreListTable extends \WP_List_Table {
                 esc_attr(function_exists('mb_strtolower') ? mb_strtolower($this->resolveDocumentIds(is_array($referencedItem) ? $referencedItem : null, $displayName), 'UTF-8') : strtolower($this->resolveDocumentIds(is_array($referencedItem) ? $referencedItem : null, $displayName))),
                 esc_attr(function_exists('mb_strtolower') ? mb_strtolower($slugValue, 'UTF-8') : strtolower($slugValue)),
                 esc_attr(function_exists('mb_strtolower') ? mb_strtolower($typeLabel, 'UTF-8') : strtolower($typeLabel)),
+                esc_attr($formatValue),
+                esc_attr((string) $sizeBytes),
                 esc_attr(function_exists('mb_strtolower') ? mb_strtolower($urlSortValue, 'UTF-8') : strtolower($urlSortValue)),
                 esc_attr(function_exists('mb_strtolower') ? mb_strtolower($name, 'UTF-8') : strtolower($name)),
                 esc_html($label),
                 esc_html($this->resolveDocumentIds(is_array($referencedItem) ? $referencedItem : null, $displayName)),
                 esc_html($slugValue !== '' ? $slugValue : '—'),
                 esc_html($typeLabel !== '' ? $typeLabel : 'Document'),
+                esc_html($sizeLabel),
                 $urlHtml,
                 $actionsHtml
             );
@@ -373,6 +380,18 @@ class GeminiStoreListTable extends \WP_List_Table {
                             '<option value="document">Document</option>' .
                         '</select>' .
                     '</label>' .
+                    '<label for="' . esc_attr($browserId . '-format-filter') . '" style="display:flex; flex-direction:column; gap:4px;">' .
+                        '<span>Format</span>' .
+                        '<select id="' . esc_attr($browserId . '-format-filter') . '" name="' . esc_attr($browserId . '-format-filter') . '" class="geweb-gemini-store-documents-format-filter">' .
+                            '<option value="">All formats</option>' .
+                            '<option value="excel">Excel (.xls/.xlsx)</option>' .
+                            '<option value="pdf">PDF</option>' .
+                            '<option value="word">Word</option>' .
+                            '<option value="markdown">Markdown</option>' .
+                            '<option value="image">Image</option>' .
+                            '<option value="other">Other</option>' .
+                        '</select>' .
+                    '</label>' .
                     '<label for="' . esc_attr($browserId . '-id-filter') . '" style="display:flex; flex-direction:column; gap:4px;">' .
                         '<span>Page ID</span>' .
                         '<input type="search" id="' . esc_attr($browserId . '-id-filter') . '" name="' . esc_attr($browserId . '-id-filter') . '" class="small-text geweb-gemini-store-documents-id-filter" placeholder="e.g. 62">' .
@@ -389,12 +408,48 @@ class GeminiStoreListTable extends \WP_List_Table {
                         '<th><button type="button" class="button-link geweb-gemini-store-documents-sort-header" data-sort-key="id" data-sort-label="ID">ID</button></th>' .
                         '<th><button type="button" class="button-link geweb-gemini-store-documents-sort-header" data-sort-key="slug" data-sort-label="Slug">Slug</button></th>' .
                         '<th><button type="button" class="button-link geweb-gemini-store-documents-sort-header" data-sort-key="type" data-sort-label="Type">Type</button></th>' .
+                        '<th><button type="button" class="button-link geweb-gemini-store-documents-sort-header" data-sort-key="size" data-sort-label="Size">Size</button></th>' .
                         '<th><button type="button" class="button-link geweb-gemini-store-documents-sort-header" data-sort-key="url" data-sort-label="Referenced Page URL">Referenced Page URL</button></th>' .
                         '<th>Actions</th>' .
                     '</tr></thead>' .
                     '<tbody>' . implode('', $rows) . '</tbody>' .
                 '</table>' .
             '</div>';
+    }
+
+    private function resolveFormatFilterValue(string $mimeType, string $displayName): string {
+        $mimeType = strtolower(trim($mimeType));
+        $extension = strtolower((string) pathinfo($displayName, PATHINFO_EXTENSION));
+
+        if ($mimeType === 'text/markdown' || $extension === 'md') {
+            return 'markdown';
+        }
+
+        if ($mimeType === 'application/pdf' || $extension === 'pdf') {
+            return 'pdf';
+        }
+
+        if (
+            strpos($mimeType, 'msword') !== false ||
+            strpos($mimeType, 'wordprocessingml') !== false ||
+            in_array($extension, ['doc', 'docx'], true)
+        ) {
+            return 'word';
+        }
+
+        if (
+            strpos($mimeType, 'ms-excel') !== false ||
+            strpos($mimeType, 'spreadsheetml') !== false ||
+            in_array($extension, ['xls', 'xlsx'], true)
+        ) {
+            return 'excel';
+        }
+
+        if (strpos($mimeType, 'image/') === 0 || in_array($extension, ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'], true)) {
+            return 'image';
+        }
+
+        return 'other';
     }
 
     /**

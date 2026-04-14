@@ -90,6 +90,7 @@ register_activation_hook(__FILE__, function () {
 
     // Create custom database tables
     \Geweb\AISearch\DocumentStore::install();
+    \Geweb\AISearch\MarkdownCacheStore::install();
 
     \Geweb\AISearch\WP::ensureFrontendAiPageExists();
     \Geweb\AISearch\WP::registerFrontendAiRewrite();

@@ -83,18 +83,30 @@ class FrontendAiPromptManager {
     }
 
     private function supportsFrontendAiChatModel(string $model): bool {
+        $normalizedModel = strtolower(trim($model));
+        if ($normalizedModel === '') {
+            return false;
+        }
+
         foreach ([
-            'gemini-3-flash-preview',
-            'gemini-3.1-flash-lite-preview',
-            'gemini-2.5-pro',
-            'gemini-2.5-flash',
-            'gemini-2.5-flash-lite',
-        ] as $prefix) {
-            if (strpos($model, $prefix) === 0) {
-                return true;
+            'tts',
+            'speech',
+            'audio',
+            'embedding',
+            'image-generation',
+            'vision-preview-generation',
+            'image',
+            'video',
+            'live',
+            'robotics',
+            'deep-research',
+            'computer-use',
+        ] as $fragment) {
+            if (strpos($normalizedModel, $fragment) !== false) {
+                return false;
             }
         }
 
-        return false;
+        return preg_match('/^gemini-[0-9][a-z0-9.\-]*-(pro|flash|flash-lite)(?:-|$)/', $normalizedModel) === 1;
     }
 }

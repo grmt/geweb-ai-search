@@ -17,17 +17,23 @@ class AdminSettingsManager {
     private const OPTION_PROVIDER = 'geweb_aisearch_provider';
     private const OPTION_MODEL_SELECTION_MODE = 'geweb_aisearch_model_selection_mode';
     private const OPTION_INCLUDE_REFERENCED_DOCUMENTS = 'geweb_aisearch_include_referenced_documents';
+    private const OPTION_OCR_ALL_UPLOAD_IMAGES = 'geweb_aisearch_ocr_all_upload_images';
+    private const OPTION_DATE_DISPLAY_FORMAT = 'geweb_aisearch_date_display_format';
     private const OPTION_PRESERVE_DATA_ON_UNINSTALL = 'geweb_aisearch_preserve_data_on_uninstall';
     private const OPTION_FRONTEND_AI_INTERFACE = 'geweb_aisearch_frontend_ai_interface';
     private const OPTION_CONVERSATION_TRIM_MESSAGE_LIMIT = 'geweb_aisearch_conversation_trim_message_limit';
     private const OPTION_CONVERSATION_TRIM_CHAR_LIMIT = 'geweb_aisearch_conversation_trim_char_limit';
     private const OPTION_LOCAL_CONVERSATION_ARCHIVE_LIMIT = 'geweb_aisearch_local_conversation_archive_limit';
+    private const OPTION_STORED_CONTEXT_MESSAGE_LIMIT = 'geweb_aisearch_stored_context_message_limit';
+    private const OPTION_STORED_CONTEXT_CHAR_LIMIT = 'geweb_aisearch_stored_context_char_limit';
     private const LABEL_DEFAULT_PROMPT = 'Default prompt';
     private const DEFAULT_PROMPT_HISTORY_LIMIT = 10;
     private const DEFAULT_FRONTEND_AI_INTERFACE = 'fullscreen';
     private const DEFAULT_CONVERSATION_TRIM_MESSAGE_LIMIT = 12;
     private const DEFAULT_CONVERSATION_TRIM_CHAR_LIMIT = 12000;
     private const DEFAULT_LOCAL_CONVERSATION_ARCHIVE_LIMIT = 12;
+    private const DEFAULT_STORED_CONTEXT_MESSAGE_LIMIT = 120;
+    private const DEFAULT_STORED_CONTEXT_CHAR_LIMIT = 60000;
     private const MODEL_SELECTION_MODE_DEFAULT = 'default';
     private const MODEL_SELECTION_MODE_CUSTOM = 'custom';
 
@@ -111,6 +117,12 @@ class AdminSettingsManager {
         }
 
         update_option(self::OPTION_INCLUDE_REFERENCED_DOCUMENTS, !empty($_POST['geweb_ai_search_include_referenced_documents']) ? '1' : '0');
+        UserScope::updateGroupScopedOption(self::OPTION_OCR_ALL_UPLOAD_IMAGES, !empty($_POST['geweb_ai_search_ocr_all_upload_images']) ? '1' : '0', false);
+        UserScope::updateGroupScopedOption(
+            self::OPTION_DATE_DISPLAY_FORMAT,
+            DateDisplay::normalizeFormat(isset($_POST['geweb_ai_search_date_display_format']) ? sanitize_key(wp_unslash($_POST['geweb_ai_search_date_display_format'])) : '') ?: DateDisplay::FORMAT_ISO,
+            false
+        );
         update_option(self::OPTION_PRESERVE_DATA_ON_UNINSTALL, !empty($_POST['geweb_ai_search_preserve_data_on_uninstall']) ? '1' : '0');
         update_option(
             self::OPTION_FRONTEND_AI_INTERFACE,
@@ -141,6 +153,24 @@ class AdminSettingsManager {
                 self::DEFAULT_LOCAL_CONVERSATION_ARCHIVE_LIMIT,
                 1,
                 200
+            )
+        );
+        update_option(
+            self::OPTION_STORED_CONTEXT_MESSAGE_LIMIT,
+            $this->sanitizePositiveIntOption(
+                isset($_POST['geweb_ai_search_stored_context_message_limit']) ? wp_unslash($_POST['geweb_ai_search_stored_context_message_limit']) : null,
+                self::DEFAULT_STORED_CONTEXT_MESSAGE_LIMIT,
+                10,
+                500
+            )
+        );
+        update_option(
+            self::OPTION_STORED_CONTEXT_CHAR_LIMIT,
+            $this->sanitizePositiveIntOption(
+                isset($_POST['geweb_ai_search_stored_context_char_limit']) ? wp_unslash($_POST['geweb_ai_search_stored_context_char_limit']) : null,
+                self::DEFAULT_STORED_CONTEXT_CHAR_LIMIT,
+                5000,
+                500000
             )
         );
     }
@@ -196,6 +226,9 @@ class AdminSettingsManager {
         }
 
         $newPrompt = PromptSupport::normalizePromptInput($_POST['geweb_ai_search_custom_prompt']);
+        if ($newPrompt !== '') {
+            PromptSupport::assertNoUrls($newPrompt, 'Custom prompt');
+        }
         $currentPrompt = (string) $this->getScopedOption(self::OPTION_CUSTOM_PROMPT, '');
         $newPromptName = isset($_POST['geweb_ai_search_custom_prompt_name'])
             ? sanitize_text_field(wp_unslash($_POST['geweb_ai_search_custom_prompt_name']))
@@ -261,6 +294,8 @@ class AdminSettingsManager {
             if ($prompt === '') {
                 continue;
             }
+
+            PromptSupport::assertNoUrls($prompt, 'Model prompt (' . $model . ')');
 
             $name = isset($postedPromptNames[$index]) ? sanitize_text_field((string) $postedPromptNames[$index]) : '';
             $mode = isset($postedPromptModes[$index]) ? sanitize_key((string) $postedPromptModes[$index]) : 'append';

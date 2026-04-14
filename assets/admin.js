@@ -47,6 +47,271 @@ function decodeBase64Value(encodedValue) {
 		return decodedValue;
 }
 
+function escapeHtml(text) {
+		return String(text || '')
+				.replaceAll('&', '&amp;')
+				.replaceAll('<', '&lt;')
+				.replaceAll('>', '&gt;')
+				.replaceAll('"', '&quot;')
+				.replaceAll("'", '&#039;');
+}
+
+function decodeHtmlEntities(text) {
+		const textarea = globalThis.document.createElement('textarea');
+		textarea.innerHTML = String(text || '');
+		return textarea.value;
+}
+
+function getPreviewUrlLeaf(url) {
+		const normalizedUrl = String(url || '').trim();
+		if (!normalizedUrl) {
+				return '';
+		}
+
+		try {
+				const parsedUrl = new URL(normalizedUrl, globalThis.location?.origin || undefined);
+				const pathname = String(parsedUrl.pathname || '');
+				const leaf = pathname.split('/').filter(Boolean).pop() || '';
+				return decodeURIComponent(leaf || normalizedUrl);
+		} catch (_) {
+				const leaf = normalizedUrl.split('/').filter(Boolean).pop() || normalizedUrl;
+				try {
+						return decodeURIComponent(leaf);
+				} catch (_) {
+						return leaf;
+				}
+		}
+}
+
+function normalizeMarkdownPreviewBlocks(markdown) {
+		return String(markdown || '')
+				.replaceAll(/(!\[[^\]]*]\([^)]+\))/g, '\n$1\n')
+				.replaceAll(/<figcaption\b[^>]*>/gi, ': ')
+				.replaceAll(/<\/figcaption>/gi, '\n')
+				.replaceAll(/\n{3,}/g, '\n\n');
+}
+
+function sanitizePreviewHtml(html) {
+		const container = globalThis.document.createElement('div');
+		container.innerHTML = String(html || '');
+
+		Array.from(container.querySelectorAll('*')).forEach(function(element) {
+				const tagName = String(element.tagName || '').toLowerCase();
+				if (!['a', 'p', 'ul', 'ol', 'li', 'strong', 'em', 'code', 'pre', 'blockquote', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'table', 'thead', 'tbody', 'tr', 'th', 'td'].includes(tagName)) {
+						element.replaceWith(...Array.from(element.childNodes));
+						return;
+				}
+
+				Array.from(element.attributes).forEach(function(attribute) {
+						if (tagName === 'a' && attribute.name === 'href') {
+								if (!/^https?:\/\//i.test(attribute.value) && !/^#/i.test(attribute.value)) {
+										element.removeAttribute('href');
+								}
+								return;
+						}
+
+						if (tagName === 'a' && attribute.name === 'id') {
+								if (!/^[A-Za-z][A-Za-z0-9\-_:.]*$/.test(attribute.value)) {
+										element.removeAttribute('id');
+								}
+								return;
+						}
+
+						if (!['href', 'target', 'rel', 'title', 'id'].includes(attribute.name)) {
+								element.removeAttribute(attribute.name);
+						}
+				});
+
+				if (tagName === 'a') {
+						const href = String(element.getAttribute('href') || '');
+						if (/^https?:\/\//i.test(href)) {
+								element.setAttribute('target', '_blank');
+								element.setAttribute('rel', 'noopener noreferrer');
+						} else {
+								element.removeAttribute('target');
+								element.removeAttribute('rel');
+						}
+				}
+		});
+
+		return container.innerHTML;
+}
+
+function parseMarkdownTableCells(line) {
+		return String(line || '')
+				.trim()
+				.replace(/^\|/, '')
+				.replace(/\|$/, '')
+				.split('|')
+				.map(function(cell) {
+						return String(cell || '').trim();
+				});
+}
+
+function isMarkdownTableSeparator(line) {
+		const cells = parseMarkdownTableCells(line);
+		if (!cells.length) {
+				return false;
+		}
+
+		return cells.every(function(cell) {
+				return /^:?-{3,}:?$/.test(cell);
+		});
+}
+
+function isMarkdownTableStart(lines, index) {
+		const headerLine = String(lines?.[index] ?? '').trim();
+		const separatorLine = String(lines?.[index + 1] ?? '').trim();
+		if (!headerLine || !separatorLine || !headerLine.includes('|')) {
+				return false;
+		}
+
+		return isMarkdownTableSeparator(separatorLine);
+}
+
+function applyInlineMarkdown(text) {
+		return String(text || '')
+				.replaceAll(/!\[[^\]]*]\((https?:\/\/[^)]+)\)/g, function(_, url) {
+						const label = getPreviewUrlLeaf(url) || url;
+						return '<a href="' + escapeHtml(url) + '" title="' + escapeHtml(url) + '">' + escapeHtml(label) + '</a>';
+				})
+				.replaceAll(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+				.replaceAll(/__([^_]+)__/g, '<strong>$1</strong>')
+				.replaceAll(/(^|[\s(])\*([^*]+)\*(?=[\s).,!?;:]|$)/g, '$1<em>$2</em>')
+				.replaceAll(/(^|[\s(])_([^_]+)_(?=[\s).,!?;:]|$)/g, '$1<em>$2</em>')
+				.replaceAll(/`([^`]+)`/g, '<code>$1</code>')
+				.replaceAll(/\[([^\]]+)\]\((#[^)]+)\)/g, function(_, label, href) {
+						return '<a href="' + escapeHtml(href) + '" title="' + escapeHtml(href) + '">' + label + '</a>';
+				})
+				.replaceAll(/\[([^\]]+)\]\((https?:\/\/[^)\s]+#[^)]+)\)/g, function(_, label, url) {
+						return '<a href="' + escapeHtml(url) + '" title="' + escapeHtml(url) + '">' + label + '</a>';
+				})
+				.replaceAll(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, function(_, label, url) {
+						return '<a href="' + escapeHtml(url) + '" title="' + escapeHtml(url) + '">' + label + '</a>';
+				})
+				.replaceAll(/\\([\\`*_{}\[\]()#+.!-])/g, '$1');
+}
+
+function buildMarkdownTableHtml(lines, startIndex) {
+		const headerCells = parseMarkdownTableCells(lines[startIndex]);
+		const separatorCells = parseMarkdownTableCells(lines[startIndex + 1]);
+		if (!headerCells.length || headerCells.length !== separatorCells.length) {
+				return null;
+		}
+
+		const rows = [];
+		let index = startIndex + 2;
+		while (index < (lines?.length ?? 0)) {
+				const trimmed = String(lines?.[index] ?? '').trim();
+				if (!trimmed.includes('|')) {
+						break;
+				}
+
+				const cells = parseMarkdownTableCells(trimmed);
+				if (!cells.length) {
+						break;
+				}
+
+				while (cells.length < headerCells.length) {
+						cells.push('');
+				}
+
+				rows.push(cells.slice(0, headerCells.length));
+				index += 1;
+		}
+
+		const headHtml = '<thead><tr>' + headerCells.map(function(cell) {
+				return '<th>' + applyInlineMarkdown(cell) + '</th>';
+		}).join('') + '</tr></thead>';
+		const bodyHtml = rows.length
+				? '<tbody>' + rows.map(function(cells) {
+						return '<tr>' + cells.map(function(cell) {
+								return '<td>' + applyInlineMarkdown(cell) + '</td>';
+						}).join('') + '</tr>';
+				}).join('') + '</tbody>'
+				: '';
+
+		return {
+				html: '<table>' + headHtml + bodyHtml + '</table>',
+				nextIndex: index - 1
+		};
+}
+
+function renderMarkdownPreview(markdown) {
+		if (typeof globalThis.GewebAisearchMarkdown?.render === 'function') {
+				return globalThis.GewebAisearchMarkdown.render(markdown);
+		}
+
+		const normalizedMarkdown = normalizeMarkdownPreviewBlocks(
+				decodeHtmlEntities(String(markdown || '')).replaceAll(/\r\n?/g, '\n')
+		);
+		const escaped = escapeHtml(normalizedMarkdown);
+		const lines = escaped.split('\n');
+		const parts = [];
+		let listItems = [];
+
+		function flushList() {
+				if (!listItems.length) {
+						return;
+				}
+
+				parts.push('<ul>' + listItems.join('') + '</ul>');
+				listItems = [];
+		}
+
+		let lineIndex = 0;
+		while (lineIndex < lines.length) {
+				const line = lines[lineIndex];
+				const trimmed = line.trim();
+
+				if (!trimmed) {
+						flushList();
+						lineIndex += 1;
+						continue;
+				}
+
+				if (isMarkdownTableStart(lines, lineIndex)) {
+						flushList();
+						const table = buildMarkdownTableHtml(lines, lineIndex);
+						if (table) {
+								parts.push(table.html);
+								lineIndex = table.nextIndex + 1;
+								continue;
+						}
+				}
+
+				const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
+				if (headingMatch) {
+						flushList();
+						const level = Math.min(6, headingMatch[1].length);
+						parts.push('<h' + level + '>' + applyInlineMarkdown(headingMatch[2]) + '</h' + level + '>');
+						lineIndex += 1;
+						continue;
+				}
+
+				if (/^-{3,}$/.test(trimmed)) {
+						flushList();
+						parts.push('<hr>');
+						lineIndex += 1;
+						continue;
+				}
+
+				const listMatch = trimmed.match(/^[-*]\s+(.+)$/);
+				if (listMatch) {
+						listItems.push('<li>' + applyInlineMarkdown(listMatch[1]) + '</li>');
+						lineIndex += 1;
+						continue;
+				}
+
+				flushList();
+				parts.push('<p>' + applyInlineMarkdown(trimmed) + '</p>');
+				lineIndex += 1;
+		}
+
+		flushList();
+		return sanitizePreviewHtml(parts.join(''));
+}
+
 function normalizePromptText(text) {
 		return String(text || '')
 				.replaceAll(/\r\n?/g, '\n')
@@ -74,11 +339,109 @@ function showCellFeedback($cell, message, isError) {
 		$feedback.text(message).css('color', isError ? '#d63638' : '#2271b1').show();
 }
 
-function replaceCellHtml($button, html) {
-		const $cell = $button.closest('.geweb-ai-index-cell');
+function getPostListRow(postId) {
+		const normalizedPostId = Number(postId || 0);
+		if (!normalizedPostId) return jQuery();
+
+		return jQuery('#post-' + normalizedPostId).first();
+}
+
+function replaceCellHtml($trigger, html, postId) {
+		const $row = getPostListRow(postId);
+		const $cell = $row.find('.geweb-ai-index-cell').first();
 		if (!$cell.length || !html) return;
 
 		$cell.replaceWith(html);
+}
+
+function replaceMarkdownCacheCellHtml($trigger, html, postId) {
+		const $row = getPostListRow(postId);
+		if (!$row.length || !html) return;
+
+		const $cell = $row.find('.column-geweb_ai_markdown_cache').first();
+		if (!$cell.length) return;
+
+		$cell.html(html);
+}
+
+function pollPostIndexStatus($trigger, postId, attempt) {
+		const nextAttempt = Number(attempt || 0) + 1;
+		globalThis.setTimeout(function() {
+				jQuery.ajax({
+						url: ajaxurl,
+						type: 'POST',
+						timeout: 30000,
+						data: {
+								action: 'geweb_get_post_index_status',
+								nonce: gewebAisearchAdmin.adminActionNonce,
+								post_id: postId
+						}
+				}).done(function(response) {
+						if (!response?.success) {
+								return;
+						}
+
+						replaceCellHtml($trigger, response?.data?.html || '', postId);
+						replaceMarkdownCacheCellHtml($trigger, response?.data?.markdown_cache_html || '', postId);
+
+						if (!response?.data?.done && nextAttempt < 120) {
+								pollPostIndexStatus($trigger, postId, nextAttempt);
+						}
+				}).fail(function() {
+						if (nextAttempt < 120) {
+								pollPostIndexStatus($trigger, postId, nextAttempt);
+						}
+				});
+		}, 3000);
+}
+
+function ensureMarkdownCacheModal() {
+		let $modal = jQuery('#geweb-ai-markdown-cache-modal');
+		if ($modal.length) {
+				return $modal;
+		}
+
+		$modal = jQuery(
+				'<div id="geweb-ai-markdown-cache-modal" style="display:none;position:fixed;inset:0;z-index:100000;background:rgba(17,24,39,0.72);padding:40px 24px;box-sizing:border-box;">' +
+						'<div style="max-width:1100px;height:100%;margin:0 auto;background:#fff;border-radius:10px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(15,23,42,0.35);">' +
+								'<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #dcdcde;">' +
+										'<div style="display:flex;align-items:center;gap:12px;min-width:0;">' +
+												'<strong class="geweb-ai-markdown-cache-modal-title">Markdown cache</strong>' +
+												'<span style="display:inline-flex;gap:6px;">' +
+														'<button type="button" class="button button-small geweb-ai-markdown-cache-mode is-active" data-mode="rendered">Rendered</button>' +
+														'<button type="button" class="button button-small geweb-ai-markdown-cache-mode" data-mode="raw">Raw</button>' +
+														'<button type="button" class="button button-small geweb-ai-markdown-cache-mode" data-mode="html">HTML</button>' +
+														'<button type="button" class="button button-small geweb-ai-markdown-cache-mode geweb-ai-markdown-cache-mode-browser" data-mode="browser" style="display:none;">Browser</button>' +
+														'<a href="#" target="_blank" rel="noopener noreferrer" class="button button-small geweb-ai-markdown-cache-open-original" style="display:none;">Open in new tab</a>' +
+												'</span>' +
+										'</div>' +
+										'<button type="button" class="button-link geweb-ai-markdown-cache-modal-close" style="font-size:20px;line-height:1;text-decoration:none;">×</button>' +
+								'</div>' +
+								'<div class="geweb-ai-markdown-cache-modal-rendered" style="margin:0;padding:20px;overflow:auto;background:#f8fafc;flex:1;line-height:1.6;"></div>' +
+								'<pre class="geweb-ai-markdown-cache-modal-body" style="display:none;margin:0;padding:20px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:12px/1.5 Consolas, Monaco, monospace;background:#f8fafc;flex:1;"></pre>' +
+								'<pre class="geweb-ai-markdown-cache-modal-html" style="display:none;margin:0;padding:20px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:12px/1.5 Consolas, Monaco, monospace;background:#f8fafc;flex:1;"></pre>' +
+								'<div class="geweb-ai-markdown-cache-modal-browser" style="display:none;flex:1;min-height:0;background:#f8fafc;">' +
+										'<iframe class="geweb-ai-markdown-cache-modal-browser-frame" src="about:blank" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" style="display:block;width:100%;height:100%;border:0;background:#fff;"></iframe>' +
+								'</div>' +
+						'</div>' +
+				'</div>'
+		);
+		jQuery('body').append($modal);
+		return $modal;
+}
+
+function setMarkdownCacheModalMode($modal, mode) {
+		const normalizedMode = mode === 'raw' || mode === 'html' || mode === 'browser' ? mode : 'rendered';
+		$modal.find('.geweb-ai-markdown-cache-mode')
+				.removeClass('is-active')
+				.css({ background: '', color: '' });
+		$modal.find('.geweb-ai-markdown-cache-mode[data-mode="' + normalizedMode + '"]')
+				.addClass('is-active')
+				.css({ background: '#2271b1', color: '#fff' });
+		$modal.find('.geweb-ai-markdown-cache-modal-rendered').toggle(normalizedMode === 'rendered');
+		$modal.find('.geweb-ai-markdown-cache-modal-body').toggle(normalizedMode === 'raw');
+		$modal.find('.geweb-ai-markdown-cache-modal-html').toggle(normalizedMode === 'html');
+		$modal.find('.geweb-ai-markdown-cache-modal-browser').toggle(normalizedMode === 'browser');
 }
 
 function clearStatusAfterFade($status) {
@@ -97,6 +460,14 @@ function applyPendingReferencedDocumentTargets() {
 		// This hook used to apply staged UI state for referenced documents.
 		// Keep it as a no-op so admin initialization does not fail when the
 		// referenced documents and Gemini stores panels are loaded.
+}
+
+function syncModelSelectTint($select) {
+		if (!$select || !$select.length) return;
+
+		const $selectedOption = $select.find('option:selected');
+		const status = String($selectedOption.attr('data-model-status') || '');
+		$select.css('color', status === 'failed' ? '#b32d2e' : '');
 }
 
 jQuery(document).ready(function($) {
@@ -278,20 +649,39 @@ jQuery(document).ready(function($) {
 						const remoteSelected = String(response.data.selected_model || selectedValue || '');
 						$select.empty();
 
-						$.each(response.data.models, function(_, model) {
-								const value = String(model || '');
-								if (!value) return;
-								$select.append(new Option(value, value, false, value === remoteSelected));
-						});
-
-						if (remoteSelected && $select.find('option[value="' + escapeSelectorAttributeValue(remoteSelected) + '"]').length === 0) {
-								$select.prepend(new Option(remoteSelected, remoteSelected, true, true));
-						} else if (remoteSelected) {
-								$select.val(remoteSelected);
+				$.each(response.data.models, function(_, model) {
+						const value = String(model || '');
+						if (!value) return;
+						const statusEntry = response?.data?.model_statuses?.[value];
+						const isFailedModel = statusEntry && String(statusEntry.status || '') === 'failed';
+						const option = new Option(value, value, false, value === remoteSelected);
+						option.setAttribute('data-model-status', isFailedModel ? 'failed' : 'ok');
+						if (isFailedModel) {
+								option.style.color = '#b32d2e';
 						}
+						$select.append(option);
+				});
+
+				if (remoteSelected && $select.find('option[value="' + escapeSelectorAttributeValue(remoteSelected) + '"]').length === 0) {
+						const statusEntry = response?.data?.model_statuses?.[remoteSelected];
+						const isFailedModel = statusEntry && String(statusEntry.status || '') === 'failed';
+						const option = new Option(remoteSelected, remoteSelected, true, true);
+						option.setAttribute('data-model-status', isFailedModel ? 'failed' : 'ok');
+						if (isFailedModel) {
+								option.style.color = '#b32d2e';
+						}
+						$select.prepend(option);
+				} else if (remoteSelected) {
+						$select.val(remoteSelected);
+				}
+
+						syncModelSelectTint($select);
 
 						if ($status.length) {
-								$status.text('Model list refreshed from Gemini.').css('color', '#46b450');
+								const statusMessage = response?.data?.used_cached_models
+										? 'Model list loaded from cache.'
+										: 'Model list refreshed from Gemini.';
+								$status.text(statusMessage).css('color', '#46b450');
 								globalThis.setTimeout(function() {
 										clearStatusAfterFade($status);
 								}, 2000);
@@ -301,6 +691,21 @@ jQuery(document).ready(function($) {
 								$status.text('Could not refresh models. Showing cached or bundled list.').css('color', '#996800');
 						}
 				});
+		}
+
+		function updateModelOptionStatuses($select, modelStatuses) {
+				if (!$select?.length) return;
+
+				$select.find('option').each(function() {
+						const $option = $(this);
+						const value = String($option.val() || '');
+						const statusEntry = modelStatuses?.[value];
+						const isFailedModel = statusEntry && String(statusEntry.status || '') === 'failed';
+						$option.attr('data-model-status', isFailedModel ? 'failed' : 'ok');
+						$option.css('color', isFailedModel ? '#b32d2e' : '');
+				});
+
+				syncModelSelectTint($select);
 		}
 
 		$('#geweb-ai-restore-default-prompt').on('click', function(event) {
@@ -323,9 +728,122 @@ jQuery(document).ready(function($) {
 				$('html, body').animate({ scrollTop: top }, 180);
 		});
 
+		$('#geweb-refresh-models-button').on('click', function(event) {
+				event.preventDefault();
+				const $button = $(this);
+				const $status = $('#geweb-ai-model-refresh-status');
+				const $select = $('#geweb_ai_search_model');
+				if (!$button.length || !$select.length || $button.prop('disabled')) return;
+
+				$button.prop('disabled', true).text('Refreshing...');
+				if ($status.length) {
+						$status.text('Refreshing available Gemini models...').css({ display: 'block', color: '#646970' });
+				}
+
+				$.ajax({
+						url: getAdminAjaxUrl(),
+						type: 'POST',
+						dataType: 'json',
+						data: {
+								action: 'geweb_refresh_models',
+								nonce: gewebAisearchAdmin.adminActionNonce,
+								force_refresh: 1
+						}
+				}).done(function(response) {
+						if (!response?.success || !$.isArray(response?.data?.models) || !response.data.models.length) {
+								if ($status.length) {
+										$status.text('Could not refresh models. Showing cached or bundled list.').css('color', '#996800');
+								}
+								return;
+						}
+
+						const selectedValue = String($select.val() || '');
+						const remoteSelected = String(response.data.selected_model || selectedValue || '');
+						$select.empty();
+
+						$.each(response.data.models, function(_, model) {
+								const value = String(model || '');
+								if (!value) return;
+								const statusEntry = response?.data?.model_statuses?.[value];
+								const isFailedModel = statusEntry && String(statusEntry.status || '') === 'failed';
+								const option = new Option(value, value, false, value === remoteSelected);
+								option.setAttribute('data-model-status', isFailedModel ? 'failed' : 'ok');
+								if (isFailedModel) {
+										option.style.color = '#b32d2e';
+								}
+								$select.append(option);
+						});
+
+						if (remoteSelected && $select.find('option[value="' + escapeSelectorAttributeValue(remoteSelected) + '"]').length === 0) {
+								const statusEntry = response?.data?.model_statuses?.[remoteSelected];
+								const isFailedModel = statusEntry && String(statusEntry.status || '') === 'failed';
+								const option = new Option(remoteSelected, remoteSelected, true, true);
+								option.setAttribute('data-model-status', isFailedModel ? 'failed' : 'ok');
+								if (isFailedModel) {
+										option.style.color = '#b32d2e';
+								}
+								$select.prepend(option);
+						} else if (remoteSelected) {
+								$select.val(remoteSelected);
+						}
+
+						syncModelSelectTint($select);
+						if ($status.length) {
+								$status.text('Model list refreshed from Gemini.').css('color', '#46b450');
+						}
+				}).fail(function() {
+						if ($status.length) {
+								$status.text('Could not refresh models. Showing cached or bundled list.').css('color', '#996800');
+						}
+				}).always(function() {
+						$button.prop('disabled', false).text('Refresh models');
+				});
+		});
+
+		$('#geweb-test-selected-model').on('click', function(event) {
+				event.preventDefault();
+				const $button = $(this);
+				const $select = $('#geweb_ai_search_model');
+				const $status = $('#geweb-ai-model-refresh-status');
+				const model = String($select.val() || '');
+				if (!$button.length || !$select.length || !model || $button.prop('disabled')) return;
+
+				$button.prop('disabled', true).text('Testing...');
+				if ($status.length) {
+						$status.text('Testing selected model...').css({ display: 'block', color: '#646970' });
+				}
+
+				$.ajax({
+						url: getAdminAjaxUrl(),
+						type: 'POST',
+						dataType: 'json',
+						data: {
+								action: 'geweb_test_model',
+								nonce: gewebAisearchAdmin.adminActionNonce,
+								model: model
+						}
+				}).done(function(response) {
+						updateModelOptionStatuses($select, response?.data?.model_statuses || {});
+						if ($status.length) {
+								$status.text(String(response?.data?.result?.message || 'Model responded successfully.')).css('color', '#46b450');
+						}
+				}).fail(function(xhr) {
+						updateModelOptionStatuses($select, xhr?.responseJSON?.data?.model_statuses || {});
+						if ($status.length) {
+								$status.text(getAjaxErrorMessage(xhr, 'Model test failed.')).css('color', '#d63638');
+						}
+				}).always(function() {
+						$button.prop('disabled', false).text('Test selected model');
+				});
+		});
+
 		$('.nav-tab-wrapper').on('click', '[data-geweb-tab]', function(e) {
-				e.preventDefault();
 				const tab = $(this).attr('data-geweb-tab');
+				if (['documents', 'stores', 'conversations'].includes(String(tab || ''))) {
+						globalThis.location.href = String($(this).attr('href') || globalThis.location.href);
+						return;
+				}
+				e.preventDefault();
 				$('.nav-tab-wrapper [data-geweb-tab]').removeClass('nav-tab-active');
 				$(this).addClass('nav-tab-active');
 				$('.geweb-settings-tab-panel').hide();
@@ -625,7 +1143,14 @@ jQuery(document).ready(function($) {
 				}
 				selectPromptHistoryItem($initialItem);
 		}
-		refreshModelSelectorInBackground();
+		const activeTab = String($('.nav-tab-wrapper [data-geweb-tab].nav-tab-active').attr('data-geweb-tab') || '');
+		if (['general', 'prompts'].includes(activeTab)) {
+				refreshModelSelectorInBackground();
+		}
+		syncModelSelectTint($('#geweb_ai_search_model'));
+		$('#geweb_ai_search_model').on('change', function() {
+				syncModelSelectTint($(this));
+		});
 
 		$(globalThis).on('beforeunload', function() {
 				if (suppressBeforeUnloadWarning || !hasUnsavedChanges()) return;
@@ -715,6 +1240,9 @@ jQuery(document).ready(function($) {
 		let isProcessing = false;
 		let totalSuccess = 0;
 		let totalErrors = 0;
+		let isBuildingMarkdownCache = false;
+		let totalCacheSuccess = 0;
+		let totalCacheErrors = 0;
 
 		function processPage(page) {
 				$.ajax({
@@ -780,6 +1308,172 @@ jQuery(document).ready(function($) {
 				processPage(1);
 		});
 
+		function processMarkdownCachePage(page) {
+				$.ajax({
+						url: ajaxurl,
+						type: 'POST',
+						timeout: 180000,
+						data: {
+								action: 'geweb_build_markdown_cache',
+								nonce: gewebAisearchAdmin.generateLibraryNonce,
+								page: page
+						},
+						success: function(response) {
+								if (response.success) {
+										const data = response.data;
+										totalCacheSuccess += Number(data.success || 0);
+										totalCacheErrors += Number(data.errors || 0);
+
+										const percentage = data.total > 0 ? Math.round((data.processed / data.total) * 100) : 100;
+										const statusText = 'Processing: ' + data.processed + '/' + data.total + ' (' + percentage + '%)';
+
+										$('#geweb-build-markdown-cache-status').html('<p>' + statusText + '</p>');
+
+										if (data.has_more) {
+												processMarkdownCachePage(data.next_page);
+										} else {
+												let finalMessage = 'Completed! ' + totalCacheSuccess + ' MD cache item(s) built';
+												if (totalCacheErrors > 0) {
+														finalMessage += ', ' + totalCacheErrors + ' error(s)';
+												}
+												$('#geweb-build-markdown-cache-status').html('<p style="color: green;">' + finalMessage + '</p>');
+												$('#geweb-build-markdown-cache').prop('disabled', false);
+												isBuildingMarkdownCache = false;
+										}
+								} else {
+										$('#geweb-build-markdown-cache-status').html('<p style="color: red;">Error: ' + response.data.message + '</p>');
+										$('#geweb-build-markdown-cache').prop('disabled', false);
+										isBuildingMarkdownCache = false;
+								}
+						},
+						error: function() {
+								$('#geweb-build-markdown-cache-status').html('<p style="color: red;">Network error</p>');
+								$('#geweb-build-markdown-cache').prop('disabled', false);
+								isBuildingMarkdownCache = false;
+						}
+				});
+		}
+
+		$('#geweb-build-markdown-cache').on('click', function() {
+				if (isBuildingMarkdownCache) return;
+
+				isBuildingMarkdownCache = true;
+				totalCacheSuccess = 0;
+				totalCacheErrors = 0;
+
+				const $btn = $(this);
+				const $status = $('#geweb-build-markdown-cache-status');
+
+				$btn.prop('disabled', true);
+				$status.html('<p>Starting...</p>');
+
+				processMarkdownCachePage(1);
+		});
+
+		$(document).on('click', '.geweb-ai-markdown-cache-view', function(event) {
+				event.preventDefault();
+				const $link = $(this);
+				const postId = Number($link.data('post-id') || 0);
+				if (!postId) return;
+
+				const $modal = ensureMarkdownCacheModal();
+				$modal.find('.geweb-ai-markdown-cache-modal-title').text('Markdown cache');
+				$modal.find('.geweb-ai-markdown-cache-open-original').hide().attr('href', '#');
+				$modal.find('.geweb-ai-markdown-cache-mode-browser').hide();
+				$modal.find('.geweb-ai-markdown-cache-modal-rendered').html('<p>Loading...</p>');
+				$modal.find('.geweb-ai-markdown-cache-modal-body').text('Loading...');
+				$modal.find('.geweb-ai-markdown-cache-modal-html').text('Loading...');
+				$modal.find('.geweb-ai-markdown-cache-modal-browser-frame').attr('src', 'about:blank');
+				setMarkdownCacheModalMode($modal, 'rendered');
+				$modal.show();
+
+				$.ajax({
+						url: getAdminAjaxUrl(),
+						type: 'POST',
+						dataType: 'json',
+						data: {
+								action: 'geweb_get_markdown_cache',
+								nonce: gewebAisearchAdmin.adminActionNonce,
+								post_id: postId
+						}
+				}).done(function(response) {
+						if (!response?.success) {
+								const message = response?.data?.message || 'Could not load Markdown cache.';
+								$modal.find('.geweb-ai-markdown-cache-modal-rendered').html('<p>' + escapeHtml(message) + '</p>');
+								$modal.find('.geweb-ai-markdown-cache-modal-body').text(message);
+								$modal.find('.geweb-ai-markdown-cache-modal-html').text(message);
+								return;
+						}
+
+						const title = String(response?.data?.title || '').trim();
+						const filename = String(response?.data?.filename || '').trim();
+						const originalUrl = String(response?.data?.url || '').trim();
+						const markdown = String(response?.data?.markdown || '');
+						const renderedHtml = String(response?.data?.rendered_html || '');
+						let modalTitle = 'Markdown cache';
+						if (filename && title) {
+								modalTitle = 'Markdown cache: ' + filename + ' (' + title + ')';
+						} else if (filename) {
+								modalTitle = 'Markdown cache: ' + filename;
+						} else if (title) {
+								modalTitle = 'Markdown cache: ' + title;
+						}
+						$modal.find('.geweb-ai-markdown-cache-modal-title').text(modalTitle);
+						if (/^https?:\/\//i.test(originalUrl)) {
+								$modal.find('.geweb-ai-markdown-cache-open-original').attr('href', originalUrl).show();
+								$modal.find('.geweb-ai-markdown-cache-mode-browser').show();
+								$modal.find('.geweb-ai-markdown-cache-modal-browser-frame').attr('src', originalUrl);
+						}
+						$modal.find('.geweb-ai-markdown-cache-modal-rendered').html(renderMarkdownPreview(markdown));
+						$modal.find('.geweb-ai-markdown-cache-modal-body').text(markdown);
+						$modal.find('.geweb-ai-markdown-cache-modal-html').text(renderedHtml);
+				}).fail(function(xhr) {
+						const message = xhr?.responseJSON?.data?.message || 'Could not load Markdown cache.';
+						$modal.find('.geweb-ai-markdown-cache-modal-rendered').html('<p>' + escapeHtml(message) + '</p>');
+						$modal.find('.geweb-ai-markdown-cache-modal-body').text(message);
+						$modal.find('.geweb-ai-markdown-cache-modal-html').text(message);
+				});
+		});
+
+		$(document).on('click', '.geweb-ai-markdown-cache-mode', function(event) {
+				event.preventDefault();
+				const $button = $(this);
+				const $modal = $button.closest('#geweb-ai-markdown-cache-modal');
+				if (!$modal.length) return;
+
+				setMarkdownCacheModalMode($modal, String($button.data('mode') || 'rendered'));
+		});
+
+		$(document).on('click', '#geweb-ai-markdown-cache-modal .geweb-ai-markdown-cache-modal-rendered a[href^="#"]', function(event) {
+				const $link = $(this);
+				const href = String($link.attr('href') || '');
+				if (!href || href === '#') {
+						return;
+				}
+
+				const $modal = $link.closest('#geweb-ai-markdown-cache-modal');
+				const $container = $modal.find('.geweb-ai-markdown-cache-modal-rendered').first();
+				const $target = $container.find(href).first();
+				if (!$container.length || !$target.length) {
+						return;
+				}
+
+				event.preventDefault();
+				const scrollTop = $container.scrollTop() + $target.position().top - 16;
+				$container.animate({ scrollTop: Math.max(0, scrollTop) }, 180);
+		});
+
+		$(document).on('click', '.geweb-ai-markdown-cache-modal-close', function(event) {
+				event.preventDefault();
+				$('#geweb-ai-markdown-cache-modal').hide();
+		});
+
+		$(document).on('click', '#geweb-ai-markdown-cache-modal', function(event) {
+				if (event.target === this) {
+						$(this).hide();
+				}
+		});
+
 		$(document).on('click', '.geweb-ai-reupload', function() {
 				const $button = $(this);
 				const $cell = $button.closest('.geweb-ai-index-cell');
@@ -800,11 +1494,14 @@ jQuery(document).ready(function($) {
 						},
 						success: function(response) {
 								if (response.success) {
-										replaceCellHtml($button, response.data.html);
+										replaceCellHtml($button, response.data.html, postId);
+										replaceMarkdownCacheCellHtml($button, response?.data?.markdown_cache_html || '', postId);
+										pollPostIndexStatus($button, postId, 0);
 										return;
 								}
 
-									replaceCellHtml($button, response?.data?.html || '');
+									replaceCellHtml($button, response?.data?.html || '', postId);
+									replaceMarkdownCacheCellHtml($button, response?.data?.markdown_cache_html || '', postId);
 									if ($cell.length) {
 											showCellFeedback($cell, response?.data?.message || 'Upload failed.', true);
 									}
@@ -838,11 +1535,13 @@ jQuery(document).ready(function($) {
 						},
 						success: function(response) {
 								if (response.success) {
-										replaceCellHtml($checkbox, response.data.html);
+										replaceCellHtml($checkbox, response.data.html, postId);
+										replaceMarkdownCacheCellHtml($checkbox, response?.data?.markdown_cache_html || '', postId);
 										return;
 								}
 
-									replaceCellHtml($checkbox, response?.data?.html || '');
+									replaceCellHtml($checkbox, response?.data?.html || '', postId);
+									replaceMarkdownCacheCellHtml($checkbox, response?.data?.markdown_cache_html || '', postId);
 									if ($cell.length) {
 											showCellFeedback($cell, response?.data?.message || 'Could not update exclusion.', true);
 									}
@@ -850,6 +1549,51 @@ jQuery(document).ready(function($) {
 						error: function() {
 								$checkbox.prop('disabled', false).prop('checked', !exclude);
 								showCellFeedback($cell, 'Could not update exclusion.', true);
+						}
+				});
+		});
+
+		$(document).on('change', '.geweb-ai-attachment-image-mode', function() {
+				const $select = $(this);
+				const $cell = $select.closest('.geweb-ai-index-cell');
+				const postId = Number($cell.data('post-id') || 0);
+				const mode = String($select.val() || 'none');
+				const messages = {
+						none: 'Disabling image processing...',
+						ocr: 'Enabling OCR...',
+						describe: 'Enabling image description...'
+				};
+				if (!postId) return;
+
+				$select.prop('disabled', true);
+				showCellFeedback($cell, messages[mode] || 'Updating image processing...', false);
+
+				$.ajax({
+						url: ajaxurl,
+						type: 'POST',
+						timeout: 30000,
+						data: {
+								action: 'geweb_set_attachment_image_processing_mode',
+								nonce: gewebAisearchAdmin.adminActionNonce,
+								post_id: postId,
+								mode: mode
+						},
+						success: function(response) {
+								if (response.success) {
+										replaceCellHtml($select, response?.data?.html || '', postId);
+										replaceMarkdownCacheCellHtml($select, response?.data?.markdown_cache_html || '', postId);
+										return;
+								}
+
+								replaceCellHtml($select, response?.data?.html || '', postId);
+								replaceMarkdownCacheCellHtml($select, response?.data?.markdown_cache_html || '', postId);
+								if ($cell.length) {
+										showCellFeedback($cell, response?.data?.message || 'Could not update image processing mode.', true);
+								}
+						},
+						error: function() {
+								$select.prop('disabled', false);
+								showCellFeedback($cell, 'Could not update image processing mode.', true);
 						}
 				});
 		});
@@ -971,6 +1715,7 @@ jQuery(document).ready(function($) {
 						const $idFilter = $currentBrowser.find('.geweb-gemini-store-documents-id-filter');
 						const $slugFilter = $currentBrowser.find('.geweb-gemini-store-documents-slug-filter');
 						const $typeFilter = $currentBrowser.find('.geweb-gemini-store-documents-type-filter');
+						const $formatFilter = $currentBrowser.find('.geweb-gemini-store-documents-format-filter');
 						const $sortHeaders = $currentBrowser.find('.geweb-gemini-store-documents-sort-header');
 						const $status = $currentBrowser.find('.geweb-gemini-store-documents-filter-status');
 						const $tbody = $currentBrowser.find('tbody');
@@ -984,6 +1729,7 @@ jQuery(document).ready(function($) {
 						const idFilterValue = $.trim(String($idFilter.val() || '')).toLowerCase();
 						const slugFilterValue = $.trim(String($slugFilter.val() || '')).toLowerCase();
 						const typeValue = $.trim(String($typeFilter.val() || '')).toLowerCase();
+						const formatValue = $.trim(String($formatFilter.val() || '')).toLowerCase();
 						const sortValue = String($currentBrowser.attr('data-sort') || 'name-asc');
 						const sortParts = sortValue.split('-');
 						const sortKey = sortParts[0] || 'name';
@@ -1022,10 +1768,11 @@ jQuery(document).ready(function($) {
 										String($row.attr('data-url') || '')
 								].join(' ');
 								const matchesFilter = !filterValue || haystack.includes(filterValue);
-									const matchesId = !idFilterValue || csvValueIncludes($row.attr('data-id'), idFilterValue);
+								const matchesId = !idFilterValue || csvValueIncludes($row.attr('data-id'), idFilterValue);
 								const matchesSlug = !slugFilterValue || String($row.attr('data-slug') || '').includes(slugFilterValue);
 								const matchesType = !typeValue || String($row.attr('data-type') || '') === typeValue;
-								const visible = matchesFilter && matchesId && matchesSlug && matchesType;
+								const matchesFormat = !formatValue || String($row.attr('data-format') || '') === formatValue;
+								const visible = matchesFilter && matchesId && matchesSlug && matchesType && matchesFormat;
 								$row.toggle(visible);
 								if (visible) visibleCount += 1;
 						});
@@ -1361,7 +2108,7 @@ jQuery(document).ready(function($) {
 				refreshSelectedGeminiStoreDocuments(storeName, storeLabel);
 		});
 
-		$(document).on('input change', '.geweb-gemini-store-documents-filter, .geweb-gemini-store-documents-id-filter, .geweb-gemini-store-documents-slug-filter, .geweb-gemini-store-documents-type-filter', function() {
+		$(document).on('input change', '.geweb-gemini-store-documents-filter, .geweb-gemini-store-documents-id-filter, .geweb-gemini-store-documents-slug-filter, .geweb-gemini-store-documents-type-filter, .geweb-gemini-store-documents-format-filter', function() {
 				applyGeminiStoreDocumentsBrowserState();
 		});
 

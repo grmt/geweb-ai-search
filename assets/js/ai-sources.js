@@ -15,6 +15,46 @@
         return value && typeof value === 'object' ? value : {};
     }
 
+    function pushLabeledEntry(entries, label, value) {
+        const text = String(value || '').trim();
+        if (!text) {
+            return;
+        }
+
+        entries.push({ label, value: text });
+    }
+
+    function getGroundingSupportFootnotes(supports, sourceFootnoteMap) {
+        return supports.reduce((accumulator, support) => {
+            const indices = Array.isArray(support?.groundingChunkIndices)
+                ? support.groundingChunkIndices.filter((value) => Number.isInteger(value) && value >= 0)
+                : [];
+
+            indices.forEach((index) => {
+                const localFootnote = index + 1;
+                const footnote = Number(sourceFootnoteMap?.[localFootnote]) || localFootnote;
+                if (!accumulator.includes(footnote)) {
+                    accumulator.push(footnote);
+                }
+            });
+
+            return accumulator;
+        }, []).sort((a, b) => a - b);
+    }
+
+    function appendGroundingPlacementEntries(existing, indices, insertionOffset, sourceFootnoteMap) {
+        indices.forEach((index) => {
+            const localFootnote = index + 1;
+            const footnote = Number(sourceFootnoteMap?.[localFootnote]) || localFootnote;
+            if (!existing.some((entry) => entry.footnote === footnote && entry.offset === insertionOffset)) {
+                existing.push({
+                    footnote,
+                    offset: insertionOffset,
+                });
+            }
+        });
+    }
+
     function safeParseUrl(url, base) {
         try {
             return new URL(url, base);
@@ -22,6 +62,13 @@
             console.debug('URL parsing failed.', error);
             return null;
         }
+    }
+
+    function normalizeManagedHost(hostname) {
+        return String(hostname || '')
+            .trim()
+            .toLowerCase()
+            .replace(/^www\./, '');
     }
 
     function t(key, fallback) {
@@ -140,6 +187,16 @@
                 hasContentSection = true;
             }
 
+            const $requestSection = this.buildRequestContextDetails(normalizedMeta);
+            if ($requestSection) {
+                $details.append(this.buildResponseDetailsSection(
+                    t('requestMetaTitle', 'Request context'),
+                    $requestSection,
+                    true
+                ));
+                hasContentSection = true;
+            }
+
             const grounding = this.getGroundingMetadata(normalizedMeta);
             const groundingChunks = this.getGroundingChunks(grounding);
             if (groundingChunks.length) {
@@ -200,6 +257,74 @@
             return $details;
         },
 
+        buildRequestContextDetails(meta) {
+            const requestMeta = normalizeObject(meta?.request);
+            if (!Object.keys(requestMeta).length) {
+                return null;
+            }
+
+            const entries = [];
+            pushLabeledEntry(entries, 'Compacted', requestMeta.compacted ? 'yes' : 'no');
+            pushLabeledEntry(entries, 'Model', requestMeta.model);
+            pushLabeledEntry(entries, 'Temporary prompt', requestMeta.temporary_prompt_active ? 'yes' : 'no');
+            if (Number(requestMeta.context_message_count || 0) > 0) {
+                pushLabeledEntry(entries, 'Context messages sent', `${Number(requestMeta.context_message_count)}`);
+            }
+            if (Number(requestMeta.excluded_source_count || 0) > 0) {
+                pushLabeledEntry(entries, 'Excluded sources', `${Number(requestMeta.excluded_source_count)}`);
+            }
+            pushLabeledEntry(entries, 'Context summary', requestMeta.context_summary);
+
+            const $wrapper = $('<div class="geweb-ai-request-details"></div>');
+            if (entries.length) {
+                $wrapper.append(this.buildResponseDetailsList(entries));
+            }
+
+            const excludedSources = Array.isArray(requestMeta.excluded_sources)
+                ? requestMeta.excluded_sources.map((item) => String(item || '').trim()).filter(Boolean)
+                : [];
+            if (excludedSources.length) {
+                const $excludedList = $('<ul class="geweb-ai-response-details-inline-list"></ul>');
+                excludedSources.forEach((item) => {
+                    $excludedList.append($('<li></li>').text(item));
+                });
+                $wrapper.append(this.buildResponseDetailsSection(
+                    'Excluded source labels',
+                    $('<div></div>').append($excludedList),
+                    false
+                ));
+            }
+
+            const messagePreview = Array.isArray(requestMeta.messages_preview)
+                ? requestMeta.messages_preview.filter((item) => item && typeof item === 'object')
+                : [];
+            if (messagePreview.length) {
+                const $previewList = $('<ol class="geweb-ai-response-details-inline-list"></ol>');
+                messagePreview.forEach((item) => {
+                    const role = String(item.role || 'user').trim() || 'user';
+                    const content = String(item.content || '').trim();
+                    if (!content) {
+                        return;
+                    }
+
+                    const $line = $('<li></li>');
+                    $line.append($('<strong></strong>').text(`${role}: `));
+                    $line.append(document.createTextNode(content));
+                    $previewList.append($line);
+                });
+
+                if ($previewList.children().length) {
+                    $wrapper.append(this.buildResponseDetailsSection(
+                        'Messages sent (preview)',
+                        $('<div></div>').append($previewList),
+                        false
+                    ));
+                }
+            }
+
+            return $wrapper;
+        },
+
         buildResponseDetailsSection(title, $content, isOpen) {
             const $section = $('<details class="geweb-ai-response-details-section"></details>');
             if (isOpen) {
@@ -256,37 +381,29 @@
             const prompt = normalizeObject(meta.prompt);
             const grounding = this.getGroundingMetadata(meta);
 
-            const pushEntry = (label, value) => {
-                const text = String(value || '').trim();
-                if (!text) {
-                    return;
-                }
-                entries.push({ label, value: text });
-            };
-
-	            pushEntry('Provider', meta.provider);
-	            pushEntry('Model', meta.model_version || meta.model);
-	            pushEntry('Prompt name', prompt.name || prompt.scope);
-	            pushEntry('Prompt', prompt.text || prompt.preview);
-	            pushEntry('Prompt scope', prompt.scope);
-	            pushEntry('Prompt mode', prompt.mode);
-            pushEntry('Response ID', meta.response_id);
-            pushEntry('Finish', candidate.finish_reason || candidate.finish_message);
+            pushLabeledEntry(entries, 'Provider', meta.provider);
+            pushLabeledEntry(entries, 'Model', meta.model_version || meta.model);
+            pushLabeledEntry(entries, 'Prompt name', prompt.name || prompt.scope);
+            pushLabeledEntry(entries, 'Prompt', prompt.text || prompt.preview);
+            pushLabeledEntry(entries, 'Prompt scope', prompt.scope);
+            pushLabeledEntry(entries, 'Prompt mode', prompt.mode);
+            pushLabeledEntry(entries, 'Response ID', meta.response_id);
+            pushLabeledEntry(entries, 'Finish', candidate.finish_reason || candidate.finish_message);
             if (usage.total_tokens) {
-                pushEntry('Tokens', `${usage.total_tokens}`);
+                pushLabeledEntry(entries, 'Tokens', `${usage.total_tokens}`);
             }
             if (meta.estimated_cost_usd !== undefined) {
-                pushEntry('Estimated cost', `$${Number(meta.estimated_cost_usd).toFixed(6)}`);
+                pushLabeledEntry(entries, 'Estimated cost', `$${Number(meta.estimated_cost_usd).toFixed(6)}`);
             }
 
             const chunks = this.getGroundingChunks(grounding);
             if (chunks.length) {
-                pushEntry('Grounding chunks', `${chunks.length}`);
+                pushLabeledEntry(entries, 'Grounding chunks', `${chunks.length}`);
             }
 
             const supports = Array.isArray(grounding?.groundingSupports) ? grounding.groundingSupports : [];
             if (supports.length) {
-                pushEntry('Grounding supports', `${supports.length}`);
+                pushLabeledEntry(entries, 'Grounding supports', `${supports.length}`);
             }
 
             return entries;
@@ -320,6 +437,10 @@
                 .replaceAll('>', '&gt;')
                 .replaceAll('"', '&quot;')
                 .replaceAll("'", '&#39;');
+        },
+
+        escapeAttr(text) {
+            return this.escapeHtml(text);
         },
 
         decodeHtmlEntities(text) {
@@ -541,7 +662,164 @@
                 return this.sanitizeChunkHtml(sourceText);
             }
 
+            const denseReferenceHtml = this.renderDenseReferenceChunkHtml(sourceText);
+            if (denseReferenceHtml) {
+                return denseReferenceHtml;
+            }
+
             return this.renderMarkdownChunkHtml(sourceText);
+        },
+
+        renderDenseReferenceChunkHtml(text) {
+            const sourceText = String(text || '').trim();
+            const matches = this.extractDenseReferenceMatches(sourceText);
+            if (matches.length < 2) {
+                return '';
+            }
+
+            let nextPrefix = this.normalizeDenseReferenceText(sourceText.slice(0, Number(matches[0]?.index || 0)));
+            const rows = matches.map((match, index) => {
+                const label = String(match[1] || '').trim();
+                const url = String(match[2] || '').trim();
+                const currentIndex = Number(match.index || 0);
+                const currentEnd = currentIndex + Number(match.matchLength || String(match[0] || '').length);
+                const nextIndex = index + 1 < matches.length ? Number(matches[index + 1].index || sourceText.length) : sourceText.length;
+                const split = this.splitDenseReferenceSegment(sourceText.slice(currentEnd, nextIndex), index + 1 < matches.length);
+                const row = {
+                    prefix: this.escapeHtml(this.normalizeChunkDisplayText(nextPrefix)),
+                    label: this.escapeHtml(label),
+                    url: this.escapeAttr(url),
+                    suffix: this.escapeHtml(this.normalizeChunkDisplayText(split.currentText)),
+                };
+                nextPrefix = this.normalizeDenseReferenceText(split.nextPrefix);
+                return row;
+            }).filter(Boolean);
+
+            const nonEmptyPrefixCount = rows.filter((row) => row.prefix).length;
+            const nonEmptySuffixCount = rows.filter((row) => row.suffix).length;
+            if (rows.length >= 2 && (nonEmptyPrefixCount >= 2 || nonEmptySuffixCount >= 2)) {
+                const body = rows.map((row) => `
+                    <tr>
+                        <td class="geweb-ai-source-reference-cell geweb-ai-source-reference-cell--prefix">${row.prefix || ''}</td>
+                        <td class="geweb-ai-source-reference-cell geweb-ai-source-reference-cell--link"><a href="${row.url}" target="_blank" rel="noopener noreferrer">${row.label}</a></td>
+                        <td class="geweb-ai-source-reference-cell geweb-ai-source-reference-cell--suffix">${row.suffix || ''}</td>
+                    </tr>
+                `).join('');
+
+                return `<div class="geweb-ai-source-reference-table-wrap"><table class="geweb-ai-source-reference-table"><tbody>${body}</tbody></table></div>`;
+            }
+
+            const listItems = rows.map((row) => {
+                const metaParts = [row.prefix, row.suffix].filter(Boolean);
+                const metaHtml = metaParts.length
+                    ? `<div class="geweb-ai-source-reference-meta">${metaParts.join(' · ')}</div>`
+                    : '';
+
+                return `<li class="geweb-ai-source-reference-item"><a href="${row.url}" target="_blank" rel="noopener noreferrer">${row.label}</a>${metaHtml}</li>`;
+            });
+
+            return listItems.length ? `<ul class="geweb-ai-source-reference-list">${listItems.join('')}</ul>` : '';
+        },
+
+        extractDenseReferenceMatches(text) {
+            const sourceText = String(text || '');
+            const markdownMatches = Array.from(sourceText.matchAll(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g)).map((match) => ({
+                0: String(match[0] || ''),
+                1: String(match[1] || '').trim(),
+                2: String(match[2] || '').trim(),
+                index: Number(match.index || 0),
+                matchLength: String(match[0] || '').length,
+            }));
+            const occupiedRanges = markdownMatches.map((match) => [
+                Number(match.index || 0),
+                Number(match.index || 0) + Number(match.matchLength || 0),
+            ]);
+            const rawMatches = Array.from(sourceText.matchAll(/https?:\/\/[^\s<>"')\]]+/g)).reduce((items, match) => {
+                const url = String(match[0] || '').trim();
+                const index = Number(match.index || 0);
+                const overlapsMarkdown = occupiedRanges.some(([start, stop]) => index >= start && index < stop);
+                if (!url || overlapsMarkdown) {
+                    return items;
+                }
+
+                items.push({
+                    0: url,
+                    1: this.getDenseReferenceLabelFromUrl(url),
+                    2: url,
+                    index,
+                    matchLength: url.length,
+                });
+                return items;
+            }, []);
+
+            return [...markdownMatches, ...rawMatches]
+                .sort((left, right) => Number(left.index || 0) - Number(right.index || 0));
+        },
+
+        getDenseReferenceLabelFromUrl(url) {
+            const normalizedUrl = String(url || '').trim();
+            if (!normalizedUrl) {
+                return '';
+            }
+
+            try {
+                const parsed = new URL(normalizedUrl);
+                const lastPathSegment = String(parsed.pathname || '')
+                    .split('/')
+                    .findLast(Boolean) || normalizedUrl;
+                return decodeURIComponent(lastPathSegment);
+            } catch {
+                return normalizedUrl.split('/').findLast(Boolean) || normalizedUrl;
+            }
+        },
+
+        normalizeDenseReferenceText(text) {
+            return String(text || '')
+                .replaceAll(/\r\n?/g, ' ')
+                .replaceAll(/([a-z])(\d{2,4}[-/]\d{2}[-/]\d{2,4})/gi, '$1 $2')
+                .replaceAll(/(\d)([A-ZÀ-Ÿ])/g, '$1 $2')
+                .replaceAll(/([a-zà-ÿ])([A-ZÀ-Ÿ])/g, '$1 $2')
+                .replaceAll(/\s{2,}/g, ' ')
+                .replaceAll(/^[·,:;|/\-–—\s]+|[·,:;|/\-–—\s]+$/g, '')
+                .trim();
+        },
+
+        splitDenseReferenceSegment(segment, hasFollowingRow) {
+            const rawSegment = String(segment || '').replaceAll(/\r\n?/g, ' ').trim();
+            if (!rawSegment || !hasFollowingRow) {
+                return {
+                    currentText: rawSegment,
+                    nextPrefix: '',
+                };
+            }
+
+            const boundaryPatterns = [
+                /\b\d{4}-\d{2}-\d{2}\b/g,
+                /\b\d{2}-\d{2}-\d{4}\b/g,
+                /\b\d{8}\b/g,
+                /\b\d{4}\b(?=[-/.]\d{2}[-/.]\d{2}\b)/g,
+            ];
+            let boundaryIndex = -1;
+
+            boundaryPatterns.forEach((pattern) => {
+                const matches = [...rawSegment.matchAll(pattern)];
+                const lastMatch = matches.at(-1);
+                if (lastMatch && typeof lastMatch.index === 'number' && lastMatch.index > boundaryIndex) {
+                    boundaryIndex = lastMatch.index;
+                }
+            });
+
+            if (boundaryIndex <= 0) {
+                return {
+                    currentText: rawSegment,
+                    nextPrefix: '',
+                };
+            }
+
+            return {
+                currentText: rawSegment.slice(0, boundaryIndex).trim(),
+                nextPrefix: rawSegment.slice(boundaryIndex).trim(),
+            };
         },
 
         normalizeChunkDisplayText(text) {
@@ -624,11 +902,14 @@
         },
 
         renderMarkdownChunkHtml(text) {
-            const escaped = this.escapeHtml(
-                this.normalizeChunkMarkdownText(
-                    this.normalizeChunkDisplayText(this.decodeHtmlEntities(text))
-                )
+            const normalizedMarkdown = this.normalizeChunkMarkdownText(
+                this.normalizeChunkDisplayText(this.decodeHtmlEntities(text))
             );
+            if (typeof globalThis.GewebAisearchMarkdown?.render === 'function') {
+                return globalThis.GewebAisearchMarkdown.render(normalizedMarkdown);
+            }
+
+            const escaped = this.escapeHtml(normalizedMarkdown);
             const lines = escaped.split(/\r?\n/);
             const parts = [];
             let listItems = [];
@@ -642,11 +923,25 @@
                 listItems = [];
             };
 
-            lines.forEach((line) => {
+            let lineIndex = 0;
+            while (lineIndex < lines.length) {
+                const line = lines[lineIndex];
                 const trimmed = line.trim();
                 if (!trimmed) {
                     flushList();
-                    return;
+                    lineIndex += 1;
+                    continue;
+                }
+
+                if (this.isMarkdownTableStart(lines, lineIndex)) {
+                    flushList();
+                    const table = this.buildMarkdownTableHtml(lines, lineIndex);
+                    if (table) {
+                        parts.push(table.html);
+                        lineIndex = table.nextIndex;
+                        lineIndex += 1;
+                        continue;
+                    }
                 }
 
                 const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
@@ -654,39 +949,118 @@
                     flushList();
                     const level = Math.min(6, headingMatch[1].length);
                     parts.push(`<h${level}>${this.applyInlineMarkdown(headingMatch[2])}</h${level}>`);
-                    return;
+                    lineIndex += 1;
+                    continue;
                 }
 
                 if (/^-{3,}$/.test(trimmed)) {
                     flushList();
                     parts.push('<hr>');
-                    return;
+                    lineIndex += 1;
+                    continue;
                 }
 
                 const listMatch = trimmed.match(/^[-*]\s+(.+)$/);
                 if (listMatch) {
                     listItems.push(`<li>${this.applyInlineMarkdown(listMatch[1])}</li>`);
-                    return;
+                    lineIndex += 1;
+                    continue;
                 }
 
                 flushList();
                 parts.push(`<p>${this.applyInlineMarkdown(trimmed)}</p>`);
-            });
+                lineIndex += 1;
+            }
 
             flushList();
             return parts.join('');
         },
 
+        isMarkdownTableStart(lines, index) {
+            const headerLine = String(lines?.[index] ?? '').trim();
+            const separatorLine = String(lines?.[index + 1] ?? '').trim();
+            if (!headerLine || !separatorLine || !headerLine.includes('|')) {
+                return false;
+            }
+
+            return this.isMarkdownTableSeparator(separatorLine);
+        },
+
+        isMarkdownTableSeparator(line) {
+            const cells = this.parseMarkdownTableCells(line);
+            if (!cells.length) {
+                return false;
+            }
+
+            return cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+        },
+
+        parseMarkdownTableCells(line) {
+            return String(line || '')
+                .trim()
+                .replace(/^\|/, '')
+                .replace(/\|$/, '')
+                .split('|')
+                .map((cell) => String(cell || '').trim());
+        },
+
+        buildMarkdownTableHtml(lines, startIndex) {
+            const headerCells = this.parseMarkdownTableCells(lines[startIndex]);
+            const separatorCells = this.parseMarkdownTableCells(lines[startIndex + 1]);
+            if (!headerCells.length || headerCells.length !== separatorCells.length) {
+                return null;
+            }
+
+            const rows = [];
+            let index = startIndex + 2;
+            while (index < (lines?.length ?? 0)) {
+                const trimmed = lines?.[index]?.trim();
+                if (!trimmed?.includes('|')) {
+                    break;
+                }
+
+                const cells = this.parseMarkdownTableCells(trimmed);
+                if (!cells.length) {
+                    break;
+                }
+
+                while (cells.length < headerCells.length) {
+                    cells.push('');
+                }
+                rows.push(cells.slice(0, headerCells.length));
+                index += 1;
+            }
+
+            const headCellsHtml = headerCells.map((cell) => `<th>${this.applyInlineMarkdown(cell)}</th>`).join('');
+            const headHtml = `<thead><tr>${headCellsHtml}</tr></thead>`;
+            const bodyHtml = rows.length
+                ? `<tbody>${rows.map((cells) => {
+                    const rowCellsHtml = cells.map((cell) => `<td>${this.applyInlineMarkdown(cell)}</td>`).join('');
+                    return `<tr>${rowCellsHtml}</tr>`;
+                }).join('')}</tbody>`
+                : '';
+
+            return {
+                html: `<table>${headHtml}${bodyHtml}</table>`,
+                nextIndex: index - 1,
+            };
+        },
+
         applyInlineMarkdown(text) {
             return String(text || '')
+                .replaceAll(/!\[[^\]]*]\((https?:\/\/[^)]+)\)/g, (_, url) => {
+                    const label = this.escapeHtml(this.getDenseReferenceLabelFromUrl(url) || url);
+                    const safeUrl = this.escapeAttr(url);
+                    return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer" title="${safeUrl}">${label}</a>`;
+                })
                 .replaceAll(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
                 .replaceAll(/__([^_]+)__/g, '<strong>$1</strong>')
                 .replaceAll(/(^|[\s(])\*([^*]+)\*(?=[\s).,!?;:]|$)/g, '$1<em>$2</em>')
                 .replaceAll(/(^|[\s(])_([^_]+)_(?=[\s).,!?;:]|$)/g, '$1<em>$2</em>')
                 .replaceAll(/`([^`]+)`/g, '<code>$1</code>')
                 .replaceAll(/(?:^|[\s(])EUR(?=\s*\d)/g, (match) => match.replace('EUR', '€'))
-                .replaceAll(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
-                .replaceAll(/\[([^\]]+)\]\((#[^)]+)\)/g, '<a href="$2">$1</a>');
+                .replaceAll(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, (_, label, url) => `<a href="${url}" target="_blank" rel="noopener noreferrer" title="${url}">${label}</a>`)
+                .replaceAll(/\[([^\]]+)\]\((#[^)]+)\)/g, (_, label, href) => `<a href="${href}" title="${href}">${label}</a>`);
         },
 
         normalizeChunkMarkdownText(text) {
@@ -694,6 +1068,9 @@
                 .replaceAll(/\r\n?/g, '\n')
                 .replaceAll(/\s+---\s+/g, '\n---\n')
                 .replaceAll(/\s+(#{1,6}\s+)/g, '\n$1')
+                .replaceAll(/(!\[[^\]]*]\([^)]+\))/g, '\n$1\n')
+                .replaceAll(/<figcaption\b[^>]*>/gi, ': ')
+                .replaceAll(/<\/figcaption>/gi, '\n')
                 .replaceAll(/(\[[^\]]+]\([^)]+\))(?=[A-Z0-9#])/g, '$1\n')
                 .replaceAll(/(\d+\.\s+[^\n]+)(?=\d+\.\s+)/g, '$1\n')
                 .replaceAll(/([a-z0-9])(\[[^\]]+]\([^)]+\))/gi, '$1 $2')
@@ -717,20 +1094,7 @@
             container.innerHTML = html;
             const blocks = Array.from(container.querySelectorAll('p, li')).filter((node) => String(node.textContent || '').trim() !== '');
             if (!blocks.length) {
-                const allFootnotes = supports.reduce((accumulator, support) => {
-                    const indices = Array.isArray(support?.groundingChunkIndices)
-                        ? support.groundingChunkIndices.filter((value) => Number.isInteger(value) && value >= 0)
-                        : [];
-                    indices.forEach((index) => {
-                        const localFootnote = index + 1;
-                        const footnote = Number(sourceFootnoteMap?.[localFootnote]) || localFootnote;
-                        if (!accumulator.includes(footnote)) {
-                            accumulator.push(footnote);
-                        }
-                    });
-                    return accumulator;
-                }, []).sort((a, b) => a - b);
-
+                const allFootnotes = getGroundingSupportFootnotes(supports, sourceFootnoteMap);
                 this.appendFallbackFootnoteMarker(container, allFootnotes);
                 return container.innerHTML;
             }
@@ -752,16 +1116,7 @@
 
                 const existing = blockFootnotes.get(matchedBlock) || [];
                 const insertionOffset = this.findExactFootnoteOffsetInBlock(matchedBlock, segmentText);
-                indices.forEach((index) => {
-                    const localFootnote = index + 1;
-                    const footnote = Number(sourceFootnoteMap?.[localFootnote]) || localFootnote;
-                    if (!existing.some((entry) => entry.footnote === footnote && entry.offset === insertionOffset)) {
-                        existing.push({
-                            footnote,
-                            offset: insertionOffset,
-                        });
-                    }
-                });
+                appendGroundingPlacementEntries(existing, indices, insertionOffset, sourceFootnoteMap);
                 blockFootnotes.set(matchedBlock, existing.sort((left, right) => left.offset === right.offset ? left.footnote - right.footnote : left.offset - right.offset));
             });
 
@@ -773,20 +1128,7 @@
             });
 
             if (!blockFootnotes.size) {
-                const allFootnotes = supports.reduce((accumulator, support) => {
-                    const indices = Array.isArray(support?.groundingChunkIndices)
-                        ? support.groundingChunkIndices.filter((value) => Number.isInteger(value) && value >= 0)
-                        : [];
-                    indices.forEach((index) => {
-                        const localFootnote = index + 1;
-                        const footnote = Number(sourceFootnoteMap?.[localFootnote]) || localFootnote;
-                        if (!accumulator.includes(footnote)) {
-                            accumulator.push(footnote);
-                        }
-                    });
-                    return accumulator;
-                }, []).sort((a, b) => a - b);
-
+                const allFootnotes = getGroundingSupportFootnotes(supports, sourceFootnoteMap);
                 this.appendFallbackFootnoteMarker(container, allFootnotes);
             }
 
@@ -1187,7 +1529,19 @@
 
             this.$sourcesBox.empty();
 
-            const normalizedSources = this.buildConversationSourceRegistry();
+            let normalizedSources = this.buildConversationSourceRegistry();
+            if (!normalizedSources.length) {
+                normalizedSources = this.normalizeSources(
+                    this.getLatestSources(),
+                    this.getLatestAnswerText(),
+                    this.getLatestResponseMeta()
+                ).map((source, index) => ({
+                    ...source,
+                    footnote: index + 1,
+                    historyIndices: [],
+                    contexts: this.buildSourceContexts(source),
+                }));
+            }
             const requestExcludedSources = typeof this.getExcludedSourcesForRequest === 'function'
                 ? this.getExcludedSourcesForRequest()
                 : [];
@@ -1224,6 +1578,7 @@
 
             this.$sourcesBox.append($list);
             this.hydrateResolvedSourceReferences($list, normalizedSources);
+            this.hydrateReconstructedSourceContexts($list, normalizedSources);
         },
 
         buildSourceListItem(source) {
@@ -1239,6 +1594,7 @@
             const sourceKind = this.getSourceKind(source);
             const sourceIcon = this.getSourceIcon(source);
             const $item = $('<li></li>');
+            $item.data('sourceInfo', source);
             const $itemHeader = $('<div class="geweb-ai-source-item-header"></div>');
             const $toggle = $('<button type="button" class="geweb-ai-source-link geweb-ai-source-toggle"></button>');
             const $number = $('<span class="geweb-ai-source-item-number" aria-hidden="true"></span>').text(`${footnote || ''}`);
@@ -1309,6 +1665,7 @@
 
         applySourceItemAttributes($item, sourceInfo) {
             const { footnote, title, snippet, previewSnippet, url, contexts } = sourceInfo;
+            $item.data('sourceInfo', sourceInfo);
             if (footnote > 0) {
                 $item.attr('data-source-footnote', `${footnote}`);
             }
@@ -1439,10 +1796,11 @@
                 $contextItem.attr('data-source-match-phrase', matchPhrase);
             }
 
-            this.bindSourceContentInteraction($contextItem, targetUrl, matchPhrase, $sourceItem);
-            $contextItem.append($('<div class="geweb-ai-source-snippet"></div>').html(
+            const $snippet = $('<div class="geweb-ai-source-snippet"></div>').html(
                 this.highlightMatchPhraseInHtml(this.renderFormattedChunkHtml(contextText), matchPhrase)
-            ));
+            );
+            this.bindSourceMatchInteraction($snippet, targetUrl, matchPhrase, $sourceItem);
+            $contextItem.append($snippet);
             return $contextItem;
         },
 
@@ -1472,7 +1830,7 @@
                 $snippet.attr('data-source-match-phrase', matchPhrase);
             }
 
-            this.bindSourceContentInteraction($snippet, targetUrl, matchPhrase, $sourceItem);
+            this.bindSourceMatchInteraction($snippet, targetUrl, matchPhrase, $sourceItem);
             $wrapper.append($snippet);
             return $wrapper;
         },
@@ -1486,34 +1844,39 @@
             return $('<span class="geweb-ai-source-context-footnote"></span>').text(`[${footnoteNumber}]`);
         },
 
-	        bindSourceContentInteraction($element, url, matchPhrase, $sourceItem) {
-	            if (!url) {
-	                return;
-	            }
+        bindSourceMatchInteraction($element, url, matchPhrase, $sourceItem) {
+            if (!$element?.length || !url || !String(matchPhrase || '').trim()) {
+                return;
+            }
 
-	            const activateOrOpen = (event) => {
-	                this.setScrollablePaneActive?.('sources');
-	                if (!$sourceItem?.length || !$sourceItem.hasClass('is-active')) {
-	                    event.preventDefault();
-	                    event.stopPropagation();
-	                    if ($sourceItem?.length) {
+            $element.find('mark.geweb-ai-inline-match').each((_, node) => {
+                const $match = $(node);
+                $match.attr('tabindex', '0');
+                $match.attr('role', 'link');
+                $match.attr('title', `Open source at first match: ${matchPhrase}`);
+                $match.addClass('geweb-ai-inline-match--interactive');
+                $match.on('click', (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    this.setScrollablePaneActive?.('sources');
+                    if ($sourceItem?.length && !$sourceItem.hasClass('is-active')) {
                         this.activateSourceReferenceItem($sourceItem);
                     }
-                    return;
-                }
+                    this.openSourceDestination(url, matchPhrase);
+                });
+                $match.on('keydown', (event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') {
+                        return;
+                    }
 
-                this.openSourceDestination(url, matchPhrase);
-            };
-
-            $element.attr('tabindex', '0');
-            $element.attr('role', 'link');
-            $element.attr('title', matchPhrase ? `Open at first match: ${matchPhrase}` : 'Open source');
-            $element.on('click', activateOrOpen);
-            $element.on('keydown', (event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault();
-                    activateOrOpen(event);
-                }
+                    event.stopPropagation();
+                    this.setScrollablePaneActive?.('sources');
+                    if ($sourceItem?.length && !$sourceItem.hasClass('is-active')) {
+                        this.activateSourceReferenceItem($sourceItem);
+                    }
+                    this.openSourceDestination(url, matchPhrase);
+                });
             });
         },
 
@@ -1588,6 +1951,105 @@
             this.hydrateResolvedSourceReferenceHint($item, nextHint);
         },
 
+        async hydrateReconstructedSourceContexts($list, sources) {
+            if (!$list.length || !Array.isArray(sources) || !sources.length) {
+                return;
+            }
+
+            const items = [];
+            sources.forEach((source, sourceIndex) => {
+                const sourceUrl = String(source?.url || '').trim();
+                if (!sourceUrl) {
+                    return;
+                }
+
+                const contexts = Array.isArray(source?.contexts) ? source.contexts : [];
+                contexts.forEach((context, contextIndex) => {
+                    const text = String(context?.text || '').trim();
+                    const contextUrl = String(context?.url || sourceUrl).trim();
+                    if (!text || !contextUrl) {
+                        return;
+                    }
+
+                    items.push({
+                        key: `${sourceIndex}:${contextIndex}`,
+                        url: contextUrl,
+                        sourceUrl,
+                        text,
+                    });
+                });
+            });
+
+            if (!items.length) {
+                return;
+            }
+
+            try {
+                await ensureSearchNonce();
+                const response = await $.ajax({
+                    url: geweb_aisearch.ajax_url,
+                    type: 'POST',
+                    data: {
+                        action: 'geweb_reconstruct_source_contexts',
+                        nonce: geweb_aisearch.search_nonce,
+                        items,
+                    }
+                });
+
+                const reconstructed = response?.success ? response?.data?.contexts ?? {} : {};
+                if (!reconstructed || typeof reconstructed !== 'object') {
+                    return;
+                }
+
+                $list.children('li').each((sourceIndex, element) => {
+                    const $item = $(element);
+                    const sourceInfo = $item.data('sourceInfo');
+                    if (!sourceInfo || !Array.isArray(sourceInfo.contexts)) {
+                        return;
+                    }
+
+                    let updated = false;
+                    const nextContexts = sourceInfo.contexts.map((context, contextIndex) => {
+                        const key = `${sourceIndex}:${contextIndex}`;
+                        const reconstructedText = String(reconstructed[key] || '').trim();
+                        if (!reconstructedText) {
+                            return context;
+                        }
+
+                        updated = true;
+                        return {
+                            ...context,
+                            text: reconstructedText,
+                        };
+                    });
+
+                    if (!updated) {
+                        return;
+                    }
+
+                    const nextSourceInfo = {
+                        ...sourceInfo,
+                        contexts: nextContexts,
+                    };
+                    $item.data('sourceInfo', nextSourceInfo);
+                    this.applySourceItemAttributes($item, nextSourceInfo);
+                    const previewSnippet = String(nextSourceInfo.snippet || nextContexts[0]?.text || '').trim();
+                    const referenceHint = this.getManagedSourceReferenceHint(String(nextSourceInfo.url || '').trim());
+                    const $details = this.buildSourceDetails(
+                        String(nextSourceInfo.url || '').trim(),
+                        nextContexts,
+                        previewSnippet,
+                        referenceHint,
+                        $item,
+                        Number(nextSourceInfo.footnote || 0)
+                    );
+                    $item.find('.geweb-ai-source-details').replaceWith($details);
+                });
+            } catch (error) {
+                console.debug('Source context reconstruction failed.', error);
+            }
+        },
+
         hydrateResolvedSourceReferenceHint($item, nextHint) {
             const $hint = $item.find('.geweb-ai-source-link-hint').first();
             if (!nextHint) {
@@ -1608,18 +2070,20 @@
         normalizeSources(sources, answerText, responseMeta) {
             const seen = new Set();
             const haystack = String(answerText || '').toLowerCase();
+            const explicitSources = Array.isArray(sources) ? sources : [];
             const groundingSources = this.extractSourcesFromGroundingChunks(responseMeta, sources, answerText, seen);
             if (groundingSources.length) {
                 return groundingSources;
             }
 
-            const normalized = Array.isArray(sources) && sources.length
-                ? sources.reduce((accumulator, source) => {
+            const normalized = explicitSources.length
+                ? explicitSources.reduce((accumulator, source) => {
                     const title = source?.title ? String(source.title).trim() : '';
-                    const url = source?.url ? String(source.url).trim() : '';
-                    const key = (url || title).toLowerCase();
+                    const explicitUrl = source?.url ? String(source.url).trim() : '';
+                    const url = this.resolveManagedSourceUrl(explicitUrl, title, answerText);
+                    const key = (url || title || explicitUrl).toLowerCase();
 
-                    if (!key || seen.has(key) || !this.isManagedSourceUrl(url)) {
+                    if (!key || seen.has(key) || !url) {
                         return accumulator;
                     }
 
@@ -1646,6 +2110,20 @@
             }
 
             return this.extractSourcesFromAnswerText(answerText, seen);
+        },
+
+        resolveManagedSourceUrl(url, title, answerText) {
+            const directUrl = this.normalizeManagedSourceUrl(url);
+            if (directUrl) {
+                return directUrl;
+            }
+
+            const inferredDocumentUrl = this.buildManagedDocumentUrlFromTitle(title);
+            if (inferredDocumentUrl) {
+                return inferredDocumentUrl;
+            }
+
+            return this.findManagedUrlMentionedInAnswer(String(title || '').trim(), answerText);
         },
 
         extractSourcesFromGroundingChunks(responseMeta, sources, answerText, seen) {
@@ -1972,7 +2450,7 @@
                 return phrases
                     .map((phrase) => this.normalizeSourceContextText(phrase))
                     .filter(Boolean);
-            } catch (error) {
+            } catch {
                 return [];
             }
         },
@@ -2209,7 +2687,17 @@
             }
 
             const normalized = safeParseUrl(candidate, siteUrl);
-            return normalized?.origin === siteUrl.origin ? normalized.toString() : '';
+            if (!normalized) {
+                return '';
+            }
+
+            const siteHost = normalizeManagedHost(siteUrl.hostname);
+            const candidateHost = normalizeManagedHost(normalized.hostname);
+            if (!siteHost || !candidateHost || siteHost !== candidateHost) {
+                return '';
+            }
+
+            return normalized.toString();
         },
 
         isManagedSourceUrl(url) {

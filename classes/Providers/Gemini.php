@@ -79,7 +79,7 @@ class Gemini implements AIProviderInterface {
     ];
     private const MODEL_SELECTION_MODE_DEFAULT = 'default';
     private const MODEL_SELECTION_MODE_CUSTOM = 'custom';
-    private const TRANSIENT_MODELS = 'geweb_aisearch_gemini_models';
+    private const TRANSIENT_MODELS = 'geweb_aisearch_gemini_models_v2';
     private const MODEL_PRICING_USD_PER_MILLION = [
         'gemini-2.5-flash' => [
             'input' => 0.30,
@@ -90,6 +90,14 @@ class Gemini implements AIProviderInterface {
             'output' => 10.00,
         ],
     ];
+    private const DEFAULT_HTTP_TIMEOUT_SECONDS = 45;
+    private const DEFAULT_SUMMARY_TIMEOUT_SECONDS = 12;
+    private const DEFAULT_UPLOAD_OPERATION_TIMEOUT_SECONDS = 300;
+    private const DEFAULT_UPLOAD_OPERATION_POLL_INTERVAL_MS = 5000;
+    private const MAX_UPLOAD_FILE_BYTES = 104857600;
+    private const DEFAULT_OCR_MODEL = 'gemini-2.5-flash';
+    private const STALE_FAILED_MODEL_RETENTION_SECONDS = WEEK_IN_SECONDS;
+    private const MODEL_TEST_TIMEOUT_SECONDS = 20;
 
     /**
      * @var string Gemini API key
@@ -112,6 +120,18 @@ class Gemini implements AIProviderInterface {
 
         $this->apiKey = $encryption->getApiKey();
         $this->model = $this->getModel();
+    }
+
+    private function logInfo(string $message): void {
+        error_log('INFO geweb-ai-search: ' . $message);
+    }
+
+    private function logWarning(string $message): void {
+        error_log('WARN geweb-ai-search: ' . $message);
+    }
+
+    private function logError(string $message): void {
+        error_log('ERROR geweb-ai-search: ' . $message);
     }
 
     /**
@@ -308,12 +328,103 @@ class Gemini implements AIProviderInterface {
      * @throws \Exception
      */
     public function uploadLocalFile(string $filePath, string $displayName, string $mimeType): string {
+        $fileSize = @filesize($filePath);
+        if (is_int($fileSize) || is_float($fileSize)) {
+            $fileSize = (int) $fileSize;
+            if ($fileSize > self::MAX_UPLOAD_FILE_BYTES) {
+                throw new \Exception(sprintf(
+                    'File is too large for Gemini File Search upload (%s). Maximum allowed size is 100 MB.',
+                    $this->formatByteSize($fileSize)
+                ));
+            }
+        }
+
         $content = file_get_contents($filePath);
         if ($content === false) {
             throw new \Exception('Could not read local file for upload.');
         }
 
         return $this->uploadMultipartDocument($content, $displayName, $mimeType);
+    }
+
+    public function extractImageText(string $filePath, string $mimeType): string {
+        if (empty($this->apiKey)) {
+            throw new ConfigurationException('Configuration error');
+        }
+
+        $mimeType = trim($mimeType);
+        if ($mimeType === '' || strpos($mimeType, 'image/') !== 0) {
+            throw new \Exception('Invalid image MIME type for OCR.');
+        }
+
+        $content = file_get_contents($filePath);
+        if ($content === false) {
+            throw new \Exception('Could not read local image file for OCR.');
+        }
+
+        $model = apply_filters('geweb_aisearch_gemini_ocr_model', self::DEFAULT_OCR_MODEL);
+        $model = is_string($model) && trim($model) !== '' ? trim($model) : self::DEFAULT_OCR_MODEL;
+        $url = self::API_BASE . '/models/' . $model . ':generateContent';
+        $body = [
+            'contents' => [[
+                'role' => 'user',
+                'parts' => [
+                    ['text' => 'Extract all visible text from this image faithfully in reading order. Return only the extracted text. If there is no readable text, return an empty response.'],
+                    [
+                        'inline_data' => [
+                            'mime_type' => $mimeType,
+                            'data' => base64_encode($content),
+                        ],
+                    ],
+                ],
+            ]],
+            'generationConfig' => [
+                'temperature' => 0,
+            ],
+        ];
+
+        $result = $this->makeRequest($url, $body, 'POST', $this->getSummaryTimeoutSeconds());
+        return trim($this->extractCandidateText($result));
+    }
+
+    public function describeImage(string $filePath, string $mimeType): string {
+        if (empty($this->apiKey)) {
+            throw new ConfigurationException('Configuration error');
+        }
+
+        $mimeType = trim($mimeType);
+        if ($mimeType === '' || strpos($mimeType, 'image/') !== 0) {
+            throw new \Exception('Invalid image MIME type for description.');
+        }
+
+        $content = file_get_contents($filePath);
+        if ($content === false) {
+            throw new \Exception('Could not read local image file for description.');
+        }
+
+        $model = apply_filters('geweb_aisearch_gemini_ocr_model', self::DEFAULT_OCR_MODEL);
+        $model = is_string($model) && trim($model) !== '' ? trim($model) : self::DEFAULT_OCR_MODEL;
+        $url = self::API_BASE . '/models/' . $model . ':generateContent';
+        $body = [
+            'contents' => [[
+                'role' => 'user',
+                'parts' => [
+                    ['text' => 'Describe this image briefly and factually. If it contains important visible text, include the meaningful text in reading order. Do not speculate or embellish.'],
+                    [
+                        'inline_data' => [
+                            'mime_type' => $mimeType,
+                            'data' => base64_encode($content),
+                        ],
+                    ],
+                ],
+            ]],
+            'generationConfig' => [
+                'temperature' => 0,
+            ],
+        ];
+
+        $result = $this->makeRequest($url, $body, 'POST', $this->getSummaryTimeoutSeconds());
+        return trim($this->extractCandidateText($result));
     }
 
     /**
@@ -329,6 +440,11 @@ class Gemini implements AIProviderInterface {
         $storeName = $this->getStoreData();
         if (empty($this->apiKey) || empty($storeName)) {
             throw new ConfigurationException('Configuration error');
+        }
+
+        $mimeType = trim($mimeType);
+        if ($mimeType === '' || preg_match('/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/i', $mimeType) !== 1) {
+            throw new \Exception(sprintf('Invalid MIME type for upload: %s', $mimeType !== '' ? $mimeType : '[empty]'));
         }
 
         $url = self::API_UPLOAD_BASE . '/' . $storeName . ':uploadToFileSearchStore?key=' . $this->apiKey;
@@ -347,34 +463,226 @@ class Gemini implements AIProviderInterface {
         $body .= $content . "\r\n";
         $body .= "--{$boundary}--";
 
+        $payloadBytes = strlen($body);
+        $contentBytes = strlen($content);
+        $startedAt = microtime(true);
+        $this->logInfo(sprintf(
+            'multipart upload starting displayName="%s" mimeType="%s" content_bytes=%d payload_bytes=%d timeout_seconds=%d store="%s"',
+            $displayName,
+            $mimeType,
+            $contentBytes,
+            $payloadBytes,
+            120,
+            $storeName
+        ));
+
         $response = wp_remote_post($url, [
             'timeout' => 120,
             'headers' => [
                 'Content-Type'           => "multipart/related; boundary={$boundary}",
+                'Content-Length'        => (string) $payloadBytes,
                 'X-Goog-Upload-Protocol' => 'multipart',
             ],
             'body' => $body,
         ]);
 
+        $elapsedMs = (int) round((microtime(true) - $startedAt) * 1000);
+
         if (is_wp_error($response)) {
-            throw new \Exception(esc_html('Upload failed: ' . $response->get_error_message()));
+            $this->logError(sprintf(
+                'multipart upload transport failure after %d ms displayName="%s" message="%s"',
+                $elapsedMs,
+                $displayName,
+                $response->get_error_message()
+            ));
+            throw new \Exception(esc_html(sprintf(
+                'Upload failed during transport after %d ms: %s',
+                $elapsedMs,
+                $response->get_error_message()
+            )));
         }
 
         $httpCode     = wp_remote_retrieve_response_code($response);
         $responseBody = wp_remote_retrieve_body($response);
+        $responseBytes = strlen($responseBody);
+        $this->logInfo(sprintf(
+            'multipart upload response received displayName="%s" http_code=%d elapsed_ms=%d response_bytes=%d',
+            $displayName,
+            $httpCode,
+            $elapsedMs,
+            $responseBytes
+        ));
 
         if ($httpCode < 200 || $httpCode >= 300) {
-            throw new \Exception(esc_html("Upload failed with HTTP code {$httpCode}"));
+            $responseSnippet = trim(substr(preg_replace('/\s+/', ' ', $responseBody), 0, 300));
+            $this->logError(sprintf(
+                'multipart upload API failure displayName="%s" http_code=%d elapsed_ms=%d response_snippet="%s"',
+                $displayName,
+                $httpCode,
+                $elapsedMs,
+                $responseSnippet
+            ));
+            throw new \Exception(esc_html(sprintf(
+                'Upload failed after %d ms with HTTP code %d',
+                $elapsedMs,
+                $httpCode
+            )));
         }
 
         $result = json_decode($responseBody, true);
-        if (empty($result['response']['documentName'])) {
-            throw new \Exception('Invalid upload response');
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            $this->logError(sprintf(
+                'multipart upload JSON decode failure displayName="%s" elapsed_ms=%d json_error="%s"',
+                $displayName,
+                $elapsedMs,
+                json_last_error_msg()
+            ));
+            throw new \Exception(esc_html(sprintf(
+                'Upload returned invalid JSON after %d ms: %s',
+                $elapsedMs,
+                json_last_error_msg()
+            )));
         }
+
+        $documentName = $this->extractUploadDocumentName($result);
+        if ($documentName === '' && $this->isUploadOperationResponse($result)) {
+            $operationName = trim((string) ($result['name'] ?? ''));
+            $this->logInfo(sprintf(
+                'multipart upload queued operation="%s" displayName="%s" initial_elapsed_ms=%d',
+                $operationName,
+                $displayName,
+                $elapsedMs
+            ));
+
+            $operationResult = $this->waitForUploadOperation($operationName, $displayName, $elapsedMs);
+            $documentName = $this->extractUploadDocumentName($operationResult);
+            $result = $operationResult;
+            $elapsedMs = isset($operationResult['_geweb_elapsed_ms']) ? (int) $operationResult['_geweb_elapsed_ms'] : $elapsedMs;
+        }
+
+        if ($documentName === '') {
+            $this->logError(sprintf(
+                'multipart upload missing documentName displayName="%s" elapsed_ms=%d',
+                $displayName,
+                $elapsedMs
+            ));
+            throw new \Exception(sprintf(
+                'Upload completed after %d ms but returned an invalid response',
+                $elapsedMs
+            ));
+        }
+
+        $this->logInfo(sprintf(
+            'multipart upload completed displayName="%s" document_name="%s" elapsed_ms=%d',
+            $displayName,
+            $documentName,
+            $elapsedMs
+        ));
 
         $this->clearStoresCache();
 
-        return $result['response']['documentName'];
+        return $documentName;
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return string
+     */
+    private function extractUploadDocumentName(array $payload): string {
+        $candidates = [
+            $payload['response']['documentName'] ?? '',
+            $payload['response']['document_name'] ?? '',
+            $payload['documentName'] ?? '',
+            $payload['document_name'] ?? '',
+            $payload['response']['name'] ?? '',
+        ];
+
+        foreach ($candidates as $candidate) {
+            $value = trim((string) $candidate);
+            if ($value !== '' && strpos($value, 'fileSearchStores/') !== false) {
+                return $value;
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return bool
+     */
+    private function isUploadOperationResponse(array $payload): bool {
+        $name = trim((string) ($payload['name'] ?? ''));
+        return $name !== ''
+            && strpos($name, 'fileSearchStores/') === 0
+            && strpos($name, '/operations/') !== false;
+    }
+
+    /**
+     * @return array<string,mixed>
+     * @throws \Exception
+     */
+    private function waitForUploadOperation(string $operationName, string $displayName, int $initialElapsedMs = 0): array {
+        $operationName = trim($operationName);
+        if ($operationName === '') {
+            throw new \Exception('Upload operation name is missing.');
+        }
+
+        $timeoutSeconds = $this->getUploadOperationTimeoutSeconds();
+        $pollIntervalMs = $this->getUploadOperationPollIntervalMs();
+        $startedAt = microtime(true);
+        $attempt = 0;
+
+        do {
+            $attempt++;
+            $result = $this->fetchUploadOperation($operationName);
+            $elapsedMs = $initialElapsedMs + (int) round((microtime(true) - $startedAt) * 1000);
+            $done = !empty($result['done']);
+            error_log(sprintf(
+                'geweb-ai-search: upload operation poll operation="%s" displayName="%s" attempt=%d done=%s elapsed_ms=%d',
+                $operationName,
+                $displayName,
+                $attempt,
+                $done ? 'true' : 'false',
+                $elapsedMs
+            ));
+
+            if (!empty($result['error']) && is_array($result['error'])) {
+                $message = trim((string) ($result['error']['message'] ?? 'Upload operation failed.'));
+                $code = isset($result['error']['code']) ? (int) $result['error']['code'] : 0;
+                error_log(sprintf(
+                    'geweb-ai-search: upload operation error operation="%s" code=%d message="%s" elapsed_ms=%d',
+                    $operationName,
+                    $code,
+                    $message,
+                    $elapsedMs
+                ));
+                throw new \Exception(sprintf('Upload operation failed after %d ms: %s', $elapsedMs, $message));
+            }
+
+            if ($done) {
+                $result['_geweb_elapsed_ms'] = $elapsedMs;
+                return $result;
+            }
+
+            if ((microtime(true) - $startedAt) >= $timeoutSeconds) {
+                throw new \Exception(sprintf(
+                    'Upload operation did not complete within %d ms',
+                    $initialElapsedMs + ($timeoutSeconds * 1000)
+                ));
+            }
+
+            usleep(max(0, $pollIntervalMs) * 1000);
+        } while (true);
+    }
+
+    /**
+     * @return array<string,mixed>
+     * @throws \Exception
+     */
+    private function fetchUploadOperation(string $operationName): array {
+        $url = self::API_BASE . '/' . ltrim($operationName, '/');
+        return $this->makeRequest($url, null, 'GET', 30);
     }
 
     /**
@@ -621,6 +929,7 @@ class Gemini implements AIProviderInterface {
             'name' => $name,
             'display_name' => $this->pickFirstDocumentFieldValue($document, ['displayName', 'display_name']),
             'mime_type' => $this->pickFirstDocumentFieldValue($document, ['mimeType', 'mime_type']),
+            'size_bytes' => (string) $this->pickFirstDocumentFieldValue($document, ['sizeBytes', 'size_bytes']),
         ];
     }
 
@@ -660,6 +969,10 @@ class Gemini implements AIProviderInterface {
 
         // Build request body
         $promptDescriptor = $this->getPromptDescriptor($requestModel, $promptOverride);
+        $effectivePrompt = trim((string) ($promptDescriptor['instruction'] ?? ''));
+        if ($effectivePrompt !== '' && PromptSupport::containsDisallowedUrl($effectivePrompt)) {
+            throw new \Exception('Prompt cannot contain URLs. Remove links and try again.');
+        }
         $body = $this->buildSearchBody(
             $messages,
             $storeName,
@@ -687,7 +1000,7 @@ class Gemini implements AIProviderInterface {
      */
     private function executeSearchRequest(string $model, array $body): array {
         $url = self::API_BASE . '/models/' . $model . ':generateContent';
-        return $this->makeRequest($url, $body, 'POST');
+        return $this->makeRequest($url, $body, 'POST', $this->getHttpTimeoutSeconds());
     }
 
     /**
@@ -695,11 +1008,92 @@ class Gemini implements AIProviderInterface {
      * @return string
      */
     private function extractSearchResponseText(array $result): string {
-        if (empty($result['candidates'][0]['content']['parts'][0]['text'])) {
-            throw new \Exception('Empty response from AI');
+        $responseText = $this->extractCandidateText($result);
+
+        if ($responseText === '') {
+            throw new \Exception($this->buildEmptyResponseErrorMessage($result));
         }
 
-        return (string) $result['candidates'][0]['content']['parts'][0]['text'];
+        return $responseText;
+    }
+
+    /**
+     * @param array<string,mixed> $result
+     * @return string
+     */
+    private function extractCandidateText(array $result): string {
+        $candidates = isset($result['candidates']) && is_array($result['candidates'])
+            ? $result['candidates']
+            : [];
+
+        if (empty($candidates)) {
+            return '';
+        }
+
+        $textParts = [];
+
+        foreach ($candidates as $candidate) {
+            if (!is_array($candidate)) {
+                continue;
+            }
+
+            $parts = isset($candidate['content']['parts']) && is_array($candidate['content']['parts'])
+                ? $candidate['content']['parts']
+                : [];
+
+            foreach ($parts as $part) {
+                if (!is_array($part) || !isset($part['text'])) {
+                    continue;
+                }
+
+                $text = trim((string) $part['text']);
+                if ($text !== '') {
+                    $textParts[] = $text;
+                }
+            }
+
+            if (!empty($textParts)) {
+                break;
+            }
+        }
+
+        return trim(implode("\n", $textParts));
+    }
+
+    /**
+     * @param array<string,mixed> $result
+     * @return string
+     */
+    private function buildEmptyResponseErrorMessage(array $result): string {
+        $candidate = isset($result['candidates'][0]) && is_array($result['candidates'][0])
+            ? $result['candidates'][0]
+            : [];
+
+        $finishReason = strtoupper(trim((string) ($candidate['finishReason'] ?? '')));
+        $finishMessage = trim((string) ($candidate['finishMessage'] ?? ''));
+        $toolTokens = (int) ($result['usageMetadata']['toolUsePromptTokenCount'] ?? 0);
+
+        if ($finishReason === 'MAX_TOKENS') {
+            return 'AI response was truncated by MAX_TOKENS. No automatic retry was done. Please shorten the question or temporarily exclude one or more sources and try again.';
+        }
+
+        if ($finishReason === 'SAFETY') {
+            return 'AI response was blocked by safety filters. Please rephrase the request.';
+        }
+
+        if ($toolTokens > 200000) {
+            return 'AI returned no answer text because the search context became too large. No automatic retry was done. Please temporarily exclude one or more large sources in the Sources panel and try again.';
+        }
+
+        if ($finishMessage !== '') {
+            return 'AI returned no answer text. ' . $finishMessage . ' You can temporarily exclude specific sources and retry.';
+        }
+
+        if ($finishReason !== '') {
+            return 'AI returned no answer text (finish reason: ' . $finishReason . '). You can temporarily exclude specific sources and retry.';
+        }
+
+        return 'AI returned no answer text. No automatic retry was done. Please temporarily exclude one or more sources and try again.';
     }
 
     /**
@@ -731,6 +1125,81 @@ class Gemini implements AIProviderInterface {
     }
 
     /**
+     * Build a concise API-generated summary for older conversation turns.
+     *
+     * @param array<int,array<string,mixed>> $messages
+     * @param string|null $model
+     * @param int $maxItems
+     * @return string
+     */
+    public function summarizeConversationForContext(array $messages, ?string $model = null, int $maxItems = 5, string $previousSummary = ''): string {
+        $normalizedItems = [];
+
+        foreach ($messages as $message) {
+            if (!is_array($message)) {
+                continue;
+            }
+
+            $role = isset($message['role']) ? (string) $message['role'] : 'user';
+            $content = trim(wp_strip_all_tags((string) ($message['content'] ?? '')));
+            if ($content === '') {
+                continue;
+            }
+
+            if (function_exists('mb_strimwidth')) {
+                $content = mb_strimwidth($content, 0, 520, '...');
+            } elseif (strlen($content) > 520) {
+                $content = substr($content, 0, 517) . '...';
+            }
+
+            $normalizedItems[] = [
+                'role' => $role === 'model' ? 'assistant' : 'user',
+                'content' => $content,
+            ];
+        }
+
+        if (empty($normalizedItems)) {
+            return '';
+        }
+
+        $lines = [];
+        foreach ($normalizedItems as $item) {
+            $lines[] = '- ' . ucfirst((string) $item['role']) . ': ' . (string) $item['content'];
+        }
+
+        $maxItems = max(1, min(8, $maxItems));
+        $previousSummary = trim($previousSummary);
+        $prompt = "Summarize the earlier conversation for continuation.\n" .
+            "Return exactly a short Dutch summary with at most {$maxItems} bullet points.\n" .
+            "Focus only on: verified facts, corrections, open questions, and constraints.\n" .
+            "Do not include markdown code blocks.\n\n" .
+            ($previousSummary !== ''
+                ? ("Previous summary (N-1), refine and keep only still relevant items:\n" . $previousSummary . "\n\n")
+                : '') .
+            "Conversation:\n" . implode("\n", $lines);
+
+        $requestModel = is_string($model) && $model !== '' ? $model : $this->model;
+        $url = self::API_BASE . '/models/' . $requestModel . ':generateContent';
+        $body = [
+            'contents' => [[
+                'role' => 'user',
+                'parts' => [['text' => $prompt]],
+            ]],
+            'generationConfig' => [
+                'temperature' => 0.1,
+            ],
+        ];
+
+        $result = $this->makeRequest($url, $body, 'POST', $this->getSummaryTimeoutSeconds());
+        $summary = $this->extractCandidateText($result);
+        if ($summary === '') {
+            return '';
+        }
+
+        return "Earlier conversation summary:\n" . trim($summary);
+    }
+
+    /**
      * Make HTTP request to Gemini API
      *
      * @param string $url Full API URL
@@ -739,15 +1208,17 @@ class Gemini implements AIProviderInterface {
      * @return array Decoded JSON response
      * @throws \Exception On request error
      */
-    private function makeRequest(string $url, ?array $body = null, string $method = 'POST'): array {
+    private function makeRequest(string $url, ?array $body = null, string $method = 'POST', int $timeoutSeconds = self::DEFAULT_HTTP_TIMEOUT_SECONDS): array {
         if (empty($this->apiKey)) {
             throw new ConfigurationException('Configuration error');
         }
 
+        $originalUrl = $url;
         $url = $this->appendApiKeyToUrl($url);
+        $timeoutSeconds = max(5, min(110, $timeoutSeconds));
         $args = [
             'method'  => $method,
-            'timeout' => 120,
+            'timeout' => $timeoutSeconds,
             'headers' => [
                 'Content-Type'  => 'application/json',
                 'Accept'        => 'application/json',
@@ -758,25 +1229,129 @@ class Gemini implements AIProviderInterface {
             $args['body'] = wp_json_encode($body);
         }
 
+        $startedAt = microtime(true);
+        $bodyBytes = isset($args['body']) ? strlen((string) $args['body']) : 0;
+        $this->logInfo(sprintf(
+            'Gemini request starting method=%s timeout_seconds=%d body_bytes=%d endpoint="%s"',
+            $method,
+            $timeoutSeconds,
+            $bodyBytes,
+            $this->redactApiKeyFromUrl($originalUrl)
+        ));
+
         $response = wp_remote_request($url, $args);
+        $elapsedMs = (int) round((microtime(true) - $startedAt) * 1000);
 
         if (is_wp_error($response)) {
-            throw new \Exception(esc_html('API request failed: ' . $response->get_error_message()));
+            $this->logError(sprintf(
+                'Gemini request transport failure method=%s elapsed_ms=%d endpoint="%s" message="%s"',
+                $method,
+                $elapsedMs,
+                $this->redactApiKeyFromUrl($originalUrl),
+                $response->get_error_message()
+            ));
+            throw new \Exception(esc_html(sprintf(
+                'API request failed after %d ms: %s',
+                $elapsedMs,
+                $response->get_error_message()
+            )));
         }
 
         $httpCode = wp_remote_retrieve_response_code($response);
         $responseBody = wp_remote_retrieve_body($response);
+        $responseBytes = strlen($responseBody);
+        $this->logInfo(sprintf(
+            'Gemini request response method=%s http_code=%d elapsed_ms=%d response_bytes=%d endpoint="%s"',
+            $method,
+            $httpCode,
+            $elapsedMs,
+            $responseBytes,
+            $this->redactApiKeyFromUrl($originalUrl)
+        ));
 
         if ($httpCode < 200 || $httpCode >= 300) {
-            throw new \Exception(esc_html("API request failed with HTTP code {$httpCode}: {$responseBody}"));
+            $responseSnippet = trim(substr(preg_replace('/\s+/', ' ', $responseBody), 0, 400));
+            $this->logError(sprintf(
+                'Gemini request API failure method=%s http_code=%d elapsed_ms=%d endpoint="%s" response_snippet="%s"',
+                $method,
+                $httpCode,
+                $elapsedMs,
+                $this->redactApiKeyFromUrl($originalUrl),
+                $responseSnippet
+            ));
+            throw new \Exception(esc_html(sprintf(
+                'API request failed after %d ms with HTTP code %d: %s',
+                $elapsedMs,
+                $httpCode,
+                $responseBody
+            )));
         }
 
         $result = json_decode($responseBody, true);
         if (json_last_error() !== JSON_ERROR_NONE) {
-            throw new \Exception(esc_html('Failed to decode JSON response: ' . json_last_error_msg()));
+            $this->logError(sprintf(
+                'Gemini request JSON decode failure method=%s elapsed_ms=%d endpoint="%s" json_error="%s"',
+                $method,
+                $elapsedMs,
+                $this->redactApiKeyFromUrl($originalUrl),
+                json_last_error_msg()
+            ));
+            throw new \Exception(esc_html(sprintf(
+                'Failed to decode JSON response after %d ms: %s',
+                $elapsedMs,
+                json_last_error_msg()
+            )));
         }
 
         return $result;
+    }
+
+    private function redactApiKeyFromUrl(string $url): string {
+        return preg_replace('/([?&]key=)[^&]+/i', '$1[redacted]', $url) ?? $url;
+    }
+
+    private function formatByteSize(int $bytes): string {
+        if ($bytes >= 1048576) {
+            return round($bytes / 1048576, 2) . ' MB';
+        }
+
+        if ($bytes >= 1024) {
+            return round($bytes / 1024, 2) . ' KB';
+        }
+
+        return $bytes . ' bytes';
+    }
+
+    /**
+     * @return int
+     */
+    private function getHttpTimeoutSeconds(): int {
+        $timeout = apply_filters('geweb_aisearch_gemini_http_timeout', self::DEFAULT_HTTP_TIMEOUT_SECONDS);
+        return is_numeric($timeout) ? (int) $timeout : self::DEFAULT_HTTP_TIMEOUT_SECONDS;
+    }
+
+    /**
+     * @return int
+     */
+    private function getSummaryTimeoutSeconds(): int {
+        $timeout = apply_filters('geweb_aisearch_gemini_summary_timeout', self::DEFAULT_SUMMARY_TIMEOUT_SECONDS);
+        return is_numeric($timeout) ? (int) $timeout : self::DEFAULT_SUMMARY_TIMEOUT_SECONDS;
+    }
+
+    /**
+     * @return int
+     */
+    private function getUploadOperationTimeoutSeconds(): int {
+        $timeout = apply_filters('geweb_aisearch_gemini_upload_operation_timeout', self::DEFAULT_UPLOAD_OPERATION_TIMEOUT_SECONDS);
+        return is_numeric($timeout) ? (int) $timeout : self::DEFAULT_UPLOAD_OPERATION_TIMEOUT_SECONDS;
+    }
+
+    /**
+     * @return int
+     */
+    private function getUploadOperationPollIntervalMs(): int {
+        $interval = apply_filters('geweb_aisearch_gemini_upload_operation_poll_interval_ms', self::DEFAULT_UPLOAD_OPERATION_POLL_INTERVAL_MS);
+        return is_numeric($interval) ? (int) $interval : self::DEFAULT_UPLOAD_OPERATION_POLL_INTERVAL_MS;
     }
 
     /**
@@ -1247,7 +1822,7 @@ class Gemini implements AIProviderInterface {
 
         if (empty($this->apiKey)) {
             $this->recordConnectionStatus('missing', 'No API key saved.');
-            return apply_filters('geweb_aisearch_gemini_models', $models);
+            return apply_filters('geweb_aisearch_gemini_models', $this->filterStaleFailedModels($models));
         }
 
         $cachedModels = get_transient(self::TRANSIENT_MODELS);
@@ -1258,7 +1833,7 @@ class Gemini implements AIProviderInterface {
             if (!empty($filteredCachedModels)) {
                 set_transient(self::TRANSIENT_MODELS, $filteredCachedModels, 12 * HOUR_IN_SECONDS);
                 if (!$forceRefresh) {
-                    return apply_filters('geweb_aisearch_gemini_models', $filteredCachedModels);
+                    return apply_filters('geweb_aisearch_gemini_models', $this->filterStaleFailedModels($filteredCachedModels));
                 }
             }
         }
@@ -1268,17 +1843,17 @@ class Gemini implements AIProviderInterface {
             if (!empty($remoteModels)) {
                 set_transient(self::TRANSIENT_MODELS, $remoteModels, 12 * HOUR_IN_SECONDS);
                 $this->recordConnectionStatus('ok', 'Gemini API key is valid.');
-                return apply_filters('geweb_aisearch_gemini_models', $remoteModels);
+                return apply_filters('geweb_aisearch_gemini_models', $this->filterStaleFailedModels($remoteModels));
             }
         } catch (\Exception $e) {
             $this->recordConnectionStatus('failed', $this->sanitizeConnectionErrorMessage($e->getMessage()));
         }
 
         if (!empty($filteredCachedModels)) {
-            return apply_filters('geweb_aisearch_gemini_models', $filteredCachedModels);
+            return apply_filters('geweb_aisearch_gemini_models', $this->filterStaleFailedModels($filteredCachedModels));
         }
 
-        return apply_filters('geweb_aisearch_gemini_models', $models);
+        return apply_filters('geweb_aisearch_gemini_models', $this->filterStaleFailedModels($models));
     }
 
     /**
@@ -1287,7 +1862,7 @@ class Gemini implements AIProviderInterface {
      * @return array<int,string>
      */
     private function getDefaultModels(): array {
-        return [
+        $models = [
             self::DEFAULT_MODEL,
             'gemini-3-flash-preview',
             'gemini-3.1-flash-lite-preview',
@@ -1295,6 +1870,22 @@ class Gemini implements AIProviderInterface {
             'gemini-2.5-flash',
             'gemini-2.5-flash-lite',
         ];
+
+        $cachedModels = get_transient(self::TRANSIENT_MODELS);
+        if (is_array($cachedModels)) {
+            foreach ($cachedModels as $model) {
+                if (is_string($model) && $this->supportsFileSearch($model)) {
+                    $models[] = $model;
+                }
+            }
+        }
+
+        $storedModel = (string) get_option(self::OPTION_MODEL, '');
+        if ($storedModel !== '' && $this->supportsFileSearch($storedModel)) {
+            $models[] = $storedModel;
+        }
+
+        return array_values(array_unique($models));
     }
 
     /**
@@ -1364,6 +1955,37 @@ class Gemini implements AIProviderInterface {
     }
 
     /**
+     * @param array<int,string> $models
+     * @return array<int,string>
+     */
+    private function filterStaleFailedModels(array $models): array {
+        $statuses = $this->getModelStatuses();
+        $now = current_time('timestamp');
+        $connectionStatus = $this->getConnectionStatus();
+        $hasRecentSuccessfulConnection = is_array($connectionStatus)
+            && (($connectionStatus['status'] ?? '') === 'ok')
+            && ($now - (int) ($connectionStatus['timestamp'] ?? 0)) < self::STALE_FAILED_MODEL_RETENTION_SECONDS;
+
+        return array_values(array_filter($models, function ($model) use ($statuses, $now): bool {
+            if (!is_string($model) || trim($model) === '') {
+                return false;
+            }
+
+            $status = $statuses[$model] ?? null;
+            if (!is_array($status) || ($status['status'] ?? '') !== 'failed') {
+                return true;
+            }
+
+            $timestamp = isset($status['timestamp']) ? (int) $status['timestamp'] : 0;
+            if ($timestamp <= 0) {
+                return true;
+            }
+
+            return ($now - $timestamp) < self::STALE_FAILED_MODEL_RETENTION_SECONDS || !$hasRecentSuccessfulConnection;
+        }));
+    }
+
+    /**
      * Get recorded API connection status.
      *
      * @return array<string,mixed>
@@ -1423,6 +2045,53 @@ class Gemini implements AIProviderInterface {
      */
     public function clearModelsCache(): void {
         delete_transient(self::TRANSIENT_MODELS);
+    }
+
+    /**
+     * @param string $model
+     * @return array<string,mixed>
+     */
+    public function testModel(string $model): array {
+        $requestModel = trim($model);
+        if ($requestModel === '') {
+            return [
+                'status' => 'failed',
+                'message' => 'No model selected.',
+                'timestamp' => current_time('timestamp'),
+            ];
+        }
+
+        try {
+            $body = [
+                'contents' => [[
+                    'parts' => [[
+                        'text' => 'Reply with OK.',
+                    ]],
+                ]],
+                'generationConfig' => [
+                    'temperature' => 0,
+                    'maxOutputTokens' => 8,
+                ],
+            ];
+
+            $url = self::API_BASE . '/models/' . $requestModel . ':generateContent';
+            $this->makeRequest($url, $body, 'POST', self::MODEL_TEST_TIMEOUT_SECONDS);
+            $this->recordModelStatus($requestModel, 'ok');
+
+            return [
+                'status' => 'ok',
+                'message' => 'Model responded successfully.',
+                'timestamp' => current_time('timestamp'),
+            ];
+        } catch (\Exception $e) {
+            $this->recordModelStatus($requestModel, 'failed', $e->getMessage());
+
+            return [
+                'status' => 'failed',
+                'message' => $this->sanitizeConnectionErrorMessage($e->getMessage()),
+                'timestamp' => current_time('timestamp'),
+            ];
+        }
     }
 
     /**
@@ -1619,17 +2288,18 @@ class Gemini implements AIProviderInterface {
     /**
      * Determine whether a model supports Gemini File Search.
      *
-     * Based on Google's File Search docs:
-     * gemini-3-flash-preview, gemini-3.1-flash-lite-preview,
-     * gemini-2.5-pro, gemini-2.5-flash, and gemini-2.5-flash-lite.
-     *
-     * Note: Gemini 3.1 Pro Preview currently lists file search as
-     * "Supported (AI Studio only)", so it's intentionally excluded here.
+     * Uses a broad Gemini chat model pattern so newly released models
+     * become available without plugin code updates.
      *
      * @param string $model
      * @return bool
      */
     private function supportsFileSearch(string $model): bool {
+        $normalizedModel = strtolower(trim($model));
+        if ($normalizedModel === '') {
+            return false;
+        }
+
         $blockedFragments = [
             'tts',
             'speech',
@@ -1637,29 +2307,21 @@ class Gemini implements AIProviderInterface {
             'embedding',
             'image-generation',
             'vision-preview-generation',
+            'image',
+            'video',
+            'live',
+            'robotics',
+            'deep-research',
+            'computer-use',
         ];
 
         foreach ($blockedFragments as $fragment) {
-            if (strpos($model, $fragment) !== false) {
+            if (strpos($normalizedModel, $fragment) !== false) {
                 return false;
             }
         }
 
-        $allowedPrefixes = [
-            'gemini-3-flash-preview',
-            'gemini-3.1-flash-lite-preview',
-            'gemini-2.5-pro',
-            'gemini-2.5-flash',
-            'gemini-2.5-flash-lite',
-        ];
-
-        foreach ($allowedPrefixes as $prefix) {
-            if (strpos($model, $prefix) === 0) {
-                return true;
-            }
-        }
-
-        return false;
+        return preg_match('/^gemini-[0-9][a-z0-9.\-]*-(pro|flash|flash-lite)(?:-|$)/', $normalizedModel) === 1;
     }
 
     /**

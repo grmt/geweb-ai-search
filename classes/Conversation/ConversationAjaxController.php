@@ -68,11 +68,12 @@ class ConversationAjaxController {
         $conversationId = isset($_POST['conversation_id']) ? FrontendAiContext::sanitizeConversationId(wp_unslash($_POST['conversation_id'])) : '';
         $summary = isset($_POST['summary']) ? sanitize_text_field(wp_unslash($_POST['summary'])) : '';
         $compacted = !empty($_POST['compacted']);
+        $contextSummary = isset($_POST['context_summary']) ? sanitize_textarea_field(wp_unslash($_POST['context_summary'])) : '';
         // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- normalized in ConversationManager
         $messages = isset($_POST['messages']) && is_array($_POST['messages']) ? wp_unslash($_POST['messages']) : [];
         // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 
-        $conversation = $this->conversationManager->saveFrontendConversation($conversationId, $messages, $summary, $compacted);
+        $conversation = $this->conversationManager->saveFrontendConversation($conversationId, $messages, $summary, $compacted, $contextSummary);
 
         wp_send_json_success([
             'conversation' => $this->conversationManager->getFrontendConversation((string) ($conversation['id'] ?? '')),

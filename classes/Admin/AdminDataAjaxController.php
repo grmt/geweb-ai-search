@@ -5,6 +5,7 @@ defined('ABSPATH') || exit;
 
 class AdminDataAjaxController {
     private const MESSAGE_INSUFFICIENT_PERMISSIONS = 'Insufficient permissions';
+    private const MODEL_REFRESH_COOLDOWN_SECONDS = DAY_IN_SECONDS;
 
     private AdminPageSections $adminPageSections;
 
@@ -28,9 +29,42 @@ class AdminDataAjaxController {
 
         wp_send_json_success([
             'html' => $html,
-            'refreshed_at' => wp_date(get_option('date_format') . ' ' . get_option('time_format'), time()),
+            'refreshed_at' => DateDisplay::formatDateTime(time()),
             'count' => count($items),
             'group_revision' => GroupDataRevision::ensureCurrentRevision(),
+        ]);
+    }
+
+    public function ajaxGetMarkdownCache(): void {
+        check_ajax_referer('geweb_ai_search_admin_actions', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => self::MESSAGE_INSUFFICIENT_PERMISSIONS], 403);
+        }
+
+        $postId = isset($_POST['post_id']) ? (int) wp_unslash($_POST['post_id']) : 0;
+        if ($postId <= 0) {
+            wp_send_json_error(['message' => 'Invalid post ID.'], 400);
+        }
+
+        $markdown = (new MarkdownCacheStore())->getMarkdown($postId);
+        if ($markdown === '') {
+            wp_send_json_error(['message' => 'No Markdown cache found for this post.'], 404);
+        }
+
+        $post = get_post($postId);
+        $renderedHtml = '';
+        if ($post instanceof \WP_Post) {
+            $renderedHtml = (string) apply_filters('the_content', $post->post_content);
+        }
+
+        wp_send_json_success([
+            'markdown' => $markdown,
+            'rendered_html' => $renderedHtml,
+            'post_id' => $postId,
+            'title' => (string) get_the_title($postId),
+            'filename' => $postId . '.md',
+            'url' => (string) get_permalink($postId),
         ]);
     }
 
@@ -86,7 +120,7 @@ class AdminDataAjaxController {
 
         wp_send_json_success([
             'html' => $html,
-            'refreshed_at' => wp_date(get_option('date_format') . ' ' . get_option('time_format'), time()),
+            'refreshed_at' => DateDisplay::formatDateTime(time()),
             'count' => count($items),
             'message' => $actionName === 'upload' ? 'Document uploaded.' : 'Document removed from store.',
             'row_exists' => is_array($updatedItem),
@@ -204,7 +238,7 @@ class AdminDataAjaxController {
 
         wp_send_json_success([
             'html' => $html,
-            'refreshed_at' => wp_date(get_option('date_format') . ' ' . get_option('time_format'), time()),
+            'refreshed_at' => DateDisplay::formatDateTime(time()),
             'count' => count($items),
             'message' => 'Nice name updated.',
             'row_exists' => is_array($updatedItem),
@@ -243,7 +277,7 @@ class AdminDataAjaxController {
 
         wp_send_json_success([
             'html' => $html,
-            'refreshed_at' => wp_date(get_option('date_format') . ' ' . get_option('time_format'), time()),
+            'refreshed_at' => DateDisplay::formatDateTime(time()),
             'count' => count($items),
             'error' => $provider->getStoreOverviewError(),
             'group_revision' => GroupDataRevision::ensureCurrentRevision(),
@@ -335,7 +369,7 @@ class AdminDataAjaxController {
 
         wp_send_json_success([
             'html' => $html,
-            'refreshed_at' => wp_date(get_option('date_format') . ' ' . get_option('time_format'), time()),
+            'refreshed_at' => DateDisplay::formatDateTime(time()),
             'count' => count($items),
             'message' => 'Gemini store deleted.',
             'deleted_store_name' => $storeName,
@@ -352,15 +386,62 @@ class AdminDataAjaxController {
         }
 
         $provider = ProviderFactory::make();
-        $models = $provider->getModels(true);
-        $selectedModel = $provider->getModel();
         $connectionStatus = $provider->getConnectionStatus();
+        $requestedForceRefresh = !empty($_POST['force_refresh']);
+        $shouldForceRefresh = $requestedForceRefresh || $this->shouldForceModelRefresh($connectionStatus);
+        $models = $provider->getModels($shouldForceRefresh);
+        $selectedModel = $provider->getModel();
+        $modelStatuses = $provider->getModelStatuses();
 
         wp_send_json_success([
             'models' => array_values($models),
             'selected_model' => $selectedModel,
             'connection_status' => $connectionStatus,
+            'model_statuses' => is_array($modelStatuses) ? $modelStatuses : [],
+            'used_cached_models' => !$shouldForceRefresh,
         ]);
+    }
+
+    public function ajaxTestModel(): void {
+        check_ajax_referer('geweb_ai_search_admin_actions', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => self::MESSAGE_INSUFFICIENT_PERMISSIONS], 403);
+        }
+
+        $model = isset($_POST['model']) ? sanitize_text_field(wp_unslash($_POST['model'])) : '';
+        if ($model === '') {
+            wp_send_json_error(['message' => 'No model selected.'], 400);
+        }
+
+        $provider = ProviderFactory::make();
+        $result = $provider->testModel($model);
+        $modelStatuses = $provider->getModelStatuses();
+
+        if (($result['status'] ?? '') === 'ok') {
+            wp_send_json_success([
+                'result' => $result,
+                'model_statuses' => $modelStatuses,
+            ]);
+        }
+
+        wp_send_json_error([
+            'message' => (string) ($result['message'] ?? 'Model test failed.'),
+            'result' => $result,
+            'model_statuses' => $modelStatuses,
+        ], 500);
+    }
+
+    /**
+     * @param array<string,mixed> $connectionStatus
+     */
+    private function shouldForceModelRefresh(array $connectionStatus): bool {
+        $timestamp = isset($connectionStatus['timestamp']) ? (int) $connectionStatus['timestamp'] : 0;
+        if ($timestamp <= 0) {
+            return true;
+        }
+
+        return (current_time('timestamp') - $timestamp) >= self::MODEL_REFRESH_COOLDOWN_SECONDS;
     }
 
     /**

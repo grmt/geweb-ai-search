@@ -10,6 +10,7 @@ class DocumentStore {
     private const OPTION_REFERENCED_CACHE = 'geweb_aisearch_referenced_documents_cache';
     private const OPTION_REFERENCED_CACHE_TIME = 'geweb_aisearch_referenced_documents_cache_time';
     private const OPTION_REFERENCED_CACHE_DEBUG = 'geweb_aisearch_referenced_documents_cache_debug';
+    private const DEFAULT_REFERENCED_CACHE_MAX_AGE = DAY_IN_SECONDS;
     private const SQL_WHERE_FILE_HASH = ' WHERE file_hash = %s';
     private const SQL_SELECT_ALL_FROM = 'SELECT * FROM ';
     private const SQL_DELETE_FROM = 'DELETE FROM ';
@@ -247,16 +248,29 @@ class DocumentStore {
      * @return string
      */
     public function resolveMimeType(string $filePath): string {
+        $extension = strtolower((string) pathinfo($filePath, PATHINFO_EXTENSION));
+        $canonicalMimeTypes = [
+            'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'xls' => 'application/vnd.ms-excel',
+            'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'doc' => 'application/msword',
+            'pptx' => 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            'ppt' => 'application/vnd.ms-powerpoint',
+        ];
+        if (isset($canonicalMimeTypes[$extension])) {
+            return $canonicalMimeTypes[$extension];
+        }
+
         $fileInfo = wp_check_filetype(basename($filePath));
-        $mimeType = isset($fileInfo['type']) ? (string) $fileInfo['type'] : '';
+        $mimeType = isset($fileInfo['type']) ? trim((string) $fileInfo['type']) : '';
         if ($mimeType !== '') {
             return $mimeType;
         }
 
         if (function_exists('mime_content_type')) {
             $detected = mime_content_type($filePath);
-            if (is_string($detected) && $detected !== '') {
-                return $detected;
+            if (is_string($detected) && trim($detected) !== '') {
+                return trim($detected);
             }
         }
 
@@ -271,7 +285,7 @@ class DocumentStore {
     public function getReferencedDocumentOverview(bool $forceRefresh = false): array {
         if (!$forceRefresh) {
             $cached = UserScope::getGroupScopedOption(self::OPTION_REFERENCED_CACHE, null);
-            if (is_array($cached)) {
+            if (is_array($cached) && $this->isReferencedDocumentOverviewCacheFresh()) {
                 return $cached;
             }
         }
@@ -290,6 +304,23 @@ class DocumentStore {
      */
     public function hasReferencedDocumentOverviewCache(): bool {
         return is_array(UserScope::getGroupScopedOption(self::OPTION_REFERENCED_CACHE, null));
+    }
+
+    /**
+     * @return bool
+     */
+    public function isReferencedDocumentOverviewCacheFresh(): bool {
+        $cacheTime = $this->getReferencedDocumentOverviewCacheTime();
+        if ($cacheTime <= 0) {
+            return false;
+        }
+
+        $maxAge = (int) apply_filters('geweb_aisearch_referenced_document_cache_max_age', self::DEFAULT_REFERENCED_CACHE_MAX_AGE);
+        if ($maxAge <= 0) {
+            $maxAge = self::DEFAULT_REFERENCED_CACHE_MAX_AGE;
+        }
+
+        return (time() - $cacheTime) < $maxAge;
     }
 
     /**
@@ -327,14 +358,19 @@ class DocumentStore {
         global $wpdb;
         $this->clearReferencedDocumentOverviewCache();
 
+        $documentIds = array_values(array_unique(array_map('intval', $documentIds)));
+
         // First, find out which documents are currently associated
         $currentDocIds = $wpdb->get_col($wpdb->prepare("SELECT document_id FROM " . self::$refsTable . " WHERE owner_key = %s AND post_id = %d", $this->ownerKey, $postId));
+        $currentDocIds = array_values(array_unique(array_map('intval', is_array($currentDocIds) ? $currentDocIds : [])));
 
         // Find which associations to remove
         $toRemove = array_diff($currentDocIds, $documentIds);
         if (!empty($toRemove)) {
-            $in = implode(',', array_map('intval', $toRemove));
-            $wpdb->query($wpdb->prepare(self::SQL_DELETE_FROM . self::$refsTable . " WHERE owner_key = %s AND post_id = %d AND document_id IN ($in)", $this->ownerKey, $postId));
+            $placeholders = implode(', ', array_fill(0, count($toRemove), '%d'));
+            $sql = self::SQL_DELETE_FROM . self::$refsTable . " WHERE owner_key = %s AND post_id = %d AND document_id IN ({$placeholders})";
+            $args = array_merge([$this->ownerKey, $postId], array_map('intval', array_values($toRemove)));
+            $wpdb->query($wpdb->prepare($sql, $args));
             $this->cleanupOrphanedDocuments($toRemove);
         }
 

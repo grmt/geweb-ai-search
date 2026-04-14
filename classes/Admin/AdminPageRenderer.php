@@ -70,7 +70,7 @@ class AdminPageRenderer {
                                 $apiStatus = (string) $connectionStatus['status'];
                                 $apiMessage = isset($connectionStatus['message']) ? (string) $connectionStatus['message'] : '';
                                 $apiTimestamp = !empty($connectionStatus['timestamp'])
-                                    ? wp_date(get_option('date_format') . ' ' . get_option('time_format'), intval($connectionStatus['timestamp']))
+                                    ? DateDisplay::formatDateTime(intval($connectionStatus['timestamp']))
                                     : '';
                                 if ($apiStatus === 'ok') {
                                     $apiColor = (string) $statusColorSuccess;
@@ -101,14 +101,80 @@ class AdminPageRenderer {
                         <td>
                             <select name="geweb_ai_search_model" id="geweb_ai_search_model">
                                 <?php foreach ($models as $model): ?>
-                                    <option value="<?php echo esc_attr((string) $model); ?>" <?php selected($selectedModel, $model); ?>>
+                                    <?php
+                                    $modelStatusEntry = $modelStatuses[$model] ?? null;
+                                    $isFailedModel = is_array($modelStatusEntry) && (($modelStatusEntry['status'] ?? '') === 'failed');
+                                    ?>
+                                    <option
+                                        value="<?php echo esc_attr((string) $model); ?>"
+                                        data-model-status="<?php echo esc_attr($isFailedModel ? 'failed' : 'ok'); ?>"
+                                        style="<?php echo $isFailedModel ? 'color:#b32d2e;' : ''; ?>"
+                                        <?php selected($selectedModel, $model); ?>
+                                    >
                                         <?php echo esc_html((string) $model); ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
+                            <span style="display:inline-flex; gap:8px; margin-left:8px; vertical-align:middle;">
+                                <button type="button" class="button" id="geweb-refresh-models-button">Refresh models</button>
+                                <button type="button" class="button" id="geweb-test-selected-model">Test selected model</button>
+                            </span>
                             <p class="description" id="geweb-ai-model-refresh-status" <?php echo (string) $inlineStyleHidden; ?>></p>
-                            <p class="description">Current model: <code><?php echo esc_html((string) $selectedModel); ?></code></p>
-                            <p class="description">Default model: <code><?php echo esc_html((string) $defaultModel); ?></code></p>
+                            <?php
+                            $selectedModelStatus = is_array($modelStatuses[$selectedModel] ?? null) ? (string) (($modelStatuses[$selectedModel]['status'] ?? '')) : '';
+                            $defaultModelStatus = is_array($modelStatuses[$defaultModel] ?? null) ? (string) (($modelStatuses[$defaultModel]['status'] ?? '')) : '';
+                            ?>
+                            <p class="description">
+                                Current model:
+                                <code><?php echo esc_html((string) $selectedModel); ?></code>
+                                <?php if ($selectedModelStatus === 'failed'): ?>
+                                    <span style="color:#b32d2e;">failed recently</span>
+                                <?php elseif ($selectedModelStatus === 'ok'): ?>
+                                    <span style="color:#46b450;">working</span>
+                                <?php endif; ?>
+                            </p>
+                            <p class="description">
+                                Default model:
+                                <code><?php echo esc_html((string) $defaultModel); ?></code>
+                                <?php if ($defaultModelStatus === 'failed'): ?>
+                                    <span style="color:#b32d2e;">failed recently</span>
+                                <?php elseif ($defaultModelStatus === 'ok'): ?>
+                                    <span style="color:#46b450;">working</span>
+                                <?php endif; ?>
+                            </p>
+                            <?php if (!empty($officialLatestAliases['flash_latest']) || !empty($officialLatestAliases['pro_latest'])): ?>
+                                <p class="description">
+                                    Official Gemini alias targets:
+                                    <?php if (!empty($officialLatestAliases['flash_latest'])): ?>
+                                        <br><code>gemini-flash-latest</code> → <code><?php echo esc_html((string) $officialLatestAliases['flash_latest']); ?></code>
+                                    <?php endif; ?>
+                                    <?php if (!empty($officialLatestAliases['pro_latest'])): ?>
+                                        <br><code>gemini-pro-latest</code> → <code><?php echo esc_html((string) $officialLatestAliases['pro_latest']); ?></code>
+                                    <?php endif; ?>
+                                </p>
+                            <?php endif; ?>
+                            <?php if (!empty($workingModelHints['flash']) || !empty($workingModelHints['pro'])): ?>
+                                <p class="description">
+                                    Working now:
+                                    <?php if (!empty($workingModelHints['flash'])): ?>
+                                        <br>Flash: <code><?php echo esc_html((string) $workingModelHints['flash']); ?></code>
+                                    <?php endif; ?>
+                                    <?php if (!empty($workingModelHints['pro'])): ?>
+                                        <br>Pro: <code><?php echo esc_html((string) $workingModelHints['pro']); ?></code>
+                                    <?php endif; ?>
+                                </p>
+                            <?php endif; ?>
+                            <?php if ((!empty($latestModelHints['stable_flash']) || !empty($latestModelHints['stable_pro'])) && (($latestModelHints['stable_flash'] ?? '') !== ($workingModelHints['flash'] ?? '') || ($latestModelHints['stable_pro'] ?? '') !== ($workingModelHints['pro'] ?? ''))): ?>
+                                <p class="description">
+                                    Stable choices:
+                                    <?php if (!empty($latestModelHints['stable_flash'])): ?>
+                                        <br>Flash: <code><?php echo esc_html((string) $latestModelHints['stable_flash']); ?></code>
+                                    <?php endif; ?>
+                                    <?php if (!empty($latestModelHints['stable_pro'])): ?>
+                                        <br>Pro: <code><?php echo esc_html((string) $latestModelHints['stable_pro']); ?></code>
+                                    <?php endif; ?>
+                                </p>
+                            <?php endif; ?>
                             <p class="description">The list above is fetched from Gemini when possible and falls back to the bundled defaults if the API is unavailable.</p>
                             <?php if (!empty($modelStatuses)): ?>
                                 <div style="margin-top:12px;">
@@ -124,7 +190,7 @@ class AdminPageRenderer {
                                             $status = $entry['status'] === 'failed' ? 'Failed' : 'OK';
                                             $color = $entry['status'] === 'failed' ? (string) $statusColorError : (string) $statusColorSuccess;
                                             $timestamp = !empty($entry['timestamp'])
-                                                ? wp_date(get_option('date_format') . ' ' . get_option('time_format'), intval($entry['timestamp']))
+                                                ? DateDisplay::formatDateTime(intval($entry['timestamp']))
                                                 : '';
                                             $message = isset($entry['message']) ? (string) $entry['message'] : '';
                                             ?>
@@ -176,7 +242,16 @@ class AdminPageRenderer {
                                 <label for="geweb_ai_search_local_conversation_archive_limit"><strong>Saved conversations to show in the chat sidebar</strong></label><br>
                                 <input type="number" id="geweb_ai_search_local_conversation_archive_limit" name="geweb_ai_search_local_conversation_archive_limit" min="1" step="1" value="<?php echo esc_attr((string) $localConversationArchiveLimit); ?>" class="small-text">
                             </p>
+                            <p style="margin-top:12px;">
+                                <label for="geweb_ai_search_stored_context_message_limit"><strong>Hard max stored context messages (definitive purge)</strong></label><br>
+                                <input type="number" id="geweb_ai_search_stored_context_message_limit" name="geweb_ai_search_stored_context_message_limit" min="10" max="500" step="1" value="<?php echo esc_attr((string) $storedContextMessageLimit); ?>" class="small-text">
+                            </p>
+                            <p style="margin-top:12px;">
+                                <label for="geweb_ai_search_stored_context_char_limit"><strong>Hard max stored context characters (definitive purge)</strong></label><br>
+                                <input type="number" id="geweb_ai_search_stored_context_char_limit" name="geweb_ai_search_stored_context_char_limit" min="5000" max="500000" step="1000" value="<?php echo esc_attr((string) $storedContextCharLimit); ?>" class="small-text">
+                            </p>
                             <p class="description">Number of saved chats to show in the frontend chat sidebar at once. Full chat history is stored in WordPress, while only a shorter trimmed context is sent to the AI model.</p>
+                            <p class="description">Stored context limits are validated and clamped on save and again at runtime (messages: 10-500, characters: 5000-500000), so values cannot become too small or too large.</p>
                         </td>
                     </tr>
 
@@ -202,6 +277,31 @@ class AdminPageRenderer {
                                 Upload referenced local documents together with indexed pages
                             </label>
                             <p class="description">When enabled, files linked from post content in the WordPress uploads folder are uploaded to the Gemini store as separate documents. When disabled, linked files are detected but not uploaded.</p>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <th><label for="geweb_ai_search_ocr_all_upload_images">OCR Images:</label></th>
+                        <td>
+                            <label for="geweb_ai_search_ocr_all_upload_images">
+                                <input type="checkbox" id="geweb_ai_search_ocr_all_upload_images" name="geweb_ai_search_ocr_all_upload_images" value="1" <?php checked($ocrAllUploadImages); ?>>
+                                OCR all WordPress uploads-library images by default
+                            </label>
+                            <p class="description">When enabled, uploads-library images are sent through Gemini image OCR during indexing and their extracted text is inserted into the generated Markdown. When disabled, only images explicitly marked with the OCR checkbox in Media Library rows are OCRed.</p>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <th><label for="geweb_ai_search_date_display_format">Date Display:</label></th>
+                        <td>
+                            <select id="geweb_ai_search_date_display_format" name="geweb_ai_search_date_display_format">
+                                <?php foreach ($availableDateDisplayFormats as $formatKey => $formatLabel): ?>
+                                    <option value="<?php echo esc_attr((string) $formatKey); ?>" <?php selected($dateDisplayFormat, $formatKey); ?>>
+                                        <?php echo esc_html((string) $formatLabel); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <p class="description">Default is <code>yyyy-mm-dd</code>. This setting applies to plugin date displays for the current group scope.</p>
                         </td>
                     </tr>
 
@@ -239,6 +339,14 @@ class AdminPageRenderer {
                     <tr>
                         <th><label for="geweb_ai_search_custom_prompt">AI Prompt:</label></th>
                         <td>
+                            <?php if (!empty($isGeminiProvider)): ?>
+                                <p class="description" style="margin-top:0;">
+                                    Gemini model info:
+                                    <a href="<?php echo esc_url((string) $geminiChangelogUrl); ?>" target="_blank" rel="noopener noreferrer">Release notes</a>
+                                    |
+                                    <a href="<?php echo esc_url((string) $geminiDeprecationsUrl); ?>" target="_blank" rel="noopener noreferrer">Deprecations</a>
+                                </p>
+                            <?php endif; ?>
                             <p class="description" style="margin-top:0;">
                                 <strong>Currently using:</strong>
                                 <?php echo esc_html((string) $currentPromptLabel); ?>
@@ -388,6 +496,54 @@ class AdminPageRenderer {
                 <p class="description" style="margin-top:0; max-width: 900px;">
                     This table shows all Gemini File Search Stores visible to the configured API key, marks the one used by this plugin, and helps spot likely orphaned stores. Select a store to inspect its uploaded items below.
                 </p>
+                <?php if (is_array($storageEstimate ?? null)): ?>
+                    <?php
+                    $markdownCount = (int) ($storageEstimate['markdown_count'] ?? 0);
+                    $markdownBytes = (int) ($storageEstimate['markdown_bytes'] ?? 0);
+                    $referencedCount = (int) ($storageEstimate['referenced_count'] ?? 0);
+                    $referencedBytes = (int) ($storageEstimate['referenced_bytes'] ?? 0);
+                    $remoteDocumentCount = (int) ($storageEstimate['remote_document_count'] ?? 0);
+                    $remoteReferencedBytes = (int) ($storageEstimate['remote_referenced_bytes'] ?? 0);
+                    $unknownReferencedCount = (int) ($storageEstimate['unknown_referenced_count'] ?? 0);
+                    $rawKnownBytes = (int) ($storageEstimate['raw_known_bytes'] ?? 0);
+                    $estimatedBackendBytes = (int) ($storageEstimate['estimated_backend_bytes'] ?? 0);
+                    $recommendedStoreLimitBytes = (int) ($storageEstimate['recommended_store_limit_bytes'] ?? 0);
+                    $tierLimits = is_array($storageEstimate['tier_limits'] ?? null) ? $storageEstimate['tier_limits'] : [];
+                    ?>
+                    <div style="margin:12px 0 16px; padding:12px 14px; background:#fff; border:1px solid #dcdcde; max-width: 950px;">
+                        <strong>Gemini Storage Estimate</strong>
+                        <p class="description" style="margin:8px 0 0;">
+                            Local Markdown cache: <?php echo esc_html((string) $markdownCount); ?> item(s), <?php echo esc_html(GeminiStorageEstimator::formatBytes($markdownBytes)); ?>.<br>
+                            Uploaded referenced files tracked by this plugin: <?php echo esc_html((string) $referencedCount); ?> item(s).
+                            <?php if ($remoteDocumentCount > 0): ?>
+                                <br>Remote size returned by Gemini for current store documents: <?php echo esc_html((string) $remoteDocumentCount); ?> item(s) checked, <?php echo esc_html(GeminiStorageEstimator::formatBytes($remoteReferencedBytes)); ?> used in this estimate.
+                            <?php endif; ?>
+                            <?php if ($referencedBytes > 0): ?>
+                                <br>Fallback local file-size total where remote size was unavailable: <?php echo esc_html(GeminiStorageEstimator::formatBytes($referencedBytes)); ?>.
+                            <?php endif; ?>
+                            <?php if ($unknownReferencedCount > 0): ?>
+                                <br>Referenced uploads with unknown local size: <?php echo esc_html((string) $unknownReferencedCount); ?>.
+                            <?php endif; ?>
+                            <br>Known raw input total: <?php echo esc_html(GeminiStorageEstimator::formatBytes($rawKnownBytes)); ?>.
+                            <br>Estimated File Search backend footprint at Google's documented ~3x multiplier: <strong><?php echo esc_html(GeminiStorageEstimator::formatBytes($estimatedBackendBytes)); ?></strong>.
+                            <br>Google also recommends keeping a store below about <?php echo esc_html(GeminiStorageEstimator::formatBytes($recommendedStoreLimitBytes)); ?> for better latency.
+                        </p>
+                        <p class="description" style="margin:8px 0 0;">
+                            The actual Gemini billing tier for this API key/project is not exposed to this plugin, so the limits below are a comparison against Google's documented tier thresholds rather than a verified live tier.
+                        </p>
+                        <?php if (!empty($tierLimits)): ?>
+                            <ul style="margin:8px 0 0 18px;">
+                                <?php foreach ($tierLimits as $tierLabel => $tierBytes): ?>
+                                    <li>
+                                        <?php echo esc_html((string) $tierLabel); ?>:
+                                        <?php echo esc_html(GeminiStorageEstimator::formatBytes((int) $tierBytes)); ?>
+                                        <?php echo $estimatedBackendBytes > 0 ? esc_html(' (' . round(($estimatedBackendBytes / max((int) $tierBytes, 1)) * 100, 1) . '% of this limit based on the current estimate)') : ''; ?>
+                                    </li>
+                                <?php endforeach; ?>
+                            </ul>
+                        <?php endif; ?>
+                    </div>
+                <?php endif; ?>
                 <?php if (!$isGeminiProvider): ?>
                     <p>This tab is only available when the Gemini provider is active.</p>
                 <?php else: ?>

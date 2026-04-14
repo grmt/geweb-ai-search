@@ -12,11 +12,15 @@ class FrontendAiContext {
     private const OPTION_CONVERSATION_TRIM_MESSAGE_LIMIT = 'geweb_aisearch_conversation_trim_message_limit';
     private const OPTION_CONVERSATION_TRIM_CHAR_LIMIT = 'geweb_aisearch_conversation_trim_char_limit';
     private const OPTION_LOCAL_CONVERSATION_ARCHIVE_LIMIT = 'geweb_aisearch_local_conversation_archive_limit';
+    private const OPTION_STORED_CONTEXT_MESSAGE_LIMIT = 'geweb_aisearch_stored_context_message_limit';
+    private const OPTION_STORED_CONTEXT_CHAR_LIMIT = 'geweb_aisearch_stored_context_char_limit';
     private const FRONTEND_AI_QUERY_VAR = 'geweb_ai_query';
     private const DEFAULT_FRONTEND_AI_INTERFACE = 'fullscreen';
     private const DEFAULT_CONVERSATION_TRIM_MESSAGE_LIMIT = 12;
     private const DEFAULT_CONVERSATION_TRIM_CHAR_LIMIT = 12000;
     private const DEFAULT_LOCAL_CONVERSATION_ARCHIVE_LIMIT = 12;
+    private const DEFAULT_STORED_CONTEXT_MESSAGE_LIMIT = 120;
+    private const DEFAULT_STORED_CONTEXT_CHAR_LIMIT = 60000;
     private const REGEX_WHITESPACE = '/\s+/';
 
     public static function getFrontendAiPageUrl(): string {
@@ -209,6 +213,24 @@ class FrontendAiContext {
             self::DEFAULT_LOCAL_CONVERSATION_ARCHIVE_LIMIT,
             1,
             200
+        );
+    }
+
+    public static function getStoredContextMessageLimit(): int {
+        return self::sanitizePositiveIntOption(
+            get_option(self::OPTION_STORED_CONTEXT_MESSAGE_LIMIT, self::DEFAULT_STORED_CONTEXT_MESSAGE_LIMIT),
+            self::DEFAULT_STORED_CONTEXT_MESSAGE_LIMIT,
+            10,
+            500
+        );
+    }
+
+    public static function getStoredContextCharLimit(): int {
+        return self::sanitizePositiveIntOption(
+            get_option(self::OPTION_STORED_CONTEXT_CHAR_LIMIT, self::DEFAULT_STORED_CONTEXT_CHAR_LIMIT),
+            self::DEFAULT_STORED_CONTEXT_CHAR_LIMIT,
+            5000,
+            500000
         );
     }
 

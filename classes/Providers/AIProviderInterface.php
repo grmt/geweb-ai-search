@@ -45,6 +45,19 @@ interface AIProviderInterface {
     public function getDefaultSystemInstruction(): string;
 
     /**
+     * @param string|null $model
+     * @return string
+     */
+    public function getDefaultSystemInstructionForModel(?string $model = null): string;
+
+    /**
+     * @param string|null $model
+     * @param string|null $promptOverride
+     * @return array<string,string>
+     */
+    public function getPromptDescriptor(?string $model = null, ?string $promptOverride = null): array;
+
+    /**
      * @return array<string,array<string,mixed>>
      */
     public function getModelStatuses(): array;
@@ -63,6 +76,12 @@ interface AIProviderInterface {
      * @return void
      */
     public function clearModelsCache(): void;
+
+    /**
+     * @param string $model
+     * @return array<string,mixed>
+     */
+    public function testModel(string $model): array;
 
     /**
      * @param string $name
@@ -89,6 +108,20 @@ interface AIProviderInterface {
      * @return string
      */
     public function uploadLocalFile(string $filePath, string $displayName, string $mimeType): string;
+
+    /**
+     * @param string $filePath
+     * @param string $mimeType
+     * @return string
+     */
+    public function extractImageText(string $filePath, string $mimeType): string;
+
+    /**
+     * @param string $filePath
+     * @param string $mimeType
+     * @return string
+     */
+    public function describeImage(string $filePath, string $mimeType): string;
 
     /**
      * @param string $documentName

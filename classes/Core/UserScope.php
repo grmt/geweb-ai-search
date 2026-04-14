@@ -9,6 +9,7 @@ defined('ABSPATH') || exit;
 class UserScope {
     private const COOKIE_NAME = 'geweb_ai_scope';
     private const COOKIE_TTL = YEAR_IN_SECONDS;
+    private static ?string $groupScopeOverride = null;
 
     public static function getCurrentUserScopeKey(): string {
         $userId = get_current_user_id();
@@ -20,6 +21,10 @@ class UserScope {
     }
 
     public static function getCurrentGroupScopeKey(): string {
+        if (is_string(self::$groupScopeOverride) && self::$groupScopeOverride !== '') {
+            return self::$groupScopeOverride;
+        }
+
         if (!is_user_logged_in()) {
             return 'group_guests';
         }
@@ -125,6 +130,26 @@ class UserScope {
 
     public static function getCurrentScopeStorageKey(): string {
         return self::getCurrentUserScopeStorageKey();
+    }
+
+    /**
+     * @param callable $callback
+     * @return mixed
+     */
+    public static function withGroupScopeOverride(string $scopeKey, callable $callback) {
+        $normalizedScopeKey = trim($scopeKey);
+        if ($normalizedScopeKey === '') {
+            return $callback();
+        }
+
+        $previousScopeKey = self::$groupScopeOverride;
+        self::$groupScopeOverride = $normalizedScopeKey;
+
+        try {
+            return $callback();
+        } finally {
+            self::$groupScopeOverride = $previousScopeKey;
+        }
     }
 
     private static function buildScopedOptionName(string $baseOptionName, string $scopeKey): string {

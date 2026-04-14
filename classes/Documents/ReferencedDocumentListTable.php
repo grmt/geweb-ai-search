@@ -236,7 +236,7 @@ class ReferencedDocumentListTable extends \WP_List_Table {
             return '—';
         }
 
-        return wp_date(get_option('date_format') . ' ' . get_option('time_format'), $timestamp);
+        return DateDisplay::formatDateTime($timestamp);
     }
 
     /**
@@ -380,7 +380,7 @@ class ReferencedDocumentListTable extends \WP_List_Table {
                 <option value="">All file types</option>
                 <option value="pdf" <?php selected($selectedType, 'pdf'); ?>>PDF</option>
                 <option value="word" <?php selected($selectedType, 'word'); ?>>Word</option>
-                <option value="spreadsheet" <?php selected($selectedType, 'spreadsheet'); ?>>Spreadsheet</option>
+                <option value="excel" <?php selected($selectedType, 'excel'); ?>>Excel (.xls/.xlsx)</option>
                 <option value="text" <?php selected($selectedType, 'text'); ?>>Text and other</option>
                 <option value="unknown" <?php selected($selectedType, 'unknown'); ?>>Unknown type</option>
             </select>
@@ -456,10 +456,9 @@ class ReferencedDocumentListTable extends \WP_List_Table {
 
         if (
             strpos($mimeType, 'ms-excel') !== false ||
-            strpos($mimeType, 'spreadsheetml') !== false ||
-            strpos($mimeType, 'csv') !== false
+            strpos($mimeType, 'spreadsheetml') !== false
         ) {
-            return 'spreadsheet';
+            return 'excel';
         }
 
         return 'text';

@@ -117,7 +117,7 @@ class ConversationListTable extends \WP_List_Table {
 
         $startedAt = isset($item['started_at']) ? (int) $item['started_at'] : 0;
         $startedLabel = $startedAt > 0
-            ? wp_date(get_option('date_format') . ' ' . get_option('time_format'), $startedAt)
+            ? DateDisplay::formatDateTime($startedAt)
             : '—';
 
         if ($conversationId === '') {
@@ -234,7 +234,7 @@ class ConversationListTable extends \WP_List_Table {
             return '—';
         }
 
-        return esc_html(wp_date(get_option('date_format') . ' ' . get_option('time_format'), $timestamp));
+        return esc_html(DateDisplay::formatDateTime($timestamp));
     }
 
     /**

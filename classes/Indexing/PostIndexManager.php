@@ -6,9 +6,10 @@ defined('ABSPATH') || exit;
 /**
  * Handles post indexing workflows and admin UI integration.
  */
-class PostIndexManager {
+class PostIndexManager { // NOSONAR - This is the main orchestration point for admin UI, cron, and indexing flows.
     private const OPTION_INCLUDE_REFERENCED_DOCUMENTS = 'geweb_aisearch_include_referenced_documents';
     private const OPTION_FRONTEND_AI_PAGE_ID = 'geweb_aisearch_frontend_ai_page_id';
+    private const MESSAGE_INVALID_POST_ID = 'Invalid post ID';
     private const MESSAGE_INSUFFICIENT_PERMISSIONS = 'Insufficient permissions';
     private const META_COMPARE_NOT_EXISTS = 'NOT EXISTS';
     private const COLOR_WARNING = '#996800';
@@ -16,26 +17,36 @@ class PostIndexManager {
     private const COLOR_INFO = '#2271b1';
     private const COLOR_MUTED = '#646970';
     private const COLOR_ERROR = '#d63638';
+    private const HTML_SMALL_OPEN = ';\"><small>';
     private const META_DOCUMENT_NAME = 'geweb_aisearch_document_name';
     private const META_EXCLUDE = 'geweb_aisearch_exclude';
     private const META_STATUS = 'geweb_aisearch_status';
     private const META_LAST_INDEXED = 'geweb_aisearch_last_indexed';
     private const META_LAST_ERROR = 'geweb_aisearch_last_error';
+    private const META_LAST_ERROR_AT = 'geweb_aisearch_last_error_at';
+    private const META_STATUS_TIMESTAMP_BASIS = 'geweb_aisearch_status_timestamp_basis';
+    private const META_MARKDOWN_BYTES = 'geweb_aisearch_markdown_bytes';
+    private const META_LINKED_DOCUMENT_FAILURES = 'geweb_aisearch_linked_document_failures';
     private const NONCE_ACTION = 'geweb_aisearch_post_settings';
     private const NONCE_NAME = 'geweb_aisearch_post_settings_nonce';
     private const CRON_HOOK_PROCESS = 'geweb_aisearch_process_post';
+    private const STATUS_TIMESTAMP_BASIS_UTC = 'utc';
 
     public function __construct() {
         add_action('init', [$this, 'registerPostColumns']);
         add_action('save_post', [$this, 'onSavePost'], 10, 2);
         add_action('before_delete_post', [$this, 'deleteDocumentForPost']);
+        add_action('pre_get_posts', [$this, 'applyColumnSorting']);
         add_action('wp_ajax_geweb_generate_library', [$this, 'ajaxGenerateLibrary']);
+        add_action('wp_ajax_geweb_build_markdown_cache', [$this, 'ajaxBuildMarkdownCache']);
         add_action('wp_ajax_geweb_reupload_post', [$this, 'ajaxReuploadPost']);
+        add_action('wp_ajax_geweb_get_post_index_status', [$this, 'ajaxGetPostIndexStatus']);
         add_action('wp_ajax_geweb_toggle_exclude', [$this, 'ajaxToggleExclude']);
+        add_action('wp_ajax_geweb_set_attachment_image_processing_mode', [$this, 'ajaxSetAttachmentImageProcessingMode']);
         add_action('add_meta_boxes', [$this, 'registerMetaBox']);
         add_action('restrict_manage_posts', [$this, 'renderStatusFilter']);
         add_action('pre_get_posts', [$this, 'applyStatusFilter']);
-        add_action(self::CRON_HOOK_PROCESS, [$this, 'processQueuedPost'], 10, 2);
+        add_action(self::CRON_HOOK_PROCESS, [$this, 'processQueuedPost'], 10, 3);
     }
 
     public function registerPostColumns(): void {
@@ -44,12 +55,16 @@ class PostIndexManager {
             foreach ($postTypes as $postType) {
                 if ($postType === 'attachment') {
                     add_filter('manage_upload_columns', [$this, 'addAdminColumns']);
+                    add_filter('manage_upload_sortable_columns', [$this, 'addSortableAdminColumns']);
                     add_action('manage_media_custom_column', [$this, 'renderIndexedColumn'], 10, 2);
+                    add_action('manage_media_custom_column', [$this, 'renderMarkdownCacheColumn'], 10, 2);
                     add_action('manage_media_custom_column', [$this, 'renderIdColumn'], 10, 2);
                     continue;
                 }
                 add_filter("manage_{$postType}_posts_columns", [$this, 'addAdminColumns']);
+                add_filter("manage_edit-{$postType}_sortable_columns", [$this, 'addSortableAdminColumns']);
                 add_action("manage_{$postType}_posts_custom_column", [$this, 'renderIndexedColumn'], 10, 2);
+                add_action("manage_{$postType}_posts_custom_column", [$this, 'renderMarkdownCacheColumn'], 10, 2);
                 add_action("manage_{$postType}_posts_custom_column", [$this, 'renderIdColumn'], 10, 2);
             }
         }
@@ -58,6 +73,7 @@ class PostIndexManager {
     public function addAdminColumns(array $columns): array {
         $columns['geweb_post_id'] = 'ID';
         $columns['geweb_ai_indexed'] = 'AI Indexed';
+        $columns['geweb_ai_markdown_cache'] = 'MD Cache';
         return $columns;
     }
 
@@ -73,6 +89,30 @@ class PostIndexManager {
         }
     }
 
+    public function addSortableAdminColumns(array $columns): array {
+        $columns['geweb_post_id'] = 'ID';
+        $columns['geweb_ai_indexed'] = 'geweb_ai_indexed';
+        $columns['geweb_ai_markdown_cache'] = 'geweb_ai_markdown_cache';
+        return $columns;
+    }
+
+    public function renderMarkdownCacheColumn(string $column, int $postId): void {
+        if ($column !== 'geweb_ai_markdown_cache') {
+            return;
+        }
+
+        echo wp_kses($this->getMarkdownCacheColumnHtml($postId), [
+            'a' => [
+                'href' => true,
+                'class' => true,
+                'data-post-id' => true,
+                'title' => true,
+                'style' => true,
+            ],
+            'span' => ['style' => true],
+        ]);
+    }
+
     public function registerMetaBox(): void {
         $postTypes = get_option('geweb_aisearch_post_types', []);
         foreach ($postTypes as $postType) {
@@ -83,6 +123,9 @@ class PostIndexManager {
     public function renderMetaBox(\WP_Post $post): void {
         wp_nonce_field(self::NONCE_ACTION, self::NONCE_NAME);
         $statusData = $this->getStatusData($post->ID);
+        $imageUsage = $this->getImageUsageData($post->ID);
+        $editUrl = get_edit_post_link($post->ID, 'raw');
+        $previewUrl = get_permalink($post->ID);
         ?>
         <p>
             <label>
@@ -91,6 +134,26 @@ class PostIndexManager {
             </label>
         </p>
         <p><strong>Status:</strong> <?php echo esc_html($statusData['label']); ?></p>
+        <?php $markdownBytes = $this->getMarkdownCacheBytes($post->ID); ?>
+        <p><strong>MD cache:</strong> <?php echo esc_html($markdownBytes > 0 ? size_format($markdownBytes, 1) : 'Missing'); ?></p>
+        <?php if (($imageUsage['embedded_bitmap_count'] ?? 0) > 0): ?>
+            <p style="color: <?php echo esc_attr(self::COLOR_WARNING); ?>;">
+                <strong>Content warning:</strong>
+                This page contains <?php echo esc_html((string) $imageUsage['embedded_bitmap_count']); ?> embedded bitmap image(s) in the page content.
+                <?php if (is_string($editUrl) && $editUrl !== ''): ?>
+                    <a href="<?php echo esc_url($editUrl); ?>" target="_blank" rel="noopener noreferrer">Open editor</a>
+                <?php endif; ?>
+                <?php if (is_string($previewUrl) && $previewUrl !== ''): ?>
+                    | <a href="<?php echo esc_url($previewUrl); ?>" target="_blank" rel="noopener noreferrer">Open page</a>
+                <?php endif; ?>
+            </p>
+        <?php endif; ?>
+        <?php if (($imageUsage['uploads_image_count'] ?? 0) > 0): ?>
+            <p style="color: <?php echo esc_attr(self::COLOR_MUTED); ?>;">
+                <strong>Info:</strong>
+                This page references <?php echo esc_html((string) $imageUsage['uploads_image_count']); ?> image(s) from the WordPress uploads library.
+            </p>
+        <?php endif; ?>
         <?php if (!empty($statusData['last_indexed'])): ?>
             <p><strong>Last indexed:</strong> <?php echo esc_html($statusData['last_indexed']); ?></p>
         <?php endif; ?>
@@ -200,11 +263,98 @@ class PostIndexManager {
             <th scope="row">Generate AI Library:</th>
             <td>
                 <button type="button" id="geweb-generate-library" class="button">Generate Library</button>
+                <button type="button" id="geweb-build-markdown-cache" class="button" style="margin-left:8px;">Build MD Cache</button>
                 <p class="description">Process all published posts and upload them to Gemini for AI search.</p>
+                <p class="description">Build MD cache for already indexed published posts/pages without reuploading documents.</p>
                 <div id="geweb-generate-status"></div>
+                <div id="geweb-build-markdown-cache-status"></div>
             </td>
         </tr>
         <?php
+    }
+
+    public function ajaxBuildMarkdownCache(): void {
+        check_ajax_referer('geweb_ai_search_generate_library', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => self::MESSAGE_INSUFFICIENT_PERMISSIONS]);
+        }
+
+        $postTypes = get_option('geweb_aisearch_post_types', []);
+        if (empty($postTypes)) {
+            wp_send_json_error(['message' => 'No post types selected']);
+        }
+
+        $page = isset($_POST['page']) ? intval($_POST['page']) : 1;
+        $perPage = 10;
+        $queryArgs = [
+            'post_type' => $postTypes,
+            'post_status' => 'publish',
+            'posts_per_page' => $perPage,
+            'paged' => $page,
+            'fields' => 'ids',
+            'meta_query' => [
+                [
+                    'key' => self::META_DOCUMENT_NAME,
+                    'compare' => 'EXISTS',
+                ],
+                [
+                    'key' => self::META_DOCUMENT_NAME,
+                    'value' => '',
+                    'compare' => '!=',
+                ],
+                [
+                    'relation' => 'OR',
+                    ['key' => self::META_EXCLUDE, 'compare' => self::META_COMPARE_NOT_EXISTS],
+                    ['key' => self::META_EXCLUDE, 'value' => '1', 'compare' => '!='],
+                ],
+            ],
+            'post__not_in' => $this->getNonIndexablePostIds(),
+        ];
+
+        $totalQuery = new \WP_Query(array_merge($queryArgs, [
+            'posts_per_page' => -1,
+            'paged' => 1,
+            'no_found_rows' => false,
+        ]));
+        $total = (int) $totalQuery->found_posts;
+        $posts = get_posts($queryArgs);
+
+        $success = 0;
+        $errors = 0;
+
+        foreach ($posts as $postId) {
+            $postId = (int) $postId;
+            if ($postId <= 0) {
+                continue;
+            }
+
+            try {
+                $markdown = (new HTML2MD())->convert($postId);
+                if (!$markdown) {
+                    $errors++;
+                    continue;
+                }
+
+                (new MarkdownCacheStore())->saveMarkdown($postId, $markdown);
+                update_post_meta($postId, self::META_MARKDOWN_BYTES, (string) strlen($markdown));
+                $success++;
+            } catch (\Exception $e) {
+                $errors++;
+            }
+        }
+
+        $processed = ($page - 1) * $perPage + count($posts);
+        $hasMore = $processed < $total;
+
+        wp_send_json_success([
+            'processed' => $processed,
+            'total' => $total,
+            'success' => $success,
+            'errors' => $errors,
+            'has_more' => $hasMore,
+            'next_page' => $hasMore ? $page + 1 : null,
+        ]);
     }
 
     public function ajaxReuploadPost(): void {
@@ -212,7 +362,7 @@ class PostIndexManager {
 
         $postId = isset($_POST['post_id']) ? intval($_POST['post_id']) : 0;
         if ($postId <= 0) {
-            wp_send_json_error(['message' => 'Invalid post ID']);
+            wp_send_json_error(['message' => self::MESSAGE_INVALID_POST_ID]);
         }
 
         if (!current_user_can('edit_post', $postId)) {
@@ -223,13 +373,35 @@ class PostIndexManager {
             delete_post_meta($postId, self::META_EXCLUDE);
         }
 
+        $this->clearScheduledProcessing($postId);
         $this->setStatus($postId, 'uploading');
-        $result = $this->indexPost($postId, false);
-        if (!$result['success']) {
-            wp_send_json_error(['message' => $result['message'], 'html' => $this->getColumnHtml($postId)]);
+        $this->schedulePostProcessing($postId, 'index');
+        wp_send_json_success([
+            'message' => 'Upload queued.',
+            'html' => $this->getColumnHtml($postId),
+            'markdown_cache_html' => $this->getMarkdownCacheColumnHtml($postId),
+        ]);
+    }
+
+    public function ajaxGetPostIndexStatus(): void {
+        check_ajax_referer('geweb_ai_search_admin_actions', 'nonce');
+
+        $postId = isset($_POST['post_id']) ? intval($_POST['post_id']) : 0;
+        if ($postId <= 0) {
+            wp_send_json_error(['message' => self::MESSAGE_INVALID_POST_ID]);
         }
 
-        wp_send_json_success(['message' => 'Indexed successfully.', 'html' => $this->getColumnHtml($postId)]);
+        if (!current_user_can('edit_post', $postId)) {
+            wp_send_json_error(['message' => self::MESSAGE_INSUFFICIENT_PERMISSIONS]);
+        }
+
+        $status = (string) get_post_meta($postId, self::META_STATUS, true);
+        wp_send_json_success([
+            'status' => $status,
+            'done' => !in_array($status, ['uploading', 'removing', 'pending'], true),
+            'html' => $this->getColumnHtml($postId),
+            'markdown_cache_html' => $this->getMarkdownCacheColumnHtml($postId),
+        ]);
     }
 
     public function ajaxToggleExclude(): void {
@@ -239,7 +411,7 @@ class PostIndexManager {
         $exclude = !empty($_POST['exclude']);
 
         if ($postId <= 0) {
-            wp_send_json_error(['message' => 'Invalid post ID']);
+            wp_send_json_error(['message' => self::MESSAGE_INVALID_POST_ID]);
         }
 
         if (!current_user_can('edit_post', $postId)) {
@@ -250,7 +422,11 @@ class PostIndexManager {
             $this->setStatus($postId, 'removing');
             update_post_meta($postId, self::META_EXCLUDE, '1');
             $this->excludePost($postId);
-            wp_send_json_success(['message' => 'Excluded from AI indexing.', 'html' => $this->getColumnHtml($postId)]);
+            wp_send_json_success([
+                'message' => 'Excluded from AI indexing.',
+                'html' => $this->getColumnHtml($postId),
+                'markdown_cache_html' => $this->getMarkdownCacheColumnHtml($postId),
+            ]);
         }
 
         delete_post_meta($postId, self::META_EXCLUDE);
@@ -258,12 +434,54 @@ class PostIndexManager {
             $this->setStatus($postId, 'not_indexed', '');
         }
 
-        wp_send_json_success(['message' => 'Included for AI indexing again.', 'html' => $this->getColumnHtml($postId)]);
+        wp_send_json_success([
+            'message' => 'Included for AI indexing again.',
+            'html' => $this->getColumnHtml($postId),
+            'markdown_cache_html' => $this->getMarkdownCacheColumnHtml($postId),
+        ]);
     }
 
-    public function deleteDocumentForPost(int $postId, string $statusAfterDelete = 'not_indexed'): void {
+    public function ajaxSetAttachmentImageProcessingMode(): void {
+        check_ajax_referer('geweb_ai_search_admin_actions', 'nonce');
+
+        $postId = isset($_POST['post_id']) ? intval($_POST['post_id']) : 0;
+        $mode = isset($_POST['mode']) ? sanitize_key((string) wp_unslash($_POST['mode'])) : ImageOcrService::MODE_NONE;
+
+        if ($postId <= 0) {
+            wp_send_json_error(['message' => self::MESSAGE_INVALID_POST_ID]);
+        }
+
+        if (!current_user_can('edit_post', $postId)) {
+            wp_send_json_error(['message' => self::MESSAGE_INSUFFICIENT_PERMISSIONS]);
+        }
+
+        $imageOcrService = new ImageOcrService();
+        if (!$imageOcrService->isOcrEligibleAttachment($postId)) {
+            wp_send_json_error(['message' => 'This attachment is not an image.']);
+        }
+
+        $imageOcrService->setAttachmentImageProcessingMode($postId, $mode);
+
+        $messages = [
+            ImageOcrService::MODE_NONE => 'Image processing disabled for this image.',
+            ImageOcrService::MODE_OCR => 'OCR enabled for this image.',
+            ImageOcrService::MODE_DESCRIBE => 'Description mode enabled for this image.',
+        ];
+
+        wp_send_json_success([
+            'message' => $messages[$mode] ?? $messages[ImageOcrService::MODE_NONE],
+            'html' => $this->getColumnHtml($postId),
+            'markdown_cache_html' => $this->getMarkdownCacheColumnHtml($postId),
+        ]);
+    }
+
+    public function deleteDocumentForPost(int $postId, string $statusAfterDelete = 'not_indexed', bool $deleteMarkdownCache = true): void {
         $documentName = get_post_meta($postId, self::META_DOCUMENT_NAME, true);
         (new DocumentStore())->disassociatePost($postId);
+        if ($deleteMarkdownCache) {
+            (new MarkdownCacheStore())->deleteMarkdown($postId);
+            delete_post_meta($postId, self::META_MARKDOWN_BYTES);
+        }
         if (empty($documentName)) {
             $this->setStatus($postId, $statusAfterDelete, '');
             return;
@@ -284,6 +502,9 @@ class PostIndexManager {
         delete_post_meta_by_key(self::META_STATUS);
         delete_post_meta_by_key(self::META_LAST_INDEXED);
         delete_post_meta_by_key(self::META_LAST_ERROR);
+        delete_post_meta_by_key(self::META_LAST_ERROR_AT);
+        delete_post_meta_by_key(self::META_MARKDOWN_BYTES);
+        MarkdownCacheStore::deleteAllMarkdown();
     }
 
     /**
@@ -328,6 +549,7 @@ class PostIndexManager {
             delete_post_meta($postId, self::META_DOCUMENT_NAME);
             update_post_meta($postId, self::META_STATUS, 'not_indexed');
             delete_post_meta($postId, self::META_LAST_ERROR);
+            delete_post_meta($postId, self::META_LAST_ERROR_AT);
             $corrected++;
         }
 
@@ -364,53 +586,194 @@ class PostIndexManager {
         }
     }
 
-    public function processQueuedPost(int $postId, string $operation): void {
-        if ($operation === 'delete') {
-            $status = $this->isExcluded($postId) ? 'excluded' : 'not_indexed';
-            $this->deleteDocumentForPost($postId, $status);
-            return;
-        }
-
-        $post = get_post($postId);
-        if ($post instanceof \WP_Post) {
-            if ($this->isExcluded($postId)) {
-                $this->deleteDocumentForPost($postId, 'excluded');
-            } elseif ($post->post_status !== 'publish') {
-                $this->deleteDocumentForPost($postId, 'not_indexed');
-            } else {
-                $this->setStatus($postId, 'uploading');
-                $this->indexPost($postId, false);
+    public function processQueuedPost(int $postId, string $operation, string $scopeKey = ''): void {
+        UserScope::withGroupScopeOverride($scopeKey, function () use ($postId, $operation): void {
+            if ($operation === 'delete') {
+                $status = $this->isExcluded($postId) ? 'excluded' : 'not_indexed';
+                $this->deleteDocumentForPost($postId, $status);
+                return;
             }
-        }
+
+            $post = get_post($postId);
+            if ($post instanceof \WP_Post) {
+                if ($this->isExcluded($postId)) {
+                    $this->deleteDocumentForPost($postId, 'excluded');
+                } elseif ($post->post_status !== 'publish') {
+                    $this->deleteDocumentForPost($postId, 'not_indexed');
+                } else {
+                    $this->setStatus($postId, 'uploading');
+                    $this->indexPost($postId, false);
+                }
+            }
+        });
     }
 
     private function getColumnHtml(int $postId): string {
         $isExcluded = $this->isExcluded($postId);
         $hideIndexControls = $this->shouldHideIndexControls($postId, $isExcluded);
         $statusData = $hideIndexControls ? ['label' => 'Excluded by plugin', 'color' => self::COLOR_MUTED, 'last_indexed' => '', 'error' => ''] : $this->getStatusData($postId);
+        $imageUsage = $this->getImageUsageData($postId);
+        $imageOcrService = new ImageOcrService();
+        $isOcrEligibleAttachment = $imageOcrService->isOcrEligibleAttachment($postId);
+        $imageProcessingMode = $isOcrEligibleAttachment ? $imageOcrService->getAttachmentImageProcessingMode($postId) : ImageOcrService::MODE_NONE;
+        $ocrForcedGlobally = $isOcrEligibleAttachment && $imageOcrService->shouldOcrAllUploadsImages() && $imageProcessingMode === ImageOcrService::MODE_NONE;
         $excludeToggleId = 'geweb-ai-toggle-exclude-' . $postId;
+        $imageModeSelectId = 'geweb-ai-image-mode-' . $postId;
         $html = '<div class="geweb-ai-index-cell" data-post-id="' . esc_attr((string) $postId) . '">';
         $html .= '<p style="margin:0; color:' . esc_attr($statusData['color']) . ';">' . esc_html($statusData['label']) . '</p>';
-
-        if (!empty($statusData['last_indexed'])) {
-            $html .= '<p style="margin:4px 0 0;"><small>Last indexed: ' . esc_html($statusData['last_indexed']) . '</small></p>';
-        }
-
-        if (!empty($statusData['error'])) {
-            $html .= '<p style="margin:4px 0 0; color:' . self::COLOR_ERROR . ';"><small>' . esc_html($statusData['error']) . '</small></p>';
-        }
+        $html .= $this->buildColumnStatusMetaHtml($postId, $imageUsage, $statusData);
 
         $html .= '<p class="geweb-ai-index-feedback" style="display:none; margin:4px 0 0;"></p>';
         if (!$hideIndexControls) {
-            $html .= '<p style="margin:8px 0 0;">';
-            $html .= '<button type="button" class="button button-small geweb-ai-reupload">Upload</button> ';
-            $html .= '<label for="' . esc_attr($excludeToggleId) . '" style="margin-left:8px;">';
-            $html .= '<input type="checkbox" id="' . esc_attr($excludeToggleId) . '" name="' . esc_attr($excludeToggleId) . '" class="geweb-ai-toggle-exclude" ' . checked($isExcluded, true, false) . disabled($isExcluded, true, false) . '> Exclude';
-            $html .= '</label>';
-            $html .= '</p>';
+            $html .= $this->buildColumnControlHtml(
+                $statusData,
+                $isExcluded,
+                $excludeToggleId,
+                $isOcrEligibleAttachment,
+                $imageModeSelectId,
+                $imageProcessingMode,
+                $ocrForcedGlobally
+            );
         }
 
         $html .= '</div>';
+        return $html;
+    }
+
+    /**
+     * @param int $postId
+     * @return array<string,int>
+     */
+    private function getImageUsageData(int $postId): array {
+        $post = get_post($postId);
+        if (!$post instanceof \WP_Post) {
+            return [
+                'embedded_bitmap_count' => 0,
+                'uploads_image_count' => 0,
+            ];
+        }
+
+        $content = (string) apply_filters('the_content', $post->post_content);
+        if ($content === '') {
+            return [
+                'embedded_bitmap_count' => 0,
+                'uploads_image_count' => 0,
+            ];
+        }
+
+        $embeddedBitmapCount = preg_match_all('/<img\b[^>]*src\s*=\s*["\']data:image\//i', $content) ?: 0;
+        $uploadsBaseUrl = (string) (wp_get_upload_dir()['baseurl'] ?? '');
+        $uploadsImageCount = 0;
+
+        if ($uploadsBaseUrl !== '') {
+            $uploadsPattern = '/<img\b[^>]*src\s*=\s*["\']' . preg_quote($uploadsBaseUrl, '/') . '[^"\']+["\']/i';
+            $uploadsImageCount = preg_match_all($uploadsPattern, $content) ?: 0;
+        }
+
+        return [
+            'embedded_bitmap_count' => (int) $embeddedBitmapCount,
+            'uploads_image_count' => (int) $uploadsImageCount,
+        ];
+    }
+
+    private function getIndexedStatusErrorHint(string $errorMessage): string {
+        $normalizedMessage = strtolower(trim($errorMessage));
+        $hint = '';
+
+        if ($normalizedMessage !== '') {
+            if (strpos($normalizedMessage, 'invalid mime type for upload') !== false) {
+                $hint = 'The file type metadata sent for this upload was invalid.';
+            } elseif (strpos($normalizedMessage, 'mime type must be in a valid type/subtype format') !== false) {
+                $hint = 'Gemini rejected the file MIME type metadata for this upload.';
+            } elseif (strpos($normalizedMessage, 'configuration error') !== false) {
+                $hint = 'The background job could not access the configured Gemini upload settings.';
+            }
+        }
+
+        return $hint;
+    }
+
+    /**
+     * @param int $postId
+     * @param array<string,int> $imageUsage
+     * @param array<string,string> $statusData
+     * @return string
+     */
+    private function buildColumnStatusMetaHtml(int $postId, array $imageUsage, array $statusData): string {
+        $html = '';
+
+        if (($imageUsage['embedded_bitmap_count'] ?? 0) > 0) {
+            $html .= '<p style="margin:4px 0 0; color:' . esc_attr(self::COLOR_WARNING) . self::HTML_SMALL_OPEN . 'Contains embedded bitmap images</small></p>';
+        } elseif (($imageUsage['uploads_image_count'] ?? 0) > 0) {
+            $html .= '<p style="margin:4px 0 0; color:' . esc_attr(self::COLOR_MUTED) . self::HTML_SMALL_OPEN . 'Uses uploads library images</small></p>';
+        }
+
+        $linkedDocumentFailureNames = $this->getLinkedDocumentFailureNames($postId);
+        if (!empty($linkedDocumentFailureNames)) {
+            $firstFailure = (string) $linkedDocumentFailureNames[0];
+            $html .= '<p style="margin:4px 0 0; color:' . esc_attr(self::COLOR_WARNING) . self::HTML_SMALL_OPEN . 'Linked document upload failed: ' . esc_html($firstFailure);
+
+            if (count($linkedDocumentFailureNames) > 1) {
+                $remainingFailures = array_slice($linkedDocumentFailureNames, 1);
+                $tooltip = implode("\n", $remainingFailures);
+                $html .= ' <span title="' . esc_attr($tooltip) . '" style="text-decoration:underline dotted; cursor:help;">+' . esc_html((string) count($remainingFailures)) . '</span>';
+            }
+
+            $html .= '</small></p>';
+        }
+
+        if (!empty($statusData['last_indexed'])) {
+            $html .= '<p style="margin:4px 0 0;"><small>' . esc_html($statusData['last_indexed']) . '</small></p>';
+        }
+
+        if (!empty($statusData['last_error_at'])) {
+            $html .= '<p style="margin:4px 0 0; color:' . esc_attr(self::COLOR_WARNING) . self::HTML_SMALL_OPEN . esc_html($statusData['last_error_at']) . '</small></p>';
+        }
+
+        if (!empty($statusData['error'])) {
+            $html .= '<p style="margin:4px 0 0; color:' . esc_attr(self::COLOR_ERROR) . self::HTML_SMALL_OPEN . esc_html($statusData['error']) . '</small></p>';
+            $errorHint = $this->getIndexedStatusErrorHint($statusData['error']);
+            if ($errorHint !== '') {
+                $html .= '<p style="margin:4px 0 0; color:' . esc_attr(self::COLOR_MUTED) . self::HTML_SMALL_OPEN . esc_html($errorHint) . '</small></p>';
+            }
+        }
+
+        return $html;
+    }
+
+    private function buildColumnControlHtml(
+        array $statusData,
+        bool $isExcluded,
+        string $excludeToggleId,
+        bool $isOcrEligibleAttachment,
+        string $imageModeSelectId,
+        string $imageProcessingMode,
+        bool $ocrForcedGlobally
+    ): string {
+        $isBusy = in_array((string) ($statusData['label'] ?? ''), ['Queued', 'Uploading', 'Removing', 'Removing, excluded'], true);
+        $html = '<p style="margin:8px 0 0;">';
+        $html .= '<button type="button" class="button button-small geweb-ai-reupload"' . disabled($isBusy, true, false) . '>Upload</button> ';
+        $html .= '<label for="' . esc_attr($excludeToggleId) . '" style="margin-left:8px;display:inline-flex;align-items:center;gap:4px;white-space:nowrap;">';
+        $html .= '<input type="checkbox" id="' . esc_attr($excludeToggleId) . '" name="' . esc_attr($excludeToggleId) . '" class="geweb-ai-toggle-exclude" style="margin:0;" ' . checked($isExcluded, true, false) . disabled($isExcluded, true, false) . '> <span>Exclude</span>';
+        $html .= '</label>';
+        $html .= '</p>';
+
+        if ($isOcrEligibleAttachment) {
+            $html .= '<p style="margin:6px 0 0;">';
+            $html .= '<label for="' . esc_attr($imageModeSelectId) . '" style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap;' . ($ocrForcedGlobally ? 'opacity:0.7;' : '') . '">';
+            $html .= '<span>Image</span>';
+            $html .= '<select id="' . esc_attr($imageModeSelectId) . '" name="' . esc_attr($imageModeSelectId) . '" class="geweb-ai-attachment-image-mode" style="min-width:96px;"' . disabled($ocrForcedGlobally, true, false) . '>';
+            $html .= '<option value="' . esc_attr(ImageOcrService::MODE_NONE) . '"' . selected($imageProcessingMode, ImageOcrService::MODE_NONE, false) . '>None</option>';
+            $html .= '<option value="' . esc_attr(ImageOcrService::MODE_OCR) . '"' . selected($imageProcessingMode, ImageOcrService::MODE_OCR, false) . '>OCR</option>';
+            $html .= '<option value="' . esc_attr(ImageOcrService::MODE_DESCRIBE) . '"' . selected($imageProcessingMode, ImageOcrService::MODE_DESCRIBE, false) . '>Describe</option>';
+            $html .= '</select>';
+            $html .= '</label>';
+            if ($ocrForcedGlobally) {
+                $html .= ' <small style="color:' . esc_attr(self::COLOR_MUTED) . ';">OCR enabled globally</small>';
+            }
+            $html .= '</p>';
+        }
+
         return $html;
     }
 
@@ -437,10 +800,33 @@ class PostIndexManager {
             'div' => ['class' => true, 'data-post-id' => true, 'style' => true],
             'p' => ['class' => true, 'style' => true],
             'small' => ['style' => true],
-            'button' => ['type' => true, 'class' => true],
+            'button' => ['type' => true, 'class' => true, 'disabled' => true],
+            'a' => ['href' => true, 'class' => true, 'data-post-id' => true, 'title' => true, 'style' => true],
             'label' => ['style' => true],
-            'input' => ['type' => true, 'class' => true, 'checked' => true, 'disabled' => true],
+            'input' => ['type' => true, 'class' => true, 'checked' => true, 'disabled' => true, 'style' => true],
+            'select' => ['id' => true, 'name' => true, 'class' => true, 'style' => true, 'disabled' => true],
+            'option' => ['value' => true, 'selected' => true],
+            'span' => ['style' => true, 'title' => true],
         ];
+    }
+
+    public function applyColumnSorting(\WP_Query $query): void {
+        $postType = $query->get('post_type');
+        $canSort = is_admin() && $query->is_main_query() && !is_array($postType) && $this->isManagedPostType((string) $postType);
+        if (!$canSort) {
+            return;
+        }
+
+        $orderby = (string) $query->get('orderby');
+        if ($orderby === 'geweb_ai_markdown_cache') {
+            $query->set('meta_key', self::META_MARKDOWN_BYTES);
+            $query->set('orderby', 'meta_value_num');
+        } elseif ($orderby === 'geweb_ai_indexed') {
+            $query->set('meta_key', self::META_STATUS);
+            $query->set('orderby', 'meta_value');
+        } elseif ($orderby === 'ID') {
+            $query->set('orderby', 'ID');
+        }
     }
 
     /**
@@ -507,15 +893,20 @@ class PostIndexManager {
         update_post_meta($postId, self::META_STATUS, $status);
 
         if ($status === 'indexed') {
-            update_post_meta($postId, self::META_LAST_INDEXED, (string) current_time('timestamp'));
+            update_post_meta($postId, self::META_LAST_INDEXED, (string) time());
+            update_post_meta($postId, self::META_STATUS_TIMESTAMP_BASIS, self::STATUS_TIMESTAMP_BASIS_UTC);
             delete_post_meta($postId, self::META_LAST_ERROR);
+            delete_post_meta($postId, self::META_LAST_ERROR_AT);
             return;
         }
 
         if ($errorMessage !== '') {
             update_post_meta($postId, self::META_LAST_ERROR, $errorMessage);
+            update_post_meta($postId, self::META_LAST_ERROR_AT, (string) time());
+            update_post_meta($postId, self::META_STATUS_TIMESTAMP_BASIS, self::STATUS_TIMESTAMP_BASIS_UTC);
         } elseif ($status !== 'error') {
             delete_post_meta($postId, self::META_LAST_ERROR);
+            delete_post_meta($postId, self::META_LAST_ERROR_AT);
         }
     }
 
@@ -537,6 +928,8 @@ class PostIndexManager {
             if (!$markdown) {
                 $result = $this->buildIndexFailureResult($postId, 'Could not convert post content for indexing.', $excludeOnFailure);
             } else {
+                (new MarkdownCacheStore())->saveMarkdown($postId, $markdown);
+                update_post_meta($postId, self::META_MARKDOWN_BYTES, (string) strlen($markdown));
                 try {
                     $this->uploadPostMarkdown($postId, $markdown);
                     $result = ['success' => true, 'message' => 'Indexed successfully.'];
@@ -572,7 +965,16 @@ class PostIndexManager {
     }
 
     private function uploadPostMarkdown(int $postId, string $markdown): void {
-        $this->deleteDocumentForPost($postId);
+        $existingDocumentName = trim((string) get_post_meta($postId, self::META_DOCUMENT_NAME, true));
+        if ($existingDocumentName !== '') {
+            try {
+                ProviderFactory::make()->deleteDocument($existingDocumentName);
+            } catch (\Exception $e) {
+                // Ignore remote delete failures and continue with the replacement upload.
+            }
+            delete_post_meta($postId, self::META_DOCUMENT_NAME);
+        }
+
         $documentName = ProviderFactory::make()->uploadDocument($markdown, $postId);
         update_post_meta($postId, self::META_DOCUMENT_NAME, $documentName);
         if ($this->shouldUploadReferencedDocuments()) {
@@ -620,15 +1022,19 @@ class PostIndexManager {
         $filePaths = $this->getReferencedAttachmentPaths($postId);
         $documentStore = new DocumentStore();
         $documentIds = [];
+        $failedFiles = [];
 
         foreach ($filePaths as $filePath) {
             $documentId = $documentStore->getOrCreateDocument($filePath, $postId);
             if ($documentId !== null) {
                 $documentIds[] = $documentId;
+            } else {
+                $failedFiles[] = basename($filePath);
             }
         }
 
         $documentStore->updatePostAssociations($postId, $documentIds);
+        $this->setLinkedDocumentFailureNames($postId, $failedFiles);
     }
 
     private function shouldUploadReferencedDocuments(): bool {
@@ -653,6 +1059,40 @@ class PostIndexManager {
 
     /**
      * @param int $postId
+     * @return array<int,string>
+     */
+    private function getLinkedDocumentFailureNames(int $postId): array {
+        $stored = get_post_meta($postId, self::META_LINKED_DOCUMENT_FAILURES, true);
+        if (!is_array($stored)) {
+            return [];
+        }
+
+        $names = array_values(array_filter(array_map('strval', $stored), static function (string $item): bool {
+            return trim($item) !== '';
+        }));
+        return array_values(array_unique($names));
+    }
+
+    /**
+     * @param int $postId
+     * @param array<int,string> $fileNames
+     * @return void
+     */
+    private function setLinkedDocumentFailureNames(int $postId, array $fileNames): void {
+        $normalized = array_values(array_unique(array_filter(array_map('strval', $fileNames), static function (string $item): bool {
+            return trim($item) !== '';
+        })));
+
+        if (empty($normalized)) {
+            delete_post_meta($postId, self::META_LINKED_DOCUMENT_FAILURES);
+            return;
+        }
+
+        update_post_meta($postId, self::META_LINKED_DOCUMENT_FAILURES, $normalized);
+    }
+
+    /**
+     * @param int $postId
      * @return array<string,string>
      */
     private function getStatusData(int $postId): array {
@@ -665,12 +1105,30 @@ class PostIndexManager {
             $status = $documentName !== '' ? 'indexed' : 'not_indexed';
         }
 
-        $resolved = $this->resolvePostStatusPresentation($status, $excluded, $error);
+        $resolved = $this->resolvePostStatusPresentation($status, $excluded, $error, $documentName !== '');
         $lastIndexed = (int) get_post_meta($postId, self::META_LAST_INDEXED, true);
-        $resolved['last_indexed'] = $lastIndexed > 0 ? wp_date(get_option('date_format') . ' ' . get_option('time_format'), $lastIndexed) : '';
+        $lastErrorAt = (int) get_post_meta($postId, self::META_LAST_ERROR_AT, true);
+        $resolved['last_indexed'] = $lastIndexed > 0 ? DateDisplay::formatDateTime($this->normalizeStatusTimestampForDisplay($postId, $lastIndexed)) : '';
+        $resolved['last_error_at'] = $lastErrorAt > 0 ? DateDisplay::formatDateTime($this->normalizeStatusTimestampForDisplay($postId, $lastErrorAt)) : '';
         $resolved['error'] = $error;
 
         return $resolved;
+    }
+
+    private function normalizeStatusTimestampForDisplay(int $postId, int $timestamp): int {
+        if ($timestamp <= 0) {
+            return 0;
+        }
+
+        $basis = (string) get_post_meta($postId, self::META_STATUS_TIMESTAMP_BASIS, true);
+        if ($basis === self::STATUS_TIMESTAMP_BASIS_UTC) {
+            return $timestamp;
+        }
+
+        $timezone = wp_timezone();
+        $date = new \DateTimeImmutable('@' . $timestamp);
+
+        return $timestamp - $timezone->getOffset($date);
     }
 
     /**
@@ -679,7 +1137,7 @@ class PostIndexManager {
      * @param string $error
      * @return array<string,string>
      */
-    private function resolvePostStatusPresentation(string $status, bool $excluded, string $error): array {
+    private function resolvePostStatusPresentation(string $status, bool $excluded, string $error, bool $hasDocument): array {
         $map = [
             'indexed' => ['label' => 'Indexed', 'color' => self::COLOR_SUCCESS],
             'pending' => ['label' => 'Queued', 'color' => self::COLOR_INFO],
@@ -692,7 +1150,7 @@ class PostIndexManager {
         $resolved = $map[$status] ?? $map['not_indexed'];
 
         if ($excluded) {
-            if ($status === 'removing') {
+            if ($status === 'removing' || $hasDocument) {
                 $resolved = ['label' => 'Removing, excluded', 'color' => self::COLOR_WARNING];
             } elseif ($error !== '') {
                 $resolved = ['label' => 'Excluded, index error', 'color' => self::COLOR_ERROR];
@@ -702,6 +1160,53 @@ class PostIndexManager {
         }
 
         return $resolved;
+    }
+
+    private function getMarkdownCacheBytes(int $postId, ?MarkdownCacheStore $cacheStore = null): int {
+        $storedBytes = (int) get_post_meta($postId, self::META_MARKDOWN_BYTES, true);
+        if ($storedBytes > 0) {
+            return $storedBytes;
+        }
+
+        $cacheStore = $cacheStore ?? new MarkdownCacheStore();
+        $markdown = $cacheStore->getMarkdown($postId);
+        if ($markdown === '') {
+            return 0;
+        }
+
+        $bytes = strlen($markdown);
+        update_post_meta($postId, self::META_MARKDOWN_BYTES, (string) $bytes);
+        return $bytes;
+    }
+
+    private function getMarkdownCacheColumnHtml(int $postId): string {
+        $cacheStore = new MarkdownCacheStore();
+        $markdownBytes = $this->getMarkdownCacheBytes($postId, $cacheStore);
+        $hasMarkdown = $markdownBytes > 0;
+        $status = (string) get_post_meta($postId, self::META_STATUS, true);
+        $hasError = $status === 'error' || ((string) get_post_meta($postId, self::META_LAST_ERROR, true) !== '');
+        $isBusy = in_array($status, ['pending', 'uploading', 'removing'], true);
+        $label = $hasMarkdown ? size_format($markdownBytes, 1) : 'Missing';
+        $color = self::COLOR_WARNING;
+        $title = 'View cached Markdown';
+
+        if ($hasMarkdown) {
+            if ($isBusy) {
+                $color = self::COLOR_MUTED;
+                $title = 'View cached Markdown while the upload is in progress';
+            } else {
+                $color = $hasError ? self::COLOR_ERROR : self::COLOR_SUCCESS;
+                $title = $hasError
+                    ? 'View cached Markdown from the failed upload attempt'
+                    : 'View cached Markdown';
+            }
+        }
+
+        if ($hasMarkdown) {
+            return '<a href="#" class="geweb-ai-markdown-cache-view" data-post-id="' . esc_attr((string) $postId) . '" title="' . esc_attr($title) . '" style="display:inline-block;font-weight:600;color:' . esc_attr($color) . ';">' . esc_html($label) . '</a>';
+        }
+
+        return '<span style="display:inline-block;font-weight:600;color:' . esc_attr($color) . ';">' . esc_html($label) . '</span>';
     }
 
     /**
@@ -732,7 +1237,14 @@ class PostIndexManager {
     }
 
     private function schedulePostProcessing(int $postId, string $operation): void {
-        wp_schedule_single_event(time() + 1, self::CRON_HOOK_PROCESS, [$postId, $operation]);
+        wp_schedule_single_event(time() + 1, self::CRON_HOOK_PROCESS, [$postId, $operation, UserScope::getCurrentGroupScopeKey()]);
+
+        // The admin upload action now queues work for WP-Cron. Proactively spawn
+        // cron so the background job starts even on installs where cron traffic
+        // is sparse or delayed.
+        if (function_exists('spawn_cron') && !defined('DOING_CRON')) {
+            spawn_cron(time());
+        }
     }
 
     private function clearScheduledProcessing(int $postId): void {
@@ -741,6 +1253,13 @@ class PostIndexManager {
             while ($timestamp) {
                 wp_unschedule_event($timestamp, self::CRON_HOOK_PROCESS, [$postId, $operation]);
                 $timestamp = wp_next_scheduled(self::CRON_HOOK_PROCESS, [$postId, $operation]);
+            }
+
+            $scopeKey = UserScope::getCurrentGroupScopeKey();
+            $timestamp = wp_next_scheduled(self::CRON_HOOK_PROCESS, [$postId, $operation, $scopeKey]);
+            while ($timestamp) {
+                wp_unschedule_event($timestamp, self::CRON_HOOK_PROCESS, [$postId, $operation, $scopeKey]);
+                $timestamp = wp_next_scheduled(self::CRON_HOOK_PROCESS, [$postId, $operation, $scopeKey]);
             }
         }
     }

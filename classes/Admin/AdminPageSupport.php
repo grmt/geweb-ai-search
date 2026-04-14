@@ -67,7 +67,7 @@ class AdminPageSupport {
             if ($isDefaultPrompt) {
                 $name = $defaultPromptLabel;
             } elseif ($name === '') {
-                $name = 'Version from ' . wp_date(get_option('date_format') . ' ' . get_option('time_format'), $saved_at);
+                $name = 'Version from ' . DateDisplay::formatDateTime($saved_at);
             }
 
             if ($entryScope === 'model' && $entryModel !== '') {
@@ -86,7 +86,7 @@ class AdminPageSupport {
                 'name' => $name,
                 'prompt_b64' => base64_encode($entryPrompt),
                 'saved_at' => $saved_at,
-                'saved_at_label' => wp_date(get_option('date_format') . ' ' . get_option('time_format'), $saved_at),
+                'saved_at_label' => DateDisplay::formatDateTime($saved_at),
                 'scope' => $entryScope,
                 'scope_label' => $scopeLabel,
             ];

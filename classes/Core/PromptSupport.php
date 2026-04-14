@@ -7,6 +7,8 @@ defined('ABSPATH') || exit;
  * Shared helpers for prompt input and prompt-history normalization.
  */
 class PromptSupport {
+    private const REGEX_DISALLOWED_URL = '/\b(?:https?:\/\/|www\.)[^\s<>"]+/i';
+
     /**
      * Normalize prompt text from browser/request input.
      *
@@ -24,6 +26,27 @@ class PromptSupport {
         $prompt = str_replace("\0", '', $prompt);
 
         return trim($prompt);
+    }
+
+    /**
+     * @param string $prompt
+     * @return bool
+     */
+    public static function containsDisallowedUrl(string $prompt): bool {
+        return preg_match(self::REGEX_DISALLOWED_URL, $prompt) === 1;
+    }
+
+    /**
+     * @param string $prompt
+     * @param string $fieldLabel
+     * @return void
+     */
+    public static function assertNoUrls(string $prompt, string $fieldLabel = 'Prompt'): void {
+        if (!self::containsDisallowedUrl($prompt)) {
+            return;
+        }
+
+        throw new \InvalidArgumentException($fieldLabel . ' cannot contain URLs. Remove links and try again.');
     }
 
     /**
