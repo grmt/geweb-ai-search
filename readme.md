@@ -1,4 +1,4 @@
-# Geweb AI Search
+# Workspace AI Search
 
 **Keep native WordPress search results, and add optional AI answers powered by Google Gemini.**
 
@@ -9,7 +9,9 @@
 
 ---
 
-Geweb AI Search adds an AI layer to your existing WordPress search powered by Google Gemini AI. Visitors can keep using the standard WordPress search results page from your theme, including excerpts and surrounding context, and optionally continue their search with AI for a direct, contextual answer with source links.
+Workspace AI Search adds an AI layer to your existing WordPress search powered by Google Gemini AI. Visitors can keep using the standard WordPress search results page from your theme, including excerpts and surrounding context, and optionally continue their search with AI for a direct, contextual answer with source links.
+
+Workspace AI Search is a spinoff of geweb, expanded into a broader AI search workspace with chats, prompts, document handling, and source-grounded answers.
 
 **[Official WordPress Plugin Page](https://wordpress.org/plugins/geweb-ai-search/)**
 **[Live Demo](https://aisearch.mygeweb.com/)**
@@ -44,7 +46,7 @@ Geweb AI Search adds an AI layer to your existing WordPress search powered by Go
 ### From WordPress.org
 
 1. Go to **Plugins → Add New**
-2. Search for "Geweb AI Search"
+2. Search for "Workspace AI Search"
 3. Click **Install Now**, then **Activate**
 
 ### Manual
@@ -56,7 +58,7 @@ Geweb AI Search adds an AI layer to your existing WordPress search powered by Go
 
 ## Configuration
 
-1. Go to **Settings → Geweb AI Search**
+1. Go to **Settings → Workspace AI Search**
 2. Enter your Google Gemini API key
 3. Select the AI model (recommended: `gemini-2.5-flash`)
 4. Choose which post types to index

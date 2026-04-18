@@ -6,6 +6,7 @@ defined('ABSPATH') || exit;
 class ReferencedDocumentManager {
     private const OPTION_REFERENCED_SELECTION_TARGETS = 'geweb_aisearch_referenced_document_selection_targets';
     private const OPTION_REFERENCED_OPERATION_STATUSES = 'geweb_aisearch_referenced_document_operation_statuses';
+    private const OPTION_REFERENCED_IMAGE_PROCESSING_MODES = 'geweb_aisearch_referenced_document_image_processing_modes';
     private const OPERATION_TIMEOUT_SECONDS = 300;
     private const SQL_SELECT_ALL_FROM = 'SELECT * FROM ';
     private const SQL_DELETE_FROM = 'DELETE FROM ';
@@ -94,6 +95,7 @@ class ReferencedDocumentManager {
         $wpdb->delete($this->refsTable, ['owner_key' => $this->ownerKey], ['%s']);
         $wpdb->delete($this->documentsTable, ['owner_key' => $this->ownerKey], ['%s']);
         UserScope::deleteGroupScopedOption(self::OPTION_REFERENCED_SELECTION_TARGETS);
+        UserScope::deleteGroupScopedOption(self::OPTION_REFERENCED_IMAGE_PROCESSING_MODES);
         $this->documentStore->clearReferencedDocumentOverviewCache();
     }
 
@@ -184,6 +186,26 @@ class ReferencedDocumentManager {
         }
 
         return $updatedNiceName;
+    }
+
+    public function removeReferencedDocumentFromFileListByHash(string $fileHash): bool {
+        $reference = $this->findReferenceByHash($fileHash);
+        if (is_array($reference) && !empty($reference['post_ids'])) {
+            return false;
+        }
+
+        $filePath = $this->resolveNiceNameFilePath($fileHash);
+        if ($filePath === '') {
+            return false;
+        }
+
+        $support = new SimpleFileListSupport();
+        $removed = $support->removeSimpleFileListEntryByPath($filePath);
+        if ($removed) {
+            $this->documentStore->clearReferencedDocumentOverviewCache();
+        }
+
+        return $removed;
     }
 
     /**
@@ -284,6 +306,86 @@ class ReferencedDocumentManager {
     }
 
     /**
+     * @return array<string,string>
+     */
+    public function getReferencedDocumentImageProcessingModes(): array {
+        $stored = UserScope::getGroupScopedOption(self::OPTION_REFERENCED_IMAGE_PROCESSING_MODES, []);
+        if (!is_array($stored)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($stored as $fileHash => $mode) {
+            if (!is_string($fileHash) || $fileHash === '') {
+                continue;
+            }
+
+            $normalizedMode = $this->normalizeReferencedDocumentImageProcessingMode((string) $mode);
+            if ($normalizedMode === ImageOcrService::MODE_NONE) {
+                continue;
+            }
+
+            $normalized[sanitize_text_field($fileHash)] = $normalizedMode;
+        }
+
+        return $normalized;
+    }
+
+    public function getReferencedDocumentImageProcessingMode(string $fileHash): string {
+        $fileHash = sanitize_text_field($fileHash);
+        if ($fileHash === '') {
+            return ImageOcrService::MODE_NONE;
+        }
+
+        $modes = $this->getReferencedDocumentImageProcessingModes();
+        return $modes[$fileHash] ?? ImageOcrService::MODE_NONE;
+    }
+
+    public function saveReferencedDocumentImageProcessingMode(string $fileHash, string $mode): void {
+        $fileHash = sanitize_text_field($fileHash);
+        if ($fileHash === '') {
+            return;
+        }
+
+        $modes = $this->getReferencedDocumentImageProcessingModes();
+        $normalizedMode = $this->normalizeReferencedDocumentImageProcessingMode($mode);
+        if ($normalizedMode === ImageOcrService::MODE_NONE) {
+            unset($modes[$fileHash]);
+        } else {
+            $modes[$fileHash] = $normalizedMode;
+        }
+
+        UserScope::updateGroupScopedOption(self::OPTION_REFERENCED_IMAGE_PROCESSING_MODES, $modes, false);
+        $this->documentStore->clearReferencedDocumentOverviewCache();
+    }
+
+    public function refreshReferencedDocumentImageMarkdownCache(string $fileHash): void {
+        $fileHash = sanitize_text_field($fileHash);
+        if ($fileHash === '') {
+            throw new \Exception('Missing file hash.');
+        }
+
+        $reference = $this->findReferenceByHash($fileHash);
+        if (!is_array($reference) || empty($reference['file_path'])) {
+            throw new \Exception('Could not resolve the referenced image.');
+        }
+
+        $mode = $this->getReferencedDocumentImageProcessingMode($fileHash);
+        if (!in_array($mode, [ImageOcrService::MODE_OCR, ImageOcrService::MODE_DESCRIBE], true)) {
+            throw new \Exception('Image processing is disabled for this file.');
+        }
+
+        $this->documentStore->refreshReferencedImageMarkdownCache(
+            $fileHash,
+            (string) $reference['file_path'],
+            (string) ($reference['display_name'] ?? basename((string) $reference['file_path'])),
+            (string) ($reference['mime_type'] ?? ''),
+            $mode
+        );
+        $this->documentStore->clearReferencedDocumentOverviewCache();
+    }
+
+    /**
      * @return array<string,array{status:string,error:string,updated_at:int}>
      */
     public function getReferencedDocumentOperationStatuses(): array {
@@ -375,6 +477,12 @@ class ReferencedDocumentManager {
         $this->documentStore->clearReferencedDocumentOverviewCache();
     }
 
+    private function normalizeReferencedDocumentImageProcessingMode(string $mode): string {
+        return in_array($mode, [ImageOcrService::MODE_OCR, ImageOcrService::MODE_DESCRIBE], true)
+            ? $mode
+            : ImageOcrService::MODE_NONE;
+    }
+
     /**
      * @param array<int,int> $postIds
      * @return void
@@ -429,6 +537,8 @@ class ReferencedDocumentManager {
                 'file_path' => $filePath,
                 'post_ids' => $postIds,
                 'primary_post_id' => !empty($postIds) ? (int) $postIds[0] : 0,
+                'display_name' => (string) ($item['display_name'] ?? basename($filePath)),
+                'mime_type' => (string) ($item['mime_type'] ?? ''),
             ];
         }
 

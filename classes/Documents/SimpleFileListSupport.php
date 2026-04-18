@@ -192,6 +192,85 @@ class SimpleFileListSupport {
         return array_values($entries);
     }
 
+    public function buildSimpleFileListAdminUrl(string $filePath): string {
+        $searchTerm = basename(wp_normalize_path($filePath));
+        $baseUrl = admin_url('admin.php?page=ee-simple-file-list');
+
+        if ($searchTerm === '') {
+            return $baseUrl;
+        }
+
+        return add_query_arg([
+            's' => $searchTerm,
+            'eeFileSearch' => $searchTerm,
+        ], $baseUrl);
+    }
+
+    public function removeSimpleFileListEntryByPath(string $filePath): bool {
+        global $wpdb;
+
+        $normalizedPath = wp_normalize_path($filePath);
+        if ($normalizedPath === '' || !is_readable($normalizedPath)) {
+            return false;
+        }
+
+        $targets = $this->buildSimpleFileListTargets([$normalizedPath]);
+        if (empty($targets)) {
+            return false;
+        }
+
+        $rows = $wpdb->get_results(
+            "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE 'eeSFL\\_FileList\\_%'",
+            ARRAY_A
+        );
+        if (!is_array($rows) || empty($rows)) {
+            return false;
+        }
+
+        $removedAny = false;
+        foreach ($rows as $row) {
+            if (!is_array($row) || !isset($row['option_name'], $row['option_value'])) {
+                continue;
+            }
+
+            $value = maybe_unserialize($row['option_value']);
+            if (!is_array($value)) {
+                continue;
+            }
+
+            $updatedValue = [];
+            $removedFromOption = false;
+
+            foreach ($value as $record) {
+                if (!is_array($record)) {
+                    $updatedValue[] = $record;
+                    continue;
+                }
+
+                $recordPath = isset($record['FilePath']) ? trim((string) $record['FilePath']) : '';
+                $matchedPath = $recordPath !== ''
+                    ? $this->matchSimpleFileListRecordPath($recordPath, $targets)
+                    : null;
+
+                if ($matchedPath === $normalizedPath) {
+                    $removedFromOption = true;
+                    $removedAny = true;
+                    continue;
+                }
+
+                $updatedValue[] = $record;
+            }
+
+            if (!$removedFromOption) {
+                continue;
+            }
+
+            update_option((string) $row['option_name'], array_values($updatedValue), false);
+        }
+
+        return $removedAny;
+    }
+
     /**
      * @return array<int,string>
      */
@@ -213,13 +292,6 @@ class SimpleFileListSupport {
 
             $filePath = wp_normalize_path(trailingslashit($directory) . $entry);
             if (!is_file($filePath) || !is_readable($filePath)) {
-                continue;
-            }
-
-            $fileType = wp_check_filetype($entry);
-            $extension = isset($fileType['ext']) ? (string) $fileType['ext'] : '';
-            $typeGroup = $extension !== '' ? wp_ext2type($extension) : false;
-            if (in_array($typeGroup, ['image', 'audio', 'video'], true)) {
                 continue;
             }
 
@@ -323,6 +395,75 @@ class SimpleFileListSupport {
         }
 
         return $niceNames;
+    }
+
+    /**
+     * @param array<int,string> $directories
+     * @return array<string,int>
+     */
+    public function getSimpleFileListModifiedMap(array $directories): array {
+        global $wpdb;
+
+        $targets = [];
+        $uploads = wp_get_upload_dir();
+        $baseDir = wp_normalize_path((string) ($uploads['basedir'] ?? ''));
+
+        foreach ($directories as $directory) {
+            foreach ($this->getSupportedFilesInDirectory($directory) as $filePath) {
+                $normalizedPath = wp_normalize_path($filePath);
+                $targets[$normalizedPath] = [
+                    'basename' => basename($normalizedPath),
+                    'relative_path' => $baseDir !== '' && strpos($normalizedPath, $baseDir) === 0
+                        ? ltrim(substr($normalizedPath, strlen($baseDir)), '/')
+                        : basename($normalizedPath),
+                ];
+            }
+        }
+
+        if (empty($targets)) {
+            return [];
+        }
+
+        $modifiedMap = [];
+
+        $optionRows = $wpdb->get_results(
+            "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE 'eeSFL%' OR option_name LIKE '%simple_file_list%'",
+            ARRAY_A
+        );
+        if (is_array($optionRows)) {
+            foreach ($optionRows as $row) {
+                if (!is_array($row) || !isset($row['option_value'])) {
+                    continue;
+                }
+
+                $value = maybe_unserialize($row['option_value']);
+                $this->scanSimpleFileListModifiedMetadata($value, $targets, $modifiedMap);
+            }
+        }
+
+        $candidateTables = array_unique(array_filter(array_merge(
+            $wpdb->get_col($wpdb->prepare(self::SQL_SHOW_TABLES_LIKE, $wpdb->esc_like($wpdb->prefix . 'eeSFL') . '%')),
+            $wpdb->get_col($wpdb->prepare(self::SQL_SHOW_TABLES_LIKE, $wpdb->esc_like($wpdb->prefix . 'simple_file_list') . '%')),
+            $wpdb->get_col($wpdb->prepare(self::SQL_SHOW_TABLES_LIKE, $wpdb->esc_like($wpdb->prefix . 'eesfl') . '%'))
+        )));
+
+        foreach ($candidateTables as $tableName) {
+            $tableName = (string) $tableName;
+            if ($tableName === '') {
+                continue;
+            }
+
+            $rows = $wpdb->get_results('SELECT * FROM ' . $tableName, ARRAY_A);
+            if (!is_array($rows)) {
+                continue;
+            }
+
+            foreach ($rows as $row) {
+                $this->scanSimpleFileListModifiedMetadata($row, $targets, $modifiedMap);
+            }
+        }
+
+        return $modifiedMap;
     }
 
     /**
@@ -580,6 +721,143 @@ class SimpleFileListSupport {
         }
 
         return null;
+    }
+
+    /**
+     * @param array<int,string> $filePaths
+     * @return array<string,array<string,string>>
+     */
+    private function buildSimpleFileListTargets(array $filePaths): array {
+        $targets = [];
+        $uploads = wp_get_upload_dir();
+        $baseDir = wp_normalize_path((string) ($uploads['basedir'] ?? ''));
+
+        foreach ($filePaths as $filePath) {
+            $normalizedPath = wp_normalize_path($filePath);
+            if ($normalizedPath === '') {
+                continue;
+            }
+
+            $targets[$normalizedPath] = [
+                'basename' => basename($normalizedPath),
+                'relative_path' => $baseDir !== '' && strpos($normalizedPath, $baseDir) === 0
+                    ? ltrim(substr($normalizedPath, strlen($baseDir)), '/')
+                    : basename($normalizedPath),
+            ];
+        }
+
+        return $targets;
+    }
+
+    /**
+     * @param mixed $value
+     * @param array<string,array<string,string>> $targets
+     * @param array<string,int> $modifiedMap
+     */
+    public function scanSimpleFileListModifiedMetadata($value, array $targets, array &$modifiedMap): void {
+        if (is_object($value)) {
+            $value = get_object_vars($value);
+        }
+
+        if (!is_array($value)) {
+            return;
+        }
+
+        $match = $this->extractSimpleFileListRecordModifiedMatch($value, $targets);
+        if ($match !== null) {
+            $filePath = $match['file_path'];
+            $modifiedAt = (int) $match['modified_at'];
+            if ($filePath !== '' && $modifiedAt > 0 && (!isset($modifiedMap[$filePath]) || $modifiedAt > $modifiedMap[$filePath])) {
+                $modifiedMap[$filePath] = $modifiedAt;
+            }
+        }
+
+        foreach ($value as $nested) {
+            if (is_array($nested) || is_object($nested)) {
+                $this->scanSimpleFileListModifiedMetadata($nested, $targets, $modifiedMap);
+            }
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $record
+     * @param array<string,array<string,string>> $targets
+     * @return array{file_path:string,modified_at:int}|null
+     */
+    public function extractSimpleFileListRecordModifiedMatch(array $record, array $targets): ?array {
+        $stringFields = [];
+        foreach ($record as $key => $value) {
+            if (!is_scalar($value)) {
+                continue;
+            }
+
+            $stringValue = trim((string) $value);
+            if ($stringValue === '') {
+                continue;
+            }
+
+            $stringFields[(string) $key] = $stringValue;
+        }
+
+        if (empty($stringFields)) {
+            return null;
+        }
+
+        foreach ($targets as $filePath => $target) {
+            $basename = $target['basename'];
+            $relativePath = $target['relative_path'];
+            $matched = false;
+
+            foreach ($stringFields as $fieldValue) {
+                $normalizedField = wp_normalize_path($fieldValue);
+                if (
+                    $fieldValue === $basename ||
+                    $normalizedField === wp_normalize_path($relativePath) ||
+                    str_ends_with($normalizedField, '/' . $basename) ||
+                    strpos($normalizedField, $basename) !== false
+                ) {
+                    $matched = true;
+                    break;
+                }
+            }
+
+            if (!$matched) {
+                continue;
+            }
+
+            foreach ($stringFields as $fieldKey => $fieldValue) {
+                if (!preg_match('/modified|updated|changed|date|time|timestamp/i', $fieldKey)) {
+                    continue;
+                }
+
+                $parsed = $this->parseSimpleFileListTimestamp($fieldValue);
+                if ($parsed > 0) {
+                    return [
+                        'file_path' => $filePath,
+                        'modified_at' => $parsed,
+                    ];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private function parseSimpleFileListTimestamp(string $value): int {
+        $value = trim($value);
+        if ($value === '') {
+            return 0;
+        }
+
+        if (ctype_digit($value)) {
+            $timestamp = (int) $value;
+            if ($timestamp > 1000000000) {
+                return $timestamp;
+            }
+        }
+
+        $parsed = strtotime($value);
+        return $parsed !== false ? (int) $parsed : 0;
     }
 
     public function isUsableSimpleFileListNiceName(string $niceName, string $basename): bool {

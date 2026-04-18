@@ -23,19 +23,68 @@ class ReferencedDocumentListTable extends \WP_List_Table {
     }
 
     /**
+     * @param array<string,mixed> $item
+     */
+    public function single_row($item): void {
+        $searchText = $this->getReferencedDocumentSearchText($item);
+        $statusValue = $this->getIndexedFilterValue($item);
+        $typeValue = $this->getTypeFilterValue((string) ($item['mime_type'] ?? ''));
+        $referencedInValue = $this->getScopeFilterValue($item);
+
+        $attributes = sprintf(
+            ' data-referenced-document-status="%s" data-referenced-document-type="%s" data-referenced-document-referenced-in="%s" data-referenced-document-search="%s"',
+            esc_attr($statusValue),
+            esc_attr($typeValue),
+            esc_attr($referencedInValue),
+            esc_attr($searchText)
+        );
+
+        echo '<tr' . $attributes . '>';
+        $this->single_row_columns($item);
+        echo '</tr>';
+    }
+
+    /**
+     * @return string
+     */
+    private function getReferencedDocumentSearchText(array $item): string {
+        $parts = [
+            (string) ($item['display_name'] ?? ''),
+            (string) ($item['nice_name'] ?? ''),
+            (string) ($item['content_ids'] ?? ''),
+            (string) ($item['document_id'] ?? ''),
+        ];
+
+        $posts = isset($item['posts']) && is_array($item['posts']) ? $item['posts'] : [];
+        foreach ($posts as $post) {
+            if (!is_array($post)) {
+                continue;
+            }
+
+            $parts[] = (string) ($post['title'] ?? '');
+            $parts[] = (string) ($post['id'] ?? '');
+        }
+
+        $parts = array_filter(array_map('trim', $parts));
+        return implode(' ', $parts);
+    }
+
+    /**
      * @return array<string,string>
      */
     public function get_columns(): array {
         return [
-            'content_ids'   => 'ID',
-            'display_name'  => 'Document Name',
+            'display_name'  => 'Name',
             'nice_name'     => 'Nice Name',
-            'status'        => 'AI Indexed',
+            'actions'       => 'AI Indexed',
+            'markdown_cache'=> 'MD Cache',
             'tracked_as'    => 'Tracked As',
             'mime_type'     => 'Type',
+            'pdf_analysis'  => 'PDF',
+            'last_modified' => 'Last Modified',
             'last_uploaded' => 'Upload Date',
-            'referenced_in' => 'Referenced In',
-            'actions'       => 'Actions',
+            'referenced_in' => 'Reference',
+            'content_ids'   => 'Id',
         ];
     }
 
@@ -47,15 +96,19 @@ class ReferencedDocumentListTable extends \WP_List_Table {
             'content_ids' => ['reference_count', false],
             'display_name' => ['display_name', true],
             'nice_name' => ['nice_name', false],
-            'status' => ['status', false],
+            'markdown_cache' => ['markdown_cache', false],
             'mime_type' => ['mime_type', false],
+            'pdf_analysis' => ['pdf_analysis', false],
+            'last_modified' => ['last_modified', false],
             'last_uploaded' => ['last_uploaded', false],
             'referenced_in' => ['reference_count', false],
+            'actions' => ['actions', false],
         ];
     }
 
     /**
      * Prepare table items.
+     * Load ALL items for client-side filtering (ignore server-side filters).
      */
     public function prepare_items(): void {
         $columns = $this->get_columns();
@@ -65,12 +118,16 @@ class ReferencedDocumentListTable extends \WP_List_Table {
 
         $documentStore = new DocumentStore();
         $allItems = $documentStore->getReferencedDocumentOverview();
-        $allItems = $this->filterItems($allItems);
+        // Skip server-side filtering - all filtering is now done client-side in JavaScript
+        // $allItems = $this->filterItems($allItems);
         $allItems = $this->sortItems($allItems);
 
-        $perPage = 20;
-        $currentPage = $this->get_pagenum();
         $totalItems = count($allItems);
+
+        // Set per_page high enough to load all items in a single page
+        // Client-side filtering will hide/show rows without pagination
+        $perPage = max(500, $totalItems);
+        $currentPage = $this->get_pagenum();
 
         $this->set_pagination_args([
             'total_items' => $totalItems,
@@ -96,11 +153,42 @@ class ReferencedDocumentListTable extends \WP_List_Table {
     protected function column_display_name($item): string {
         $label = isset($item['display_name']) ? (string) $item['display_name'] : '—';
         $url = isset($item['file_url']) ? (string) $item['file_url'] : '';
-        if ($url === '') {
-            return esc_html($label);
+        $filePath = isset($item['file_path']) ? (string) $item['file_path'] : '';
+        $fileHash = isset($item['file_hash']) ? (string) $item['file_hash'] : '';
+        $managedBySimpleFileList = !empty($item['managed_by_simple_file_list']) && $filePath !== '';
+        $isReferenced = $this->hasReferencedPosts($item);
+        $isMissingFromSimpleFileList = $isReferenced && !$managedBySimpleFileList;
+        $isBrokenReference = !empty($item['broken_reference']);
+
+        $actions = [];
+        if ($url !== '') {
+            $actions[] = '<span class="download"><a href="' . esc_url($url) . '" target="_blank" rel="noopener noreferrer">Download</a></span>';
         }
 
-        return '<a href="' . esc_url($url) . '" target="_blank" rel="noopener noreferrer">' . esc_html($label) . '</a>';
+        if ($managedBySimpleFileList) {
+            $support = new SimpleFileListSupport();
+            $actions[] = '<span class="view"><a href="' . esc_url($support->buildSimpleFileListAdminUrl($filePath)) . '">Show in File List</a></span>';
+            if ($fileHash !== '' && !$isReferenced) {
+                $actions[] = '<span class="trash"><a href="#" class="geweb-referenced-document-remove-from-file-list" data-file-hash="' . esc_attr($fileHash) . '">Remove from File List</a></span>';
+            }
+        }
+
+        $html = '<strong>' . esc_html($label) . '</strong>';
+        if ($isBrokenReference) {
+            $html .= '<div><small style="color:#d63638;font-weight:600;">Broken link or missing file</small></div>';
+        }
+        if ($isMissingFromSimpleFileList) {
+            $html .= '<div><small style="color:#d63638;font-weight:600;">Missing from Simple File List</small></div>';
+        }
+        $duplicateNotice = (new FileDuplicateHashIndex())->getReferencedFileDuplicateNotice($fileHash, $filePath);
+        if ($duplicateNotice !== '') {
+            $html .= '<div><small style="color:#996800;font-weight:600;">' . esc_html($duplicateNotice) . '</small></div>';
+        }
+        if (!empty($actions)) {
+            $html .= '<div class="row-actions visible">' . implode(' | ', $actions) . '</div>';
+        }
+
+        return $html;
     }
 
     /**
@@ -174,10 +262,15 @@ class ReferencedDocumentListTable extends \WP_List_Table {
      * @param array<string,mixed> $item
      * @return string
      */
-    protected function column_status($item): string {
+    private function getIndexedStatusHtml(array $item): string {
         $operationStatus = sanitize_key((string) ($item['operation_status'] ?? ''));
+        $status = (string) ($item['status'] ?? '');
+        $statusColor = (string) ($item['status_color'] ?? '');
         $includeTarget = !empty($item['include_in_store_target']);
-        $isUploaded = strpos((string) ($item['status'] ?? ''), 'Uploaded') === 0;
+        $isUploaded = strpos($status, 'Uploaded') === 0;
+        $isOutOfSync = $isUploaded && !empty($item['modified_after_upload']);
+        $isBrokenReference = !empty($item['broken_reference']);
+        $isMissingFromSimpleFileList = $this->hasReferencedPosts($item) && empty($item['managed_by_simple_file_list']);
 
         if ($operationStatus === 'uploading') {
             $label = 'Uploading';
@@ -185,12 +278,24 @@ class ReferencedDocumentListTable extends \WP_List_Table {
         } elseif ($operationStatus === 'excluding') {
             $label = 'Excluding';
             $color = '#996800';
+        } elseif ($isBrokenReference) {
+            $label = 'Error';
+            $color = '#d63638';
+        } elseif ($isMissingFromSimpleFileList) {
+            $label = 'Error';
+            $color = '#d63638';
+        } elseif ($statusColor === '#d63638') {
+            $label = 'Error';
+            $color = '#d63638';
         } elseif ($operationStatus === 'error') {
             $label = 'Error';
             $color = '#d63638';
         } elseif (!$includeTarget || $operationStatus === 'excluded') {
             $label = 'Excluded';
             $color = '#996800';
+        } elseif ($isOutOfSync) {
+            $label = 'Out of sync';
+            $color = '#d63638';
         } elseif ($isUploaded || $operationStatus === 'indexed') {
             $label = 'Indexed';
             $color = '#46b450';
@@ -200,6 +305,30 @@ class ReferencedDocumentListTable extends \WP_List_Table {
         }
 
         return '<span style="color:' . esc_attr($color) . ';">' . esc_html($label) . '</span>';
+    }
+
+    /**
+     * @param array<string,mixed> $item
+     */
+    private function getIndexedErrorHtml(array $item): string {
+        $operationStatus = sanitize_key((string) ($item['operation_status'] ?? ''));
+        $operationError = trim((string) ($item['operation_error'] ?? ''));
+        $isBrokenReference = !empty($item['broken_reference']);
+        $isMissingFromSimpleFileList = $this->hasReferencedPosts($item) && empty($item['managed_by_simple_file_list']);
+
+        if ($isBrokenReference) {
+            return '<p style="margin:6px 0 0; color:#d63638;">Broken link or missing file.</p>';
+        }
+
+        if ($isMissingFromSimpleFileList) {
+            return '<p style="margin:6px 0 0; color:#d63638;">Missing from Simple File List.</p>';
+        }
+
+        if ($operationStatus !== 'error' || $operationError === '') {
+            return '';
+        }
+
+        return '<p style="margin:6px 0 0; color:#d63638;">' . esc_html($operationError) . '</p>';
     }
 
     /**
@@ -220,10 +349,44 @@ class ReferencedDocumentListTable extends \WP_List_Table {
         }
 
         if ($geminiDocName !== '') {
-            $parts[] = '<code>' . esc_html($geminiDocName) . '</code>';
+            $parts[] = '<code title="' . esc_attr($geminiDocName) . '">' . esc_html($this->getTrackedAsLabel($geminiDocName)) . '</code>';
         }
 
         return implode('<br>', $parts);
+    }
+
+    /**
+     * @param array<string,mixed> $item
+     * @return string
+     */
+    protected function column_markdown_cache($item): string {
+        $fileHash = isset($item['file_hash']) ? (string) $item['file_hash'] : '';
+        if ($fileHash === '') {
+            return '—';
+        }
+
+        if (!$this->isMarkdownCacheApplicable($item)) {
+            return '<span style="color:#646970;">N/A</span>';
+        }
+
+        $cacheStore = new ReferencedDocumentMarkdownCacheStore();
+        $bytes = $cacheStore->getMarkdownBytes($fileHash);
+        if ($bytes <= 0) {
+            $lastUploaded = isset($item['last_uploaded']) ? (int) $item['last_uploaded'] : 0;
+            if ($lastUploaded > 0) {
+                return '<span style="color:#646970;">N/A</span>';
+            }
+
+            return '<span style="color:#646970;">Missing</span>';
+        }
+
+        return sprintf(
+            '<a href="#" class="geweb-ai-markdown-cache-view" data-cache-kind="document" data-file-hash="%s" title="%s" style="display:inline-block;font-weight:600;color:%s;">%s</a>',
+            esc_attr($fileHash),
+            esc_attr__('View cached Markdown for this document', 'geweb-ai-search'),
+            esc_attr('#46b450'),
+            esc_html(size_format($bytes, 1))
+        );
     }
 
     /**
@@ -237,6 +400,57 @@ class ReferencedDocumentListTable extends \WP_List_Table {
         }
 
         return DateDisplay::formatDateTime($timestamp);
+    }
+
+    /**
+     * @param array<string,mixed> $item
+     * @return string
+     */
+    protected function column_last_modified($item): string {
+        $timestamp = isset($item['last_modified']) ? (int) $item['last_modified'] : 0;
+        if ($timestamp <= 0) {
+            return '—';
+        }
+
+        $label = DateDisplay::formatDateTime($timestamp);
+        $modifiedAfterUpload = !empty($item['modified_after_upload']);
+        if (!$modifiedAfterUpload) {
+            return $label;
+        }
+
+        return sprintf(
+            '%s<br><small style="color:#996800;">Modified after upload</small>',
+            esc_html($label)
+        );
+    }
+
+    /**
+     * @param array<string,mixed> $item
+     * @return string
+     */
+    protected function column_pdf_analysis($item): string {
+        if (((string) ($item['mime_type'] ?? '')) !== 'application/pdf') {
+            return '—';
+        }
+
+        $label = trim((string) ($item['pdf_classification_label'] ?? ''));
+        $details = trim((string) ($item['pdf_classification_details'] ?? ''));
+        if ($label === '') {
+            return '<span style="color:#646970;">Unknown PDF</span>';
+        }
+
+        $color = '#646970';
+        $key = (string) ($item['pdf_classification'] ?? '');
+        if ($key === 'text') {
+            $color = '#46b450';
+        } elseif ($key === 'mixed') {
+            $color = '#996800';
+        } elseif ($key === 'scanned' || $key === 'broken') {
+            $color = '#d63638';
+        }
+
+        $title = $details !== '' ? ' title="' . esc_attr($details) . '"' : '';
+        return '<span style="color:' . esc_attr($color) . ';"' . $title . '>' . esc_html($label) . '</span>';
     }
 
     /**
@@ -283,33 +497,47 @@ class ReferencedDocumentListTable extends \WP_List_Table {
         $status = isset($item['status']) ? (string) $item['status'] : '';
         $operationStatus = sanitize_key((string) ($item['operation_status'] ?? ''));
         $isUploaded = strpos($status, 'Uploaded') === 0;
-        $canManage = $isUploaded || !empty($item['file_path']);
+        $isBrokenReference = !empty($item['broken_reference']);
+        $canManage = !$isBrokenReference && ($isUploaded || !empty($item['file_path']));
         $includeTarget = !empty($item['include_in_store_target']);
         $isTransitioning = in_array($operationStatus, ['uploading', 'excluding'], true);
         $disableUpload = !$includeTarget || $isTransitioning;
         $disableExcludeToggle = $isTransitioning;
+        $statusHtml = $this->getIndexedStatusHtml($item);
+        $errorHtml = $this->getIndexedErrorHtml($item);
+        $imageProcessingControlHtml = $this->buildImageProcessingControlHtml($item, $isTransitioning);
 
         if (!$canManage) {
-            return '<div class="geweb-ai-index-cell geweb-referenced-document-cell" data-file-hash="' . esc_attr($fileHash) . '"><p style="margin:0;">—</p><p class="geweb-ai-index-feedback" style="display:none; margin:4px 0 0;"></p></div>';
+            return '<div class="geweb-ai-index-cell geweb-referenced-document-cell" data-file-hash="' . esc_attr($fileHash) . '"><p style="margin:0 0 6px;">' . $statusHtml . '</p>' . $errorHtml . '<p style="margin:6px 0 0;">—</p><p class="geweb-ai-index-feedback" style="display:none; margin:4px 0 0;"></p></div>';
         }
 
         return sprintf(
             '<div class="geweb-ai-index-cell geweb-referenced-document-cell" data-file-hash="%s" data-current-uploaded="%s" data-current-target="%s">' .
-            '<button type="button" class="button button-small geweb-referenced-document-upload-now" data-file-hash="%s"%s>Upload</button> ' .
-            '<label for="%s" style="margin-left:8px;"><input type="checkbox" id="%s" name="%s" class="geweb-referenced-document-toggle-exclude" data-file-hash="%s" %s%s> Exclude</label>' .
+            '<p style="margin:0 0 6px;">%s</p>' .
+            '%s' .
+            '<p style="margin:8px 0 0;"><button type="button" class="button button-small geweb-referenced-document-upload-now" data-file-hash="%s"%s>Upload</button></p>' .
+            '%s' .
+            '<p style="margin:6px 0 0;"><label for="%s" style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;"><input type="checkbox" id="%s" name="%s" class="geweb-referenced-document-toggle-exclude" data-file-hash="%s" %s%s> <span>Exclude</span></label></p>' .
+            '%s' .
             '<p class="geweb-ai-index-feedback" style="display:none; margin:4px 0 0;"></p>' .
             '</div>',
             esc_attr($fileHash),
             $isUploaded ? '1' : '0',
             $includeTarget ? '1' : '0',
+            $statusHtml,
+            $errorHtml,
             esc_attr($fileHash),
             $disableUpload ? ' disabled' : '',
+            $isUploaded && !empty($item['modified_after_upload'])
+                ? '<button type="button" class="button button-small geweb-referenced-document-remove-now" data-file-hash="' . esc_attr($fileHash) . '" style="margin-left:8px;">Remove from store</button> '
+                : '',
             esc_attr($excludeToggleId),
             esc_attr($excludeToggleId),
             esc_attr($excludeToggleId),
             esc_attr($fileHash),
             checked(!$includeTarget, true, false),
-            $disableExcludeToggle ? ' disabled' : ''
+            $disableExcludeToggle ? ' disabled' : '',
+            $imageProcessingControlHtml
         );
     }
 
@@ -320,7 +548,7 @@ class ReferencedDocumentListTable extends \WP_List_Table {
      * @return string
      */
     public function renderStatusCell(array $item): string {
-        return $this->column_status($item);
+        return $this->getIndexedStatusHtml($item);
     }
 
     /**
@@ -334,6 +562,16 @@ class ReferencedDocumentListTable extends \WP_List_Table {
     }
 
     /**
+     * Render markdown-cache cell HTML for a single overview item.
+     *
+     * @param array<string,mixed> $item
+     * @return string
+     */
+    public function renderMarkdownCacheCell(array $item): string {
+        return $this->column_markdown_cache($item);
+    }
+
+    /**
      * Render nice-name cell HTML for a single overview item.
      *
      * @param array<string,mixed> $item
@@ -341,6 +579,42 @@ class ReferencedDocumentListTable extends \WP_List_Table {
      */
     public function renderNiceNameCell(array $item): string {
         return $this->column_nice_name($item);
+    }
+
+    /**
+     * Render name cell HTML for a single overview item.
+     *
+     * @param array<string,mixed> $item
+     * @return string
+     */
+    public function renderDisplayNameCell(array $item): string {
+        return $this->column_display_name($item);
+    }
+
+    /**
+     * Render a single row HTML for a single overview item.
+     *
+     * @param array<string,mixed> $item
+     * @return string
+     */
+    public function renderRowHtml(array $item): string {
+        ob_start();
+        $this->single_row($item);
+        return (string) ob_get_clean();
+    }
+
+    /**
+     * Display pagination or items info.
+     * Only show on top, hide on bottom.
+     *
+     * @param string $which
+     * @return void
+     */
+    protected function display_pagination_or_items($which): void {
+        if ($which === 'bottom') {
+            return;
+        }
+        parent::display_pagination_or_items($which);
     }
 
     /**
@@ -354,6 +628,9 @@ class ReferencedDocumentListTable extends \WP_List_Table {
             return;
         }
 
+        $totalItems = $this->get_pagination_arg('total_items');
+        $itemsText = $totalItems === 1 ? '1 document' : $totalItems . ' documents';
+
         $selectedStatus = isset($_GET['geweb_ai_referenced_doc_status'])
             ? sanitize_text_field(wp_unslash($_GET['geweb_ai_referenced_doc_status']))
             : '';
@@ -364,11 +641,12 @@ class ReferencedDocumentListTable extends \WP_List_Table {
             ? sanitize_text_field(wp_unslash($_GET['geweb_ai_referenced_doc_referenced_in']))
             : '';
         ?>
-        <div class="alignleft actions">
+        <div class="alignleft actions" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
             <label class="screen-reader-text" for="geweb_ai_referenced_doc_status">Filter documents by status</label>
             <select name="geweb_ai_referenced_doc_status" id="geweb_ai_referenced_doc_status">
                 <option value="">All AI Indexed states</option>
                 <option value="indexed" <?php selected($selectedStatus, 'indexed'); ?>>Indexed</option>
+                <option value="out_of_sync" <?php selected($selectedStatus, 'out_of_sync'); ?>>Out of sync</option>
                 <option value="uploading" <?php selected($selectedStatus, 'uploading'); ?>>Uploading</option>
                 <option value="excluding" <?php selected($selectedStatus, 'excluding'); ?>>Excluding</option>
                 <option value="not_indexed" <?php selected($selectedStatus, 'not_indexed'); ?>>Not indexed</option>
@@ -391,9 +669,14 @@ class ReferencedDocumentListTable extends \WP_List_Table {
                 <option value="not_referenced" <?php selected($selectedReferencedIn, 'not_referenced'); ?>>Not referenced</option>
                 <option value="simple_file_list_only" <?php selected($selectedReferencedIn, 'simple_file_list_only'); ?>>Only in Simple File List</option>
             </select>
-            <?php submit_button('Apply filters', '', 'filter_action', false); ?>
-            <a href="<?php echo esc_url(add_query_arg(['page' => 'geweb-ai-search', 'geweb_tab' => 'documents'], admin_url('admin.php'))); ?>" class="button" style="margin-left:4px;">Reset</a>
+            <a href="<?php echo esc_url(add_query_arg(['page' => 'geweb-ai-search', 'geweb_tab' => 'documents'], admin_url('admin.php'))); ?>" class="button geweb-reset-referenced-documents-filters" style="margin-left:4px;">Reset</a>
         </div>
+        <style>
+            .wp-list-table.geweb-referenced-documents-table .tablenav-pages,
+            .wp-list-table.geweb-referenced-documents-table .pagination-links {
+                display: none;
+            }
+        </style>
         <?php
     }
 
@@ -411,12 +694,13 @@ class ReferencedDocumentListTable extends \WP_List_Table {
         $selectedReferencedIn = isset($_GET['geweb_ai_referenced_doc_referenced_in'])
             ? sanitize_text_field(wp_unslash($_GET['geweb_ai_referenced_doc_referenced_in']))
             : '';
+        $searchTerm = isset($_GET['s']) ? sanitize_text_field(wp_unslash($_GET['s'])) : '';
 
-        if ($selectedStatus === '' && $selectedType === '' && $selectedReferencedIn === '') {
+        if ($selectedStatus === '' && $selectedType === '' && $selectedReferencedIn === '' && $searchTerm === '') {
             return $items;
         }
 
-        return array_values(array_filter($items, function (array $item) use ($selectedStatus, $selectedType, $selectedReferencedIn): bool {
+        return array_values(array_filter($items, function (array $item) use ($selectedStatus, $selectedType, $selectedReferencedIn, $searchTerm): bool {
             if ($selectedStatus !== '' && $this->getIndexedFilterValue($item) !== $selectedStatus) {
                 return false;
             }
@@ -429,8 +713,81 @@ class ReferencedDocumentListTable extends \WP_List_Table {
                 return false;
             }
 
+            if ($searchTerm !== '' && !$this->itemMatchesSearch($item, $searchTerm)) {
+                return false;
+            }
+
             return true;
         }));
+    }
+
+    /**
+     * @param array<string,mixed> $item
+     * @param string $searchTerm
+     * @return bool
+     */
+    private function itemMatchesSearch(array $item, string $searchTerm): bool {
+        $needle = function_exists('mb_strtolower') ? mb_strtolower(trim($searchTerm)) : strtolower(trim($searchTerm));
+        if ($needle === '') {
+            return true;
+        }
+
+        $haystackParts = [
+            (string) ($item['display_name'] ?? ''),
+            (string) ($item['nice_name'] ?? ''),
+            (string) ($item['content_ids'] ?? ''),
+            (string) ($item['document_id'] ?? ''),
+        ];
+
+        $posts = isset($item['posts']) && is_array($item['posts']) ? $item['posts'] : [];
+        foreach ($posts as $post) {
+            if (!is_array($post)) {
+                continue;
+            }
+
+            $haystackParts[] = (string) ($post['title'] ?? '');
+            $haystackParts[] = (string) ($post['id'] ?? '');
+        }
+
+        $haystack = function_exists('mb_strtolower')
+            ? mb_strtolower(implode("\n", $haystackParts))
+            : strtolower(implode("\n", $haystackParts));
+
+        return str_contains($haystack, $needle);
+    }
+
+    /**
+     * @param array<string,mixed> $item
+     */
+    private function hasReferencedPosts(array $item): bool {
+        $posts = isset($item['posts']) && is_array($item['posts']) ? $item['posts'] : [];
+        foreach ($posts as $post) {
+            if (!is_array($post)) {
+                continue;
+            }
+
+            if ((int) ($post['id'] ?? 0) > 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function getTrackedAsLabel(string $geminiDocName): string {
+        $normalized = trim($geminiDocName);
+        if ($normalized === '') {
+            return '';
+        }
+
+        $documentMarker = '/documents/';
+        $markerPosition = strpos($normalized, $documentMarker);
+        if ($markerPosition !== false) {
+            return substr($normalized, $markerPosition + strlen($documentMarker));
+        }
+
+        $segments = explode('/', $normalized);
+        return (string) end($segments);
     }
 
     /**
@@ -498,6 +855,8 @@ class ReferencedDocumentListTable extends \WP_List_Table {
         $operationStatus = sanitize_key((string) ($item['operation_status'] ?? ''));
         $includeTarget = !empty($item['include_in_store_target']);
         $isUploaded = strpos((string) ($item['status'] ?? ''), 'Uploaded') === 0;
+        $isBrokenReference = !empty($item['broken_reference']);
+        $isMissingFromSimpleFileList = $this->hasReferencedPosts($item) && empty($item['managed_by_simple_file_list']);
 
         if ($operationStatus === 'uploading') {
             return 'uploading';
@@ -517,6 +876,18 @@ class ReferencedDocumentListTable extends \WP_List_Table {
 
         if ($operationStatus === 'indexed') {
             return 'indexed';
+        }
+
+        if ($isBrokenReference) {
+            return 'error';
+        }
+
+        if ($isMissingFromSimpleFileList) {
+            return 'error';
+        }
+
+        if ($includeTarget && $isUploaded && !empty($item['modified_after_upload'])) {
+            return 'out_of_sync';
         }
 
         if (strpos($status, 'uploading') !== false || strpos($status, 'pending') !== false) {
@@ -549,14 +920,14 @@ class ReferencedDocumentListTable extends \WP_List_Table {
     private function sortItems(array $items): array {
         $orderby = isset($_GET['orderby']) ? sanitize_key(wp_unslash($_GET['orderby'])) : 'display_name';
         $order = isset($_GET['order']) ? strtolower(sanitize_key(wp_unslash($_GET['order']))) : 'asc';
-        $allowedOrderBy = ['display_name', 'nice_name', 'status', 'mime_type', 'last_uploaded', 'reference_count'];
+        $allowedOrderBy = ['display_name', 'nice_name', 'status', 'actions', 'markdown_cache', 'mime_type', 'last_modified', 'last_uploaded', 'reference_count'];
         if (!in_array($orderby, $allowedOrderBy, true)) {
             $orderby = 'display_name';
         }
 
-        usort($items, static function (array $left, array $right) use ($orderby, $order): int {
-            $leftValue = $left[$orderby] ?? '';
-            $rightValue = $right[$orderby] ?? '';
+        usort($items, function (array $left, array $right) use ($orderby, $order): int {
+            $leftValue = $this->getSortValue($left, $orderby);
+            $rightValue = $this->getSortValue($right, $orderby);
 
             if (is_numeric($leftValue) || is_numeric($rightValue)) {
                 $comparison = (int) $leftValue <=> (int) $rightValue;
@@ -568,5 +939,116 @@ class ReferencedDocumentListTable extends \WP_List_Table {
         });
 
         return $items;
+    }
+
+    /**
+     * @param array<string,mixed> $item
+     * @return int|string
+     */
+    private function getSortValue(array $item, string $orderby) {
+        if ($orderby === 'actions') {
+            return $this->getIndexedSortWeight($item);
+        }
+
+        if ($orderby === 'markdown_cache') {
+            if (!$this->isMarkdownCacheApplicable($item)) {
+                return -1;
+            }
+
+            $fileHash = isset($item['file_hash']) ? (string) $item['file_hash'] : '';
+            if ($fileHash === '') {
+                return 0;
+            }
+
+            return (new ReferencedDocumentMarkdownCacheStore())->getMarkdownBytes($fileHash);
+        }
+
+        if ($orderby === 'pdf_analysis') {
+            return $this->getPdfClassificationSortWeight($item);
+        }
+
+        return $item[$orderby] ?? '';
+    }
+
+    /**
+     * @param array<string,mixed> $item
+     */
+    private function getIndexedSortWeight(array $item): int {
+        $state = $this->getIndexedFilterValue($item);
+        $weights = [
+            'out_of_sync' => 60,
+            'indexed' => 50,
+            'uploading' => 40,
+            'excluding' => 30,
+            'not_indexed' => 20,
+            'excluded' => 10,
+            'error' => 0,
+        ];
+
+        return $weights[$state] ?? -1;
+    }
+
+    /**
+     * @param array<string,mixed> $item
+     */
+    private function getPdfClassificationSortWeight(array $item): int {
+        $key = (string) ($item['pdf_classification'] ?? '');
+        $weights = [
+            'text' => 40,
+            'mixed' => 30,
+            'unknown' => 20,
+            'scanned' => 10,
+            'broken' => 0,
+        ];
+
+        return $weights[$key] ?? -1;
+    }
+
+    /**
+     * @param array<string,mixed> $item
+     */
+    private function isMarkdownCacheApplicable(array $item): bool {
+        $mimeType = strtolower(trim((string) ($item['mime_type'] ?? '')));
+        if ($mimeType === '') {
+            return false;
+        }
+
+        if (strpos($mimeType, 'image/') === 0) {
+            return ((string) ($item['image_processing_mode'] ?? ImageOcrService::MODE_NONE)) !== ImageOcrService::MODE_NONE;
+        }
+
+        return strpos($mimeType, 'spreadsheetml') !== false || strpos($mimeType, 'ms-excel') !== false;
+    }
+
+    /**
+     * @param array<string,mixed> $item
+     */
+    private function buildImageProcessingControlHtml(array $item, bool $disabled): string {
+        $mimeType = strtolower(trim((string) ($item['mime_type'] ?? '')));
+        if ($mimeType === '' || strpos($mimeType, 'image/') !== 0) {
+            return '';
+        }
+
+        $fileHash = (string) ($item['file_hash'] ?? '');
+        if ($fileHash === '') {
+            return '';
+        }
+
+        $selectId = 'geweb-referenced-document-image-mode-' . substr(sanitize_html_class($fileHash), 0, 12);
+        $currentMode = (string) ($item['image_processing_mode'] ?? ImageOcrService::MODE_NONE);
+        if (!in_array($currentMode, [ImageOcrService::MODE_NONE, ImageOcrService::MODE_OCR, ImageOcrService::MODE_DESCRIBE], true)) {
+            $currentMode = ImageOcrService::MODE_NONE;
+        }
+
+        $html = '<label for="' . esc_attr($selectId) . '" style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap;margin-left:8px;">';
+        $html .= '<span>Image</span>';
+        $html .= '<select id="' . esc_attr($selectId) . '" class="geweb-ai-referenced-document-image-mode" data-file-hash="' . esc_attr($fileHash) . '" style="min-width:96px;"' . disabled($disabled, true, false) . '>';
+        $html .= '<option value="' . esc_attr(ImageOcrService::MODE_NONE) . '"' . selected($currentMode, ImageOcrService::MODE_NONE, false) . '>None</option>';
+        $html .= '<option value="' . esc_attr(ImageOcrService::MODE_OCR) . '"' . selected($currentMode, ImageOcrService::MODE_OCR, false) . '>OCR</option>';
+        $html .= '<option value="' . esc_attr(ImageOcrService::MODE_DESCRIBE) . '"' . selected($currentMode, ImageOcrService::MODE_DESCRIBE, false) . '>Describe</option>';
+        $html .= '</select>';
+        $html .= '</label>';
+
+        return $html;
     }
 }

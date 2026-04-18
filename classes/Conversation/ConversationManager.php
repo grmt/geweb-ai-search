@@ -50,6 +50,7 @@ class ConversationManager {
 
         $conversations[$conversationId]['summary'] = $summary;
         UserScope::updateUserScopedOption(self::OPTION_CONVERSATIONS, $conversations, false);
+        AdminViewRevision::touchChats();
 
         return true;
     }
@@ -66,6 +67,7 @@ class ConversationManager {
 
         unset($conversations[$conversationId]);
         UserScope::updateUserScopedOption(self::OPTION_CONVERSATIONS, $conversations, false);
+        AdminViewRevision::touchChats();
 
         return true;
     }
@@ -124,6 +126,7 @@ class ConversationManager {
         });
 
         UserScope::updateUserScopedOption(self::OPTION_CONVERSATIONS, array_slice($conversations, 0, self::DEFAULT_CONVERSATION_LIMIT, true), false);
+        AdminViewRevision::touchChats();
 
         return $conversation;
     }
@@ -339,6 +342,7 @@ class ConversationManager {
         });
 
         UserScope::updateUserScopedOption(self::OPTION_CONVERSATIONS, array_slice($conversations, 0, self::DEFAULT_CONVERSATION_LIMIT, true), false);
+        AdminViewRevision::touchChats();
     }
 
     /**

@@ -14,8 +14,9 @@ class ReferencedDocumentOverviewBuilder {
     private const STATUS_UPLOADS_DISABLED = 'Uploads disabled';
     private const STATUS_ONLY_IN_SIMPLE_FILE_LIST = 'Only in Simple File List';
     private const STATUS_UPLOADED_ONLY_IN_SIMPLE_FILE_LIST = 'Uploaded, only in Simple File List';
-    private const STATUS_REFERENCED_OUTSIDE_SIMPLE_FILE_LIST = 'Referenced outside Simple File List';
-    private const STATUS_UPLOADED_REFERENCED_ELSEWHERE = 'Uploaded, referenced elsewhere';
+    private const STATUS_REFERENCED_OUTSIDE_SIMPLE_FILE_LIST = 'Referenced on site, missing from Simple File List';
+    private const STATUS_UPLOADED_REFERENCED_ELSEWHERE = 'Uploaded, but missing from Simple File List';
+    private const STATUS_REFERENCED_BROKEN = 'Referenced on site, but file is missing';
     private const COLOR_WARNING = '#996800';
     private const COLOR_SUCCESS = '#46b450';
     private const COLOR_DANGER = '#d63638';
@@ -23,10 +24,12 @@ class ReferencedDocumentOverviewBuilder {
 
     private DocumentStore $documentStore;
     private SimpleFileListSupport $simpleFileListSupport;
+    private PdfClassificationService $pdfClassificationService;
 
     public function __construct(DocumentStore $documentStore, ?SimpleFileListSupport $simpleFileListSupport = null) {
         $this->documentStore = $documentStore;
         $this->simpleFileListSupport = $simpleFileListSupport ?? new SimpleFileListSupport();
+        $this->pdfClassificationService = new PdfClassificationService();
     }
 
     /**
@@ -58,6 +61,12 @@ class ReferencedDocumentOverviewBuilder {
             $this->collectPostReferencedDocuments($post, $overview, $uploadedByHash, $uploadsEnabled, $connectionState, $debug);
         }
 
+        $simpleFileListModifiedMap = $this->simpleFileListSupport->getSimpleFileListModifiedMap(array_values(array_unique(array_filter(array_map(static function (array $item): string {
+            return wp_normalize_path((string) dirname((string) ($item['file_path'] ?? '')));
+        }, array_values($overview)), static function (string $directory): bool {
+            return $directory !== '' && $directory !== '.';
+        }))));
+
         $this->simpleFileListSupport->mergeSimpleFileListOptionEntries(
             $overview,
             $uploadedByHash,
@@ -65,6 +74,15 @@ class ReferencedDocumentOverviewBuilder {
             $connectionState,
             \Closure::fromCallable([$this, 'buildOverviewEntry'])
         );
+
+        foreach ($overview as $hash => $item) {
+            $filePath = wp_normalize_path((string) ($item['file_path'] ?? ''));
+            if ($filePath === '' || !isset($simpleFileListModifiedMap[$filePath])) {
+                continue;
+            }
+
+            $overview[$hash]['simple_file_list_modified_at'] = (int) $simpleFileListModifiedMap[$filePath];
+        }
 
         $items = $this->finalizeReferencedDocumentOverviewItems($overview, $uploadedByHash);
         usort($items, static function (array $left, array $right): int {
@@ -137,17 +155,20 @@ class ReferencedDocumentOverviewBuilder {
     private function collectReferencedOverviewItem(array $reference, \WP_Post $post, bool $isSimpleFileListPage, array &$overview, array $uploadedByHash, bool $uploadsEnabled, string $connectionState, array &$debug): void {
         $filePath = isset($reference['file_path']) ? (string) $reference['file_path'] : '';
         $fileUrl = isset($reference['file_url']) ? (string) $reference['file_url'] : '';
-        if ($filePath === '' || $fileUrl === '') {
+        $isBrokenReference = !empty($reference['broken_reference']);
+        if ($fileUrl === '' || ($filePath === '' && !$isBrokenReference)) {
             return;
         }
 
-        $hash = hash_file('sha256', $filePath);
+        $hash = $isBrokenReference
+            ? hash('sha256', 'broken:' . $fileUrl)
+            : hash_file('sha256', $filePath);
         if (!$hash) {
             return;
         }
 
         $debug['accepted_documents']++;
-        $this->ensureOverviewItemExists($overview, $hash, $reference, $filePath, $fileUrl, $uploadedByHash, $uploadsEnabled, $connectionState);
+        $this->ensureOverviewItemExists($overview, $hash, $reference, $filePath, $fileUrl, $uploadedByHash, $uploadsEnabled, $connectionState, $isBrokenReference);
 
         if ($isSimpleFileListPage) {
             $overview[$hash]['managed_by_simple_file_list'] = true;
@@ -167,7 +188,7 @@ class ReferencedDocumentOverviewBuilder {
      * @param array<string,mixed> $reference
      * @param array<string,array<string,mixed>> $uploadedByHash
      */
-    private function ensureOverviewItemExists(array &$overview, string $hash, array $reference, string $filePath, string $fileUrl, array $uploadedByHash, bool $uploadsEnabled, string $connectionState): void {
+    private function ensureOverviewItemExists(array &$overview, string $hash, array $reference, string $filePath, string $fileUrl, array $uploadedByHash, bool $uploadsEnabled, string $connectionState, bool $isBrokenReference): void {
         if (!isset($overview[$hash])) {
             $uploaded = $uploadedByHash[$hash] ?? null;
             $overview[$hash] = $this->buildOverviewEntry(
@@ -178,7 +199,8 @@ class ReferencedDocumentOverviewBuilder {
                 $uploaded,
                 $uploadsEnabled,
                 $connectionState,
-                false
+                false,
+                $isBrokenReference
             );
             return;
         }
@@ -194,16 +216,18 @@ class ReferencedDocumentOverviewBuilder {
      * @return array<int,array<string,mixed>>
      */
     private function finalizeReferencedDocumentOverviewItems(array $overview, array $uploadedByHash): array {
-        $selectionTargets = (new ReferencedDocumentManager($this->documentStore))->getReferencedDocumentSelectionTargets();
-        $operationStatuses = (new ReferencedDocumentManager($this->documentStore))->getReferencedDocumentOperationStatuses();
-        $items = array_values(array_map(function (array $item) use ($selectionTargets, $operationStatuses): array {
-            return $this->finalizeReferencedDocumentOverviewItem($item, $selectionTargets, $operationStatuses);
+        $documentManager = new ReferencedDocumentManager($this->documentStore);
+        $selectionTargets = $documentManager->getReferencedDocumentSelectionTargets();
+        $operationStatuses = $documentManager->getReferencedDocumentOperationStatuses();
+        $imageProcessingModes = $documentManager->getReferencedDocumentImageProcessingModes();
+        $items = array_values(array_map(function (array $item) use ($selectionTargets, $operationStatuses, $imageProcessingModes): array {
+            return $this->finalizeReferencedDocumentOverviewItem($item, $selectionTargets, $operationStatuses, $imageProcessingModes);
         }, $overview));
 
         foreach ($uploadedByHash as $hash => $document) {
             if (!isset($overview[$hash])) {
                 $item = $this->buildUploadedNotReferencedItem((string) $hash, $document);
-                $items[] = $this->finalizeReferencedDocumentOverviewItem($item, $selectionTargets, $operationStatuses);
+                $items[] = $this->finalizeReferencedDocumentOverviewItem($item, $selectionTargets, $operationStatuses, $imageProcessingModes);
             }
         }
 
@@ -215,9 +239,16 @@ class ReferencedDocumentOverviewBuilder {
      * @param array<string,bool> $selectionTargets
      * @return array<string,mixed>
      */
-    private function finalizeReferencedDocumentOverviewItem(array $item, array $selectionTargets, array $operationStatuses): array {
+    private function finalizeReferencedDocumentOverviewItem(array $item, array $selectionTargets, array $operationStatuses, array $imageProcessingModes): array {
         $item['posts'] = array_values($item['posts']);
         $item['reference_count'] = count($item['posts']);
+        $item['last_modified'] = $this->resolveFileModifiedTimestamp(
+            (string) ($item['file_path'] ?? ''),
+            (int) ($item['simple_file_list_modified_at'] ?? 0)
+        );
+        $item['modified_after_upload'] = !empty($item['last_uploaded']) && !empty($item['last_modified'])
+            ? (int) $item['last_modified'] > (int) $item['last_uploaded']
+            : false;
         if (!empty($item['managed_by_simple_file_list'])) {
             $item = $this->applySimpleFileListStatus($item);
         }
@@ -234,8 +265,34 @@ class ReferencedDocumentOverviewBuilder {
         $item['operation_status'] = is_array($operation) ? (string) ($operation['status'] ?? '') : '';
         $item['operation_error'] = is_array($operation) ? (string) ($operation['error'] ?? '') : '';
         $item['operation_updated_at'] = is_array($operation) ? (int) ($operation['updated_at'] ?? 0) : 0;
+        $item['image_processing_mode'] = $imageProcessingModes[$fileHash] ?? ImageOcrService::MODE_NONE;
+        $item['pdf_classification'] = '';
+        $item['pdf_classification_label'] = '';
+        $item['pdf_classification_details'] = '';
+        if (((string) ($item['mime_type'] ?? '')) === 'application/pdf') {
+            $pdfClassification = $this->pdfClassificationService->classify((string) ($item['file_path'] ?? ''));
+            $item['pdf_classification'] = (string) ($pdfClassification['key'] ?? '');
+            $item['pdf_classification_label'] = (string) ($pdfClassification['label'] ?? '');
+            $item['pdf_classification_details'] = (string) ($pdfClassification['details'] ?? '');
+        }
 
         return $item;
+    }
+
+    /**
+     * @param string $filePath
+     */
+    private function resolveFileModifiedTimestamp(string $filePath, int $fallbackTimestamp = 0): int {
+        if ($filePath === '' || !is_file($filePath) || !is_readable($filePath)) {
+            return $fallbackTimestamp > 0 ? $fallbackTimestamp : 0;
+        }
+
+        $modifiedAt = @filemtime($filePath);
+        if ($modifiedAt === false || (int) $modifiedAt <= 0) {
+            return $fallbackTimestamp > 0 ? $fallbackTimestamp : 0;
+        }
+
+        return (int) $modifiedAt;
     }
 
     /**
@@ -258,6 +315,12 @@ class ReferencedDocumentOverviewBuilder {
             'reference_count' => 0,
             'external_reference_count' => 0,
             'managed_by_simple_file_list' => false,
+            'simple_file_list_modified_at' => 0,
+            'last_modified' => 0,
+            'modified_after_upload' => false,
+            'pdf_classification' => '',
+            'pdf_classification_label' => '',
+            'pdf_classification_details' => '',
             'posts' => [],
         ];
     }
@@ -266,8 +329,8 @@ class ReferencedDocumentOverviewBuilder {
      * @param mixed $uploaded
      * @return array<string,mixed>
      */
-    private function buildOverviewEntry(string $hash, string $filePath, string $fileUrl, string $niceName, $uploaded, bool $uploadsEnabled, string $connectionState, bool $managedBySimpleFileList): array {
-        $statusMeta = $this->resolveOverviewStatus($uploaded, $uploadsEnabled, $connectionState);
+    private function buildOverviewEntry(string $hash, string $filePath, string $fileUrl, string $niceName, $uploaded, bool $uploadsEnabled, string $connectionState, bool $managedBySimpleFileList, bool $isBrokenReference = false): array {
+        $statusMeta = $this->resolveOverviewStatus($uploaded, $uploadsEnabled, $connectionState, $isBrokenReference);
 
         return [
             'file_hash' => $hash,
@@ -284,6 +347,13 @@ class ReferencedDocumentOverviewBuilder {
             'reference_count' => 0,
             'external_reference_count' => 0,
             'managed_by_simple_file_list' => $managedBySimpleFileList,
+            'broken_reference' => $isBrokenReference,
+            'simple_file_list_modified_at' => 0,
+            'last_modified' => 0,
+            'modified_after_upload' => false,
+            'pdf_classification' => '',
+            'pdf_classification_label' => '',
+            'pdf_classification_details' => '',
             'posts' => [],
         ];
     }
@@ -292,12 +362,15 @@ class ReferencedDocumentOverviewBuilder {
      * @param mixed $uploaded
      * @return array{status:string,status_color:string,last_uploaded:int}
      */
-    private function resolveOverviewStatus($uploaded, bool $uploadsEnabled, string $connectionState): array {
+    private function resolveOverviewStatus($uploaded, bool $uploadsEnabled, string $connectionState, bool $isBrokenReference): array {
         $status = self::STATUS_DETECTED_NOT_UPLOADED;
         $statusColor = self::COLOR_WARNING;
         $lastUploaded = 0;
 
-        if (is_array($uploaded)) {
+        if ($isBrokenReference) {
+            $status = self::STATUS_REFERENCED_BROKEN;
+            $statusColor = self::COLOR_DANGER;
+        } elseif (is_array($uploaded)) {
             $status = self::STATUS_UPLOADED;
             $statusColor = self::COLOR_SUCCESS;
             $lastUploaded = isset($uploaded['last_uploaded']) ? (int) $uploaded['last_uploaded'] : 0;
@@ -334,7 +407,7 @@ class ReferencedDocumentOverviewBuilder {
         $item['status'] = $isUploaded
             ? self::STATUS_UPLOADED_REFERENCED_ELSEWHERE
             : self::STATUS_REFERENCED_OUTSIDE_SIMPLE_FILE_LIST;
-        $item['status_color'] = self::COLOR_SUCCESS;
+        $item['status_color'] = self::COLOR_DANGER;
 
         return $item;
     }

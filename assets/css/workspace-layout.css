@@ -287,6 +287,9 @@
 .geweb-ai-search-results-panel.is-collapsed .geweb-ai-search-results-header {
     margin-bottom: 0;
 }
+.geweb-ai-search-results-panel.is-hidden {
+    display: none;
+}
 @media only screen and (max-width: 767px) {
     .geweb-aisearch-modal-window--page .geweb-ai-search-results-content {
         max-height: min(36vh, 320px);

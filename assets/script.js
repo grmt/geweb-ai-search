@@ -427,8 +427,10 @@ jQuery(document).ready(function($) {
 	        }
 
 	        document.body.classList.add('geweb-ai-page', 'geweb-ai-page-open');
+	        this.syncPageViewportOffsetStyles();
 	        this.initPageHeightPersistence();
 	        this.bindPageToolbarControls();
+	        this.ensureSearchPanelMobileDefault();
 	        this.ensurePageResizeHandle();
 	        this.bindFrontendHeaderSearch();
 	        this.bindWorkspacePaneResizers();
@@ -448,7 +450,7 @@ jQuery(document).ready(function($) {
 	    },
 
 	    getMobilePaneFooterThreshold() {
-	        return 767;
+	        return 1023;
 	    },
 
 	    isMobileWorkspaceNavigationActive(workspace = this.getWorkspaceElement()) {
@@ -462,6 +464,10 @@ jQuery(document).ready(function($) {
 	            && !!globalThis.matchMedia
 	            && isWidthBasedMobile
 	            && isTouchLikeDevice;
+	    },
+
+	    isPseudoFullscreenActive() {
+	        return !!document.body?.classList.contains('geweb-ai-page-pseudo-fullscreen');
 	    },
 
 	    shouldShowQuestionInfoButton(workspace = this.getWorkspaceElement()) {
@@ -763,6 +769,17 @@ jQuery(document).ready(function($) {
 	        return Math.max(this.getPageViewMinHeight(), availableHeight);
 	    },
 
+	    syncPageViewportOffsetStyles() {
+	        const body = document.body;
+	        const root = document.documentElement;
+	        if (!body || !root || !body.classList.contains('geweb-ai-page')) {
+	            return;
+	        }
+
+	        const topOffset = this.getPageViewViewportTopOffset();
+	        root.style.setProperty('--geweb-ai-page-top-offset', `${topOffset}px`);
+	    },
+
 	    getPageViewMaxHeight() {
 	        const viewportHeight = this.getPageViewViewportHeight();
 	        return Math.max(this.getPageViewMinHeight(), viewportHeight + 720);
@@ -951,8 +968,13 @@ jQuery(document).ready(function($) {
 	        }
 
 	        globalThis.addEventListener('resize', () => {
+	            this.syncPageViewportOffsetStyles();
 	            this.syncPageViewHeightToViewport();
 	        });
+
+	        globalThis.addEventListener('scroll', () => {
+	            this.syncPageViewportOffsetStyles();
+	        }, { passive: true });
 	    },
 
 	    bindPageToolbarControls() {
@@ -961,40 +983,40 @@ jQuery(document).ready(function($) {
 	            alignButton.dataset.gewebAiBound = '1';
 	            alignButton.addEventListener('click', (event) => {
 	                event.preventDefault();
-	                const now = Date.now();
-	                const lastClickAt = Number(alignButton.dataset.gewebLastClickAt || 0);
-	                if (lastClickAt > 0 && (now - lastClickAt) < 1200) {
-	                    alignButton.dataset.gewebLastClickAt = '0';
-	                    this.togglePageAdminBarVisibility();
-	                    return;
-	                }
-
-	                alignButton.dataset.gewebLastClickAt = String(now);
 	                this.resetPageViewToViewport();
-	            });
-	        }
+            });
+        }
 
-	        const fullscreenButton = document.getElementById('geweb-ai-toggle-fullscreen');
-	        if (fullscreenButton && fullscreenButton.dataset.gewebAiBound !== '1') {
-	            fullscreenButton.dataset.gewebAiBound = '1';
-	            fullscreenButton.addEventListener('click', async (event) => {
-	                event.preventDefault();
-	                await this.togglePageFullscreen();
-	            });
+        const searchToggleButton = document.getElementById('geweb-ai-toggle-search-panel');
+        if (searchToggleButton && searchToggleButton.dataset.gewebAiBound !== '1') {
+            searchToggleButton.dataset.gewebAiBound = '1';
+            searchToggleButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                this.toggleSearchPanelVisibility();
+            });
+        }
 
-	            const syncFullscreenState = () => this.syncPageToolbarFullscreenState(fullscreenButton);
-	            document.addEventListener('fullscreenchange', syncFullscreenState);
-	            document.addEventListener('webkitfullscreenchange', syncFullscreenState);
-	            syncFullscreenState();
-	        }
-	    },
+        const fullscreenButton = document.getElementById('geweb-ai-toggle-fullscreen');
+        if (fullscreenButton && fullscreenButton.dataset.gewebAiBound !== '1') {
+            fullscreenButton.dataset.gewebAiBound = '1';
+            fullscreenButton.addEventListener('click', async (event) => {
+                event.preventDefault();
+                await this.togglePageFullscreen();
+            });
+
+            const syncFullscreenState = () => this.syncPageToolbarFullscreenState(fullscreenButton);
+            document.addEventListener('fullscreenchange', syncFullscreenState);
+            document.addEventListener('webkitfullscreenchange', syncFullscreenState);
+            syncFullscreenState();
+        }
+    },
 
 	    getPageFullscreenElement() {
 	        return document.fullscreenElement || document.webkitFullscreenElement || null;
 	    },
 
 	    isPageFullscreenActive() {
-	        return this.getPageFullscreenElement() === this.ai;
+	        return this.getPageFullscreenElement() === this.ai || this.isPseudoFullscreenActive();
 	    },
 
 	    syncPageToolbarFullscreenState(fullscreenButton = document.getElementById('geweb-ai-toggle-fullscreen')) {
@@ -1020,7 +1042,14 @@ jQuery(document).ready(function($) {
 	        }
 
 	        try {
-	            if (this.isPageFullscreenActive()) {
+	            if (this.isPseudoFullscreenActive()) {
+	                document.body?.classList.remove('geweb-ai-page-pseudo-fullscreen');
+	                this.syncPageViewportOffsetStyles();
+	                this.syncPageViewHeightToViewport();
+	                return;
+	            }
+
+	            if (this.getPageFullscreenElement() === this.ai) {
 	                if (document.exitFullscreen) {
 	                    await document.exitFullscreen();
 	                } else if (document.webkitExitFullscreen) {
@@ -1033,8 +1062,15 @@ jQuery(document).ready(function($) {
 	                await this.ai.requestFullscreen();
 	            } else if (this.ai.webkitRequestFullscreen) {
 	                this.ai.webkitRequestFullscreen();
+	            } else {
+	                document.body?.classList.add('geweb-ai-page-pseudo-fullscreen');
+	                this.syncPageViewportOffsetStyles();
+	                this.syncPageViewHeightToViewport();
 	            }
 	        } catch (error) {
+	            document.body?.classList.toggle('geweb-ai-page-pseudo-fullscreen');
+	            this.syncPageViewportOffsetStyles();
+	            this.syncPageViewHeightToViewport();
 	            console.debug('Toggling page fullscreen failed.', error);
 	        } finally {
 	            this.syncPageToolbarFullscreenState();
@@ -1048,23 +1084,52 @@ jQuery(document).ready(function($) {
 	        }
 
 	        body.classList.toggle('geweb-ai-page-hide-adminbar');
+	        this.syncPageViewportOffsetStyles();
 	        this.syncPageViewHeightToViewport();
 	    },
 
-	    ensurePageResizeHandle() {
-	        if (!this.ai || this.ai.querySelector('.geweb-ai-page-resize-handle')) {
-	            return;
-	        }
+    toggleSearchPanelVisibility() {
+        const $searchPanel = $('.geweb-ai-search-results-panel');
+        if (!$searchPanel.length) {
+            return;
+        }
 
-	        const handle = document.createElement('button');
-	        handle.type = 'button';
-	        handle.className = 'geweb-ai-page-resize-handle';
-	        handle.setAttribute('aria-label', 'Resize AI search window');
-	        handle.setAttribute('title', 'Drag to resize the AI search window');
-	        handle.innerHTML = '<span class="geweb-ai-page-resize-handle-bar" aria-hidden="true"></span>';
-	        this.ai.appendChild(handle);
-	        this.bindPageResizeHandle(handle);
-	    },
+        const workspace = this.getWorkspaceElement();
+        if (this.isMobileWorkspaceNavigationActive(workspace)) {
+            $searchPanel.toggleClass('is-hidden');
+            if (!$searchPanel.hasClass('is-hidden')) {
+                $searchPanel.removeClass('is-collapsed');
+            }
+        } else {
+            $searchPanel.toggleClass('is-collapsed');
+        }
+        this.syncPanelCollapseButtons();
+    },
+
+    ensureSearchPanelMobileDefault() {
+        const workspace = this.getWorkspaceElement();
+        if (this.isMobileWorkspaceNavigationActive(workspace)) {
+            const $searchPanel = $('.geweb-ai-search-results-panel');
+            if ($searchPanel.length && !$searchPanel.hasClass('is-hidden')) {
+                $searchPanel.addClass('is-hidden');
+            }
+        }
+    },
+
+    ensurePageResizeHandle() {
+        if (!this.ai || this.ai.querySelector('.geweb-ai-page-resize-handle')) {
+            return;
+        }
+
+        const handle = document.createElement('button');
+        handle.type = 'button';
+        handle.className = 'geweb-ai-page-resize-handle';
+        handle.setAttribute('aria-label', 'Resize AI search window');
+        handle.setAttribute('title', 'Drag to resize the AI search window');
+        handle.innerHTML = '<span class="geweb-ai-page-resize-handle-bar" aria-hidden="true"></span>';
+        this.ai.appendChild(handle);
+        this.bindPageResizeHandle(handle);
+    },
 
 	    bindPageResizeHandle(handle) {
 	        if (!handle || handle.dataset.gewebAiResizeBound === '1') {
@@ -1267,7 +1332,7 @@ jQuery(document).ready(function($) {
 	        const mobilePane = workspace?.dataset.mobilePane || 'main';
 	        const mobileNavigationActive = this.isMobileWorkspaceNavigationActive(workspace);
 	        const $searchPanel = $('.geweb-ai-search-results-panel');
-	        const searchCollapsed = $searchPanel.hasClass('is-collapsed');
+	        const searchCollapsed = $searchPanel.hasClass('is-collapsed') || $searchPanel.hasClass('is-hidden');
 
 	        const applyButtonState = ($button, expanded, icon, label) => {
 	            $button.attr('aria-expanded', expanded ? 'true' : 'false');
@@ -1296,7 +1361,7 @@ jQuery(document).ready(function($) {
 	            $(this.ai).find('.geweb-ai-panel-collapse[data-panel-toggle="search"]'),
 	            !searchCollapsed,
 	            searchCollapsed ? '▾' : '▴',
-	            searchCollapsed ? 'Expand classic search results' : 'Collapse classic search results'
+	            searchCollapsed ? 'Show classic search results' : 'Hide classic search results'
 	        );
 	        this.syncMobilePaneFooter(mobilePane);
 	    },

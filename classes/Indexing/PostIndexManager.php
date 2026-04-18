@@ -71,15 +71,48 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
     }
 
     public function addAdminColumns(array $columns): array {
-        $columns['geweb_post_id'] = 'ID';
-        $columns['geweb_ai_indexed'] = 'AI Indexed';
-        $columns['geweb_ai_markdown_cache'] = 'MD Cache';
-        return $columns;
+        $updated = [];
+
+        foreach ($columns as $key => $label) {
+            $updated[$key] = $label;
+
+            if ($key === 'title') {
+                $updated['geweb_post_id'] = 'ID';
+                $updated['geweb_ai_indexed'] = 'AI Indexed';
+                $updated['geweb_ai_markdown_cache'] = 'MD Cache';
+                continue;
+            }
+
+            if ($key === 'date') {
+                $updated['geweb_last_modified'] = 'Last Modified';
+            }
+        }
+
+        if (!isset($updated['geweb_post_id'])) {
+            $updated['geweb_post_id'] = 'ID';
+        }
+        if (!isset($updated['geweb_ai_indexed'])) {
+            $updated['geweb_ai_indexed'] = 'AI Indexed';
+        }
+        if (!isset($updated['geweb_ai_markdown_cache'])) {
+            $updated['geweb_ai_markdown_cache'] = 'MD Cache';
+        }
+        if (isset($columns['date']) && !isset($updated['geweb_last_modified'])) {
+            $updated['geweb_last_modified'] = 'Last Modified';
+        }
+
+        return $updated;
     }
 
     public function renderIdColumn(string $column, int $postId): void {
         if ($column === 'geweb_post_id') {
             echo esc_html((string) $postId);
+            return;
+        }
+
+        if ($column === 'geweb_last_modified') {
+            $modified = get_post_modified_time(get_option('date_format') . ' ' . get_option('time_format'), false, $postId, true);
+            echo $modified !== '' ? esc_html($modified) : '—';
         }
     }
 
@@ -93,6 +126,7 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
         $columns['geweb_post_id'] = 'ID';
         $columns['geweb_ai_indexed'] = 'geweb_ai_indexed';
         $columns['geweb_ai_markdown_cache'] = 'geweb_ai_markdown_cache';
+        $columns['geweb_last_modified'] = 'modified';
         return $columns;
     }
 
@@ -461,15 +495,42 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
         }
 
         $imageOcrService->setAttachmentImageProcessingMode($postId, $mode);
+        $cacheStore = new MarkdownCacheStore();
+        $cacheWarning = '';
+
+        if ($mode === ImageOcrService::MODE_NONE) {
+            $cacheStore->deleteMarkdown($postId);
+            delete_post_meta($postId, self::META_MARKDOWN_BYTES);
+        } else {
+            try {
+                $markdown = $imageOcrService->buildAttachmentMarkdown($postId);
+                if (is_string($markdown) && trim($markdown) !== '') {
+                    $cacheStore->saveMarkdown($postId, $markdown);
+                    update_post_meta($postId, self::META_MARKDOWN_BYTES, (string) strlen($markdown));
+                } else {
+                    $cacheStore->deleteMarkdown($postId);
+                    delete_post_meta($postId, self::META_MARKDOWN_BYTES);
+                    $cacheWarning = 'Markdown cache could not be generated for this image yet.';
+                }
+            } catch (\Exception $e) {
+                $cacheStore->deleteMarkdown($postId);
+                delete_post_meta($postId, self::META_MARKDOWN_BYTES);
+                $cacheWarning = sanitize_text_field($e->getMessage());
+            }
+        }
 
         $messages = [
             ImageOcrService::MODE_NONE => 'Image processing disabled for this image.',
             ImageOcrService::MODE_OCR => 'OCR enabled for this image.',
             ImageOcrService::MODE_DESCRIBE => 'Description mode enabled for this image.',
         ];
+        $message = $messages[$mode] ?? $messages[ImageOcrService::MODE_NONE];
+        if ($cacheWarning !== '') {
+            $message .= ' ' . $cacheWarning;
+        }
 
         wp_send_json_success([
-            'message' => $messages[$mode] ?? $messages[ImageOcrService::MODE_NONE],
+            'message' => $message,
             'html' => $this->getColumnHtml($postId),
             'markdown_cache_html' => $this->getMarkdownCacheColumnHtml($postId),
         ]);
@@ -568,6 +629,7 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
         <select name="geweb_ai_index_status">
             <option value="">All AI statuses</option>
             <option value="indexed" <?php selected($selected, 'indexed'); ?>>Indexed</option>
+            <option value="out_of_sync" <?php selected($selected, 'out_of_sync'); ?>>Out of sync</option>
             <option value="pending" <?php selected($selected, 'pending'); ?>>Queued</option>
             <option value="not_indexed" <?php selected($selected, 'not_indexed'); ?>>Not indexed</option>
             <option value="error" <?php selected($selected, 'error'); ?>>Index error</option>
@@ -582,6 +644,11 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
         $status = sanitize_key(wp_unslash($_GET['geweb_ai_index_status'] ?? ''));
 
         if ($canFilter && $status !== '') {
+            if ($status === 'out_of_sync') {
+                $query->set('post__in', $this->getOutOfSyncPostIds((string) $postType));
+                return;
+            }
+
             $query->set('meta_query', $this->buildStatusFilterMetaQuery($status));
         }
     }
@@ -701,10 +768,11 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
      */
     private function buildColumnStatusMetaHtml(int $postId, array $imageUsage, array $statusData): string {
         $html = '';
+        $postType = get_post_type($postId);
 
         if (($imageUsage['embedded_bitmap_count'] ?? 0) > 0) {
             $html .= '<p style="margin:4px 0 0; color:' . esc_attr(self::COLOR_WARNING) . self::HTML_SMALL_OPEN . 'Contains embedded bitmap images</small></p>';
-        } elseif (($imageUsage['uploads_image_count'] ?? 0) > 0) {
+        } elseif ($postType !== 'attachment' && ($imageUsage['uploads_image_count'] ?? 0) > 0) {
             $html .= '<p style="margin:4px 0 0; color:' . esc_attr(self::COLOR_MUTED) . self::HTML_SMALL_OPEN . 'Uses uploads library images</small></p>';
         }
 
@@ -726,6 +794,10 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
             $html .= '<p style="margin:4px 0 0;"><small>' . esc_html($statusData['last_indexed']) . '</small></p>';
         }
 
+        if (($statusData['is_out_of_sync'] ?? '') === '1') {
+            $html .= '<p style="margin:4px 0 0; color:' . esc_attr(self::COLOR_WARNING) . self::HTML_SMALL_OPEN . 'Modified after upload</small></p>';
+        }
+
         if (!empty($statusData['last_error_at'])) {
             $html .= '<p style="margin:4px 0 0; color:' . esc_attr(self::COLOR_WARNING) . self::HTML_SMALL_OPEN . esc_html($statusData['last_error_at']) . '</small></p>';
         }
@@ -735,6 +807,13 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
             $errorHint = $this->getIndexedStatusErrorHint($statusData['error']);
             if ($errorHint !== '') {
                 $html .= '<p style="margin:4px 0 0; color:' . esc_attr(self::COLOR_MUTED) . self::HTML_SMALL_OPEN . esc_html($errorHint) . '</small></p>';
+            }
+        }
+
+        if ($postType === 'attachment') {
+            $duplicateNotice = (new FileDuplicateHashIndex())->getAttachmentDuplicateNotice($postId);
+            if ($duplicateNotice !== '') {
+                $html .= '<p style="margin:4px 0 0; color:' . esc_attr(self::COLOR_WARNING) . self::HTML_SMALL_OPEN . esc_html($duplicateNotice) . '</small></p>';
             }
         }
 
@@ -753,7 +832,9 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
         $isBusy = in_array((string) ($statusData['label'] ?? ''), ['Queued', 'Uploading', 'Removing', 'Removing, excluded'], true);
         $html = '<p style="margin:8px 0 0;">';
         $html .= '<button type="button" class="button button-small geweb-ai-reupload"' . disabled($isBusy, true, false) . '>Upload</button> ';
-        $html .= '<label for="' . esc_attr($excludeToggleId) . '" style="margin-left:8px;display:inline-flex;align-items:center;gap:4px;white-space:nowrap;">';
+        $html .= '</p>';
+        $html .= '<p style="margin:6px 0 0;">';
+        $html .= '<label for="' . esc_attr($excludeToggleId) . '" style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;">';
         $html .= '<input type="checkbox" id="' . esc_attr($excludeToggleId) . '" name="' . esc_attr($excludeToggleId) . '" class="geweb-ai-toggle-exclude" style="margin:0;" ' . checked($isExcluded, true, false) . disabled($isExcluded, true, false) . '> <span>Exclude</span>';
         $html .= '</label>';
         $html .= '</p>';
@@ -826,6 +907,8 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
             $query->set('orderby', 'meta_value');
         } elseif ($orderby === 'ID') {
             $query->set('orderby', 'ID');
+        } elseif ($orderby === 'modified') {
+            $query->set('orderby', 'modified');
         }
     }
 
@@ -1105,12 +1188,14 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
             $status = $documentName !== '' ? 'indexed' : 'not_indexed';
         }
 
-        $resolved = $this->resolvePostStatusPresentation($status, $excluded, $error, $documentName !== '');
+        $isOutOfSync = $this->isPostOutOfSync($postId, $status, $documentName !== '');
+        $resolved = $this->resolvePostStatusPresentation($status, $excluded, $error, $documentName !== '', $isOutOfSync);
         $lastIndexed = (int) get_post_meta($postId, self::META_LAST_INDEXED, true);
         $lastErrorAt = (int) get_post_meta($postId, self::META_LAST_ERROR_AT, true);
         $resolved['last_indexed'] = $lastIndexed > 0 ? DateDisplay::formatDateTime($this->normalizeStatusTimestampForDisplay($postId, $lastIndexed)) : '';
         $resolved['last_error_at'] = $lastErrorAt > 0 ? DateDisplay::formatDateTime($this->normalizeStatusTimestampForDisplay($postId, $lastErrorAt)) : '';
         $resolved['error'] = $error;
+        $resolved['is_out_of_sync'] = $isOutOfSync ? '1' : '';
 
         return $resolved;
     }
@@ -1137,7 +1222,7 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
      * @param string $error
      * @return array<string,string>
      */
-    private function resolvePostStatusPresentation(string $status, bool $excluded, string $error, bool $hasDocument): array {
+    private function resolvePostStatusPresentation(string $status, bool $excluded, string $error, bool $hasDocument, bool $isOutOfSync = false): array {
         $map = [
             'indexed' => ['label' => 'Indexed', 'color' => self::COLOR_SUCCESS],
             'pending' => ['label' => 'Queued', 'color' => self::COLOR_INFO],
@@ -1157,9 +1242,68 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
             } else {
                 $resolved = ['label' => 'Excluded', 'color' => self::COLOR_WARNING];
             }
+        } elseif ($isOutOfSync) {
+            $resolved = ['label' => 'Out of sync', 'color' => self::COLOR_ERROR];
         }
 
         return $resolved;
+    }
+
+    private function isPostOutOfSync(int $postId, string $status = '', bool $hasDocument = false): bool {
+        $normalizedStatus = trim($status);
+        if ($normalizedStatus === '') {
+            $normalizedStatus = (string) get_post_meta($postId, self::META_STATUS, true);
+        }
+
+        if ($hasDocument === false) {
+            $hasDocument = (string) get_post_meta($postId, self::META_DOCUMENT_NAME, true) !== '';
+        }
+
+        if ($normalizedStatus !== 'indexed' && !$hasDocument) {
+            return false;
+        }
+
+        if ($this->isExcluded($postId)) {
+            return false;
+        }
+
+        $lastIndexed = (int) get_post_meta($postId, self::META_LAST_INDEXED, true);
+        if ($lastIndexed <= 0) {
+            return false;
+        }
+
+        $modifiedAt = (int) get_post_modified_time('U', true, $postId);
+        return $modifiedAt > 0 && $modifiedAt > $lastIndexed;
+    }
+
+    /**
+     * @return array<int,int>
+     */
+    private function getOutOfSyncPostIds(string $postType): array {
+        $candidateIds = get_posts([
+            'post_type' => $postType,
+            'post_status' => 'any',
+            'numberposts' => -1,
+            'fields' => 'ids',
+            'meta_query' => [[
+                'key' => self::META_LAST_INDEXED,
+                'compare' => 'EXISTS',
+            ]],
+        ]);
+
+        if (!is_array($candidateIds) || empty($candidateIds)) {
+            return [0];
+        }
+
+        $matches = [];
+        foreach ($candidateIds as $postId) {
+            $postId = (int) $postId;
+            if ($postId > 0 && $this->isPostOutOfSync($postId)) {
+                $matches[] = $postId;
+            }
+        }
+
+        return !empty($matches) ? array_values(array_unique($matches)) : [0];
     }
 
     private function getMarkdownCacheBytes(int $postId, ?MarkdownCacheStore $cacheStore = null): int {
@@ -1184,9 +1328,10 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
         $markdownBytes = $this->getMarkdownCacheBytes($postId, $cacheStore);
         $hasMarkdown = $markdownBytes > 0;
         $status = (string) get_post_meta($postId, self::META_STATUS, true);
+        $isExcluded = $this->isExcluded($postId);
         $hasError = $status === 'error' || ((string) get_post_meta($postId, self::META_LAST_ERROR, true) !== '');
         $isBusy = in_array($status, ['pending', 'uploading', 'removing'], true);
-        $label = $hasMarkdown ? size_format($markdownBytes, 1) : 'Missing';
+        $label = $hasMarkdown ? size_format($markdownBytes, 1) : ($isExcluded ? 'N/A' : 'Missing');
         $color = self::COLOR_WARNING;
         $title = 'View cached Markdown';
 

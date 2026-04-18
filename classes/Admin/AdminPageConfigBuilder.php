@@ -139,28 +139,38 @@ class AdminPageConfigBuilder {
         $modelPromptRows = AdminPageSupport::buildModelPromptRows($models, $selectedModel, $modelPromptOverrides, $modelPromptOverrideNames, $modelPromptOverrideModes, $provider, $defaultPrompt);
         $promptHistoryItems = AdminPageSupport::buildPromptHistoryItems($promptHistory, $defaultPrompt, 'Default prompt');
         $documentsApiStatus = AdminPageSupport::buildApiStatusDisplay($connectionStatus, '#46b450', '#646970', '#d63638');
-        $referencedDocumentsHtml = $activeTab === 'documents'
-            ? AdminPageSupport::renderPanelHtml($hasReferencedDocumentCache, $this->renderReferencedDocumentsTable, 'Referenced documents could not be loaded yet. Use Refresh List to try again.')
-            : '<p>Open the Documents tab to load referenced documents.</p>';
-        $geminiStoresHtml = $activeTab === 'stores'
-            ? AdminPageSupport::renderPanelHtml($providerHasStoreCache, $this->renderGeminiStoresTable, 'Loading Gemini stores for the first time. This can take a moment if multiple stores need to be checked.')
-            : '<p>Open the Gemini Stores tab to load store data.</p>';
-        $geminiStoreDocumentsPanelHtml = $activeTab === 'stores'
-            ? AdminPageSupport::renderInitialGeminiStoreDocumentsPanel(
+        $pluginUpdateGuardActive = PluginUpdateGuard::isActive();
+        $pluginUpdateGuardMessage = PluginUpdateGuard::getNoticeMessage();
+        $referencedDocumentsHtml = AdminPageSupport::renderPanelHtml(
+            $pluginUpdateGuardActive ? $hasReferencedDocumentCache : $hasReferencedDocumentCache,
+            $this->renderReferencedDocumentsTable,
+            $pluginUpdateGuardActive
+                ? 'Workspace AI Search is updating. Files will be available again in a moment.'
+                : 'Loading referenced documents...'
+        );
+        $geminiStoresHtml = AdminPageSupport::renderPanelHtml(
+            $pluginUpdateGuardActive ? $providerHasStoreCache : $providerHasStoreCache,
+            $this->renderGeminiStoresTable,
+            $pluginUpdateGuardActive
+                ? 'Workspace AI Search is updating. Gemini Stores will be available again in a moment.'
+                : 'Loading Gemini stores...'
+        );
+        $geminiStoreDocumentsPanelHtml = $pluginUpdateGuardActive && !$providerHasStoreCache
+            ? '<div id="geweb-gemini-store-documents-panel" data-store-name="" style="margin-top:20px; padding:16px; background:#fff; border:1px solid #dcdcde;"><div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px;"><div><strong id="geweb-gemini-store-documents-title">Uploaded Items</strong><div id="geweb-gemini-store-documents-subtitle" class="description" style="margin-top:4px;">Uploaded items in the selected Gemini File Search Store.</div></div><button type="button" class="button" id="geweb-refresh-gemini-store-documents" disabled>Refresh List</button></div><div id="geweb-gemini-store-documents-status" class="description" style="margin-bottom:12px; color:#646970;">Workspace AI Search is updating. Uploaded items will be available again in a moment.</div><p id="geweb-gemini-store-documents-error" class="description" style="margin:0 0 12px; color:#d63638; display:none;"></p><div id="geweb-gemini-store-documents-container"><p style="margin:0;">Workspace AI Search is updating. Uploaded items will be available again in a moment.</p></div></div>'
+            : AdminPageSupport::renderInitialGeminiStoreDocumentsPanel(
                 $providerHasStoreCache,
                 $provider,
                 $this->getInitialGeminiStoreSelection,
                 $this->renderGeminiStoreDocumentsPanel
-            )
-            : '';
-        $conversationsHtml = $activeTab === 'conversations'
-            ? AdminPageSupport::captureHtml($this->renderConversationsTable)
-            : '<p>Open the Chats tab to load saved chats.</p>';
+            );
+        $conversationsHtml = AdminPageSupport::captureHtml($this->renderConversationsTable);
         $groupDataRevision = GroupDataRevision::ensureCurrentRevision();
+        $adminViewCacheState = AdminViewRevision::ensureCurrentState();
         $conflictNotice = isset($_GET['geweb_conflict']) ? sanitize_text_field(wp_unslash($_GET['geweb_conflict'])) : '';
 
         return [
             'activeTab' => $activeTab,
+            'adminViewCacheState' => $adminViewCacheState,
             'allPostTypes' => $allPostTypes,
             'availableProviders' => $availableProviders,
             'connectionStatus' => $connectionStatus,
@@ -206,6 +216,8 @@ class AdminPageConfigBuilder {
             'promptHistoryItems' => $promptHistoryItems,
             'promptHistoryLimit' => $promptHistoryLimit,
             'promptsTabUrl' => $promptsTabUrl,
+            'pluginUpdateGuardActive' => $pluginUpdateGuardActive,
+            'pluginUpdateGuardMessage' => $pluginUpdateGuardMessage,
             'providerHasStoreCache' => $providerHasStoreCache,
             'providerStoreCacheLabel' => $providerStoreCacheTime > 0 ? DateDisplay::formatDateTime($providerStoreCacheTime) : '',
             'providerStoreCacheTime' => $providerStoreCacheTime,
@@ -226,6 +238,9 @@ class AdminPageConfigBuilder {
             'storesTabUrl' => $storesTabUrl,
             'conversationsTabUrl' => $conversationsTabUrl,
             'conflictNotice' => $conflictNotice,
+            'adminPanelsNeedPreload' => !$pluginUpdateGuardActive
+                && (($activeTab === 'documents' && !$hasReferencedDocumentCache)
+                || ($activeTab === 'stores' && !$providerHasStoreCache)),
         ];
     }
 
@@ -274,10 +289,20 @@ class AdminPageConfigBuilder {
      * @param array<string,mixed> $modelStatuses
      */
     private function pickLatestWorkingModelByFamily(array $models, array $modelStatuses, string $family): string {
-        $workingModels = array_values(array_filter($models, function ($model) use ($modelStatuses): bool {
+        $workingModels = [];
+        foreach ($models as $model) {
             $status = $modelStatuses[(string) $model] ?? null;
-            return is_array($status) && (($status['status'] ?? '') === 'ok');
-        }));
+            if (!is_array($status) || (($status['status'] ?? '') !== 'ok')) {
+                continue;
+            }
+
+            $resolvedModel = trim((string) ($status['resolved_model'] ?? ''));
+            $workingModels[] = $resolvedModel !== '' ? $resolvedModel : (string) $model;
+        }
+
+        $workingModels = array_values(array_unique(array_filter($workingModels, static function ($model): bool {
+            return is_string($model) && trim($model) !== '';
+        })));
 
         return $this->pickLatestModelByFamily($workingModels, $family);
     }

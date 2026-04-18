@@ -1,11 +1,11 @@
 <?php
 /*
-Plugin Name: Geweb AI Search
+Plugin Name: Workspace AI Search
 Plugin URI: https://aisearch.mygeweb.com/
-Description: AI-powered search for WordPress using Google Gemini. Smart answers, source links, and instant autocomplete — all in one modal.
+Description: Workspace AI Search is an AI-powered search workspace for WordPress using Google Gemini. Smart answers, source links, chats, prompts, and documents in one place. A spinoff of geweb.
 Version: 2.1.4.31
-Author: gavrilovweb
-Author URI: https://www.linkedin.com/in/evgengavrilov
+Author: grmt
+Author URI: https://github.com/grmt
 License: GPL2
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 Text Domain: geweb-ai-search
@@ -67,6 +67,8 @@ add_action('plugins_loaded', function () {
     static $postIndexManager = null;
     static $plugin = null;
 
+    \Geweb\AISearch\PluginUpdateGuard::boot();
+
     if ($postIndexManager === null) {
         $postIndexManager = new \Geweb\AISearch\PostIndexManager();
     }
@@ -81,11 +83,11 @@ register_activation_hook(__FILE__, function () {
     // Check PHP version
     if (version_compare(PHP_VERSION, '7.2', '<')) {
         deactivate_plugins(plugin_basename(__FILE__));
-        wp_die('Geweb AI Search requires PHP 7.2 or higher (for Sodium support). Your current version is ' . PHP_VERSION);
+        wp_die('Workspace AI Search requires PHP 7.2 or higher (for Sodium support). Your current version is ' . PHP_VERSION);
     }
 
     if (!class_exists('\\Geweb\\AISearch\\DocumentStore')) {
-        wp_die('Geweb AI Search could not load the DocumentStore class during activation.');
+        wp_die('Workspace AI Search could not load the DocumentStore class during activation.');
     }
 
     // Create custom database tables

@@ -48,6 +48,8 @@ class AdminSettingsManager {
         $this->saveCustomPromptSettings($historyLimit);
         $this->saveModelPromptOverrides($historyLimit);
         $this->savePromptHistoryNamesFromRequest();
+        AdminViewRevision::touchPrompts();
+        AdminViewRevision::touchFiles();
         GroupDataRevision::touch();
     }
 

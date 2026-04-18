@@ -21,6 +21,10 @@ if ($apiKey === '') {
 $providerSource = (string) file_get_contents($providerPath);
 $frontendSource = (string) file_get_contents($frontendPromptManagerPath);
 $adminSource = (string) file_get_contents($adminPageSectionsPath);
+$officialAliases = [
+    'gemini-flash-latest' => 'gemini-3-flash-preview',
+    'gemini-pro-latest' => 'gemini-3.1-pro-preview',
+];
 
 $defaultModel = extractDefaultModel($providerSource);
 $fallbackModels = extractQuotedArrayFromMethod($providerSource, 'getDefaultModels');
@@ -77,6 +81,10 @@ foreach ($fallbackModels as $model) {
 }
 
 foreach ($frontendModels as $model) {
+    if (isset($officialAliases[$model])) {
+        continue;
+    }
+
     if (!in_array($model, $liveModels, true)) {
         $errors[] = sprintf('Allowed chat model "%s" is not present in the live Gemini model list.', $model);
     }

@@ -68,10 +68,16 @@ class WP {
         add_action('wp_ajax_geweb_rename_conversation', [$conversationAjaxController, 'ajaxRenameConversation']);
         add_action('wp_ajax_geweb_delete_conversation', [$conversationAjaxController, 'ajaxDeleteConversation']);
         add_action('wp_ajax_geweb_refresh_referenced_documents', [$adminDataAjaxController, 'ajaxRefreshReferencedDocuments']);
+        add_action('wp_ajax_geweb_start_admin_preload', [$adminDataAjaxController, 'ajaxStartAdminPreload']);
+        add_action('wp_ajax_geweb_get_admin_preload_progress', [$adminDataAjaxController, 'ajaxGetAdminPreloadProgress']);
+        add_action('wp_ajax_geweb_refresh_conversations', [$adminDataAjaxController, 'ajaxRefreshConversations']);
         add_action('wp_ajax_geweb_get_markdown_cache', [$adminDataAjaxController, 'ajaxGetMarkdownCache']);
+        add_action('wp_ajax_geweb_get_referenced_document_markdown_cache', [$adminDataAjaxController, 'ajaxGetReferencedDocumentMarkdownCache']);
         add_action('wp_ajax_geweb_update_referenced_document', [$adminDataAjaxController, 'ajaxUpdateReferencedDocument']);
         add_action('wp_ajax_geweb_toggle_referenced_document_exclude', [$adminDataAjaxController, 'ajaxToggleReferencedDocumentExclude']);
+        add_action('wp_ajax_geweb_set_referenced_document_image_processing_mode', [$adminDataAjaxController, 'ajaxSetReferencedDocumentImageProcessingMode']);
         add_action('wp_ajax_geweb_update_referenced_document_nice_name', [$adminDataAjaxController, 'ajaxUpdateReferencedDocumentNiceName']);
+        add_action('wp_ajax_geweb_remove_referenced_document_from_file_list', [$adminDataAjaxController, 'ajaxRemoveReferencedDocumentFromFileList']);
         add_action('wp_ajax_geweb_refresh_gemini_stores', [$adminDataAjaxController, 'ajaxRefreshGeminiStores']);
         add_action('wp_ajax_geweb_refresh_gemini_store_documents', [$adminDataAjaxController, 'ajaxRefreshGeminiStoreDocuments']);
         add_action('wp_ajax_geweb_delete_gemini_store', [$adminDataAjaxController, 'ajaxDeleteGeminiStore']);
@@ -138,8 +144,8 @@ class WP {
      */
     public function adminMenu(): void {
         add_menu_page(
-            'Geweb AI Search',
-            'Geweb AI Search',
+            'Workspace AI Search',
+            'Workspace AI Search',
             'manage_options',
             'geweb-ai-search',
             [$this, 'renderOptionsPage'],
@@ -166,8 +172,8 @@ class WP {
 
         add_submenu_page(
             'geweb-ai-search',
-            'Documents',
-            'Documents',
+            'Files',
+            'Files',
             'manage_options',
             'geweb-ai-search&geweb_tab=documents',
             [$this, 'renderOptionsPage']
@@ -227,6 +233,10 @@ class WP {
 
         if (!current_user_can('manage_options')) {
             wp_die(self::MESSAGE_INSUFFICIENT_PERMISSIONS);
+        }
+
+        if (PluginUpdateGuard::isActive()) {
+            wp_die(PluginUpdateGuard::getNoticeMessage());
         }
 
         try {
@@ -711,6 +721,13 @@ class WP {
      * @return void
      */
     public function enqueueAdminScripts(): void {
+        wp_enqueue_style(
+            'geweb-ai-search-admin',
+            GEWEB_AI_SEARCH_URL . 'assets/css/admin.css',
+            [],
+            AssetVersion::forRelativePath('assets/css/admin.css')
+        );
+
         wp_enqueue_script(
             'geweb-ai-search-markdown-renderer',
             GEWEB_AI_SEARCH_URL . 'assets/js/markdown-renderer.js',

@@ -1,5 +1,5 @@
-=== Geweb AI Search ===
-Contributors: gavrilovweb, grmt
+=== Workspace AI Search ===
+Contributors: grmt
 Tags: search, ai, gemini, artificial intelligence, semantic search
 Requires at least: 6.0
 Tested up to: 6.9
@@ -15,7 +15,9 @@ Keep native WordPress search results, and add optional AI answers powered by Goo
 
 Live demo: https://aisearch.mygeweb.com/
 
-Geweb AI Search adds an AI layer to your existing WordPress search powered by Google Gemini AI. Visitors can keep using the standard WordPress search results page from your theme, including excerpts and surrounding context, and optionally continue their search with AI for a direct, contextual answer with source links.
+Workspace AI Search adds an AI layer to your existing WordPress search powered by Google Gemini AI. Visitors can keep using the standard WordPress search results page from your theme, including excerpts and surrounding context, and optionally continue their search with AI for a direct, contextual answer with source links.
+
+Workspace AI Search is a spinoff of geweb, expanded into a broader AI search workspace with chats, prompts, document handling, and source-grounded answers.
 
 = Key Features =
 
@@ -62,7 +64,7 @@ By using this plugin you agree to Google's Terms of Service and Privacy Policy. 
 = Automatic Installation =
 
 1. Go to **Plugins → Add New**
-2. Search for "Geweb AI Search"
+2. Search for "Workspace AI Search"
 3. Click **Install Now**, then **Activate**
 
 = Manual Installation =
@@ -74,7 +76,7 @@ By using this plugin you agree to Google's Terms of Service and Privacy Policy. 
 
 = Configuration =
 
-1. Go to **Settings → Geweb AI Search**
+1. Go to **Settings → Workspace AI Search**
 2. Enter your Google Gemini API key — get one free at https://aistudio.google.com/app/apikey
 3. Select the AI model (recommended: gemini-2.5-flash for most sites)
 4. Choose which post types to index
@@ -215,7 +217,7 @@ Available filters:
 == Upgrade Notice ==
 
 = 2.0.0 =
-Major rewrite. After upgrading, please go to Settings → Geweb AI Search and click "Generate Library" to re-index your content. Your API key and settings will be preserved.
+Major rewrite. After upgrading, please go to Settings → Workspace AI Search and click "Generate Library" to re-index your content. Your API key and settings will be preserved.
 
 == Third-Party Libraries ==
 

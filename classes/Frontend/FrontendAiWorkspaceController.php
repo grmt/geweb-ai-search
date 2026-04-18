@@ -484,6 +484,18 @@ class FrontendAiWorkspaceController {
                 </button>
                 <button
                     type="button"
+                    class="button button-small geweb-ai-page-toolbar-button geweb-ai-page-toolbar-button--toggle-search"
+                    id="geweb-ai-toggle-search-panel"
+                    data-panel-toggle="search"
+                    aria-label="<?php echo esc_attr__('Toggle classic search results', 'geweb-ai-search'); ?>"
+                    title="<?php echo esc_attr__('Toggle classic search results', 'geweb-ai-search'); ?>"
+                    aria-expanded="true"
+                >
+                    <span class="geweb-ai-page-toolbar-button-icon" aria-hidden="true">🔎</span>
+                    <span class="geweb-ai-page-toolbar-button-label"><?php echo esc_html__('Search', 'geweb-ai-search'); ?></span>
+                </button>
+                <button
+                    type="button"
                     class="button button-small geweb-ai-page-toolbar-button geweb-ai-page-toolbar-button--fullscreen"
                     id="geweb-ai-toggle-fullscreen"
                     aria-label="<?php echo esc_attr__('Enter fullscreen', 'geweb-ai-search'); ?>"

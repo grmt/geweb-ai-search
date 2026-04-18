@@ -38,6 +38,10 @@ class Gemini implements AIProviderInterface {
     private const OPTION_STORES_CACHE = 'geweb_aisearch_gemini_stores_cache';
     private const OPTION_STORES_CACHE_TIME = 'geweb_aisearch_gemini_stores_cache_time';
     private const OPTION_STORES_CACHE_ERROR = 'geweb_aisearch_gemini_stores_cache_error';
+    private const OPTION_STORE_DOCUMENTS_CACHE = 'geweb_aisearch_gemini_store_documents_cache';
+    private const OPTION_STORE_DOCUMENTS_CACHE_TIME = 'geweb_aisearch_gemini_store_documents_cache_time';
+    private const STORE_OVERVIEW_CACHE_MAX_AGE = DAY_IN_SECONDS;
+    private const STORE_DOCUMENTS_CACHE_MAX_AGE = DAY_IN_SECONDS;
 
     /**
      * Option key for custom system instruction
@@ -74,6 +78,10 @@ class Gemini implements AIProviderInterface {
      * Default model name
      */
     private const DEFAULT_MODEL = 'gemini-3-flash-preview';
+    private const OFFICIAL_LATEST_MODEL_ALIASES = [
+        'gemini-flash-latest',
+        'gemini-pro-latest',
+    ];
     private const LEGACY_DEFAULT_MODELS = [
         'gemini-2.5-flash',
     ];
@@ -229,22 +237,56 @@ class Gemini implements AIProviderInterface {
      * @return array<int,array<string,mixed>>
      */
     public function getStoreOverview(bool $forceRefresh = false): array {
+        $cached = $this->getScopedOption(self::OPTION_STORES_CACHE, null);
+        $cacheTimeBefore = $this->getStoreOverviewCacheTime();
         if (!$forceRefresh) {
-            $cached = $this->getScopedOption(self::OPTION_STORES_CACHE, null);
             if (is_array($cached)) {
                 return $cached;
             }
         }
 
+        $lockToken = SharedRefreshLock::acquireGroup('gemini_store_overview', 45);
+        if ($lockToken === null) {
+            if (!$forceRefresh && is_array($cached)) {
+                return $cached;
+            }
+
+            $waited = SharedRefreshLock::waitFor(function () use ($cacheTimeBefore) {
+                $items = $this->getScopedOption(self::OPTION_STORES_CACHE, null);
+                $cacheTime = (int) $this->getScopedOption(self::OPTION_STORES_CACHE_TIME, 0);
+                if (is_array($items) && $cacheTime > $cacheTimeBefore) {
+                    return $items;
+                }
+
+                return null;
+            }, 10000, 250);
+
+            if (is_array($waited)) {
+                return $waited;
+            }
+
+            if (is_array($cached)) {
+                return $cached;
+            }
+
+            $lockToken = SharedRefreshLock::acquireGroup('gemini_store_overview', 45);
+        }
+
         try {
-            $items = $this->buildStoreOverview();
-            $this->updateScopedOption(self::OPTION_STORES_CACHE, $items);
-            $this->updateScopedOption(self::OPTION_STORES_CACHE_TIME, (string) time());
-            $this->deleteScopedOption(self::OPTION_STORES_CACHE_ERROR);
-            return $items;
-        } catch (\Exception $e) {
-            $this->updateScopedOption(self::OPTION_STORES_CACHE_ERROR, $this->sanitizeConnectionErrorMessage($e->getMessage()));
-            return [];
+            try {
+                $items = $this->buildStoreOverview($forceRefresh);
+                $this->updateScopedOption(self::OPTION_STORES_CACHE, $items);
+                $this->updateScopedOption(self::OPTION_STORES_CACHE_TIME, (string) time());
+                $this->deleteScopedOption(self::OPTION_STORES_CACHE_ERROR);
+                return $items;
+            } catch (\Exception $e) {
+                $this->updateScopedOption(self::OPTION_STORES_CACHE_ERROR, $this->sanitizeConnectionErrorMessage($e->getMessage()));
+                return [];
+            }
+        } finally {
+            if (is_string($lockToken) && $lockToken !== '') {
+                SharedRefreshLock::releaseGroup('gemini_store_overview', $lockToken);
+            }
         }
     }
 
@@ -263,6 +305,22 @@ class Gemini implements AIProviderInterface {
     }
 
     /**
+     * @return bool
+     */
+    public function isStoreOverviewCacheStale(): bool {
+        if (!$this->hasStoreOverviewCache()) {
+            return true;
+        }
+
+        $cacheTime = $this->getStoreOverviewCacheTime();
+        if ($cacheTime <= 0) {
+            return true;
+        }
+
+        return (time() - $cacheTime) >= self::STORE_OVERVIEW_CACHE_MAX_AGE;
+    }
+
+    /**
      * @return string
      */
     public function getStoreOverviewError(): string {
@@ -276,6 +334,8 @@ class Gemini implements AIProviderInterface {
         $this->deleteScopedOption(self::OPTION_STORES_CACHE);
         $this->deleteScopedOption(self::OPTION_STORES_CACHE_TIME);
         $this->deleteScopedOption(self::OPTION_STORES_CACHE_ERROR);
+        $this->deleteScopedOption(self::OPTION_STORE_DOCUMENTS_CACHE);
+        $this->deleteScopedOption(self::OPTION_STORE_DOCUMENTS_CACHE_TIME);
     }
 
     /**
@@ -285,13 +345,61 @@ class Gemini implements AIProviderInterface {
      * @return array<int,array<string,string>>
      * @throws \Exception
      */
-    public function getStoreDocuments(string $storeName): array {
+    public function getStoreDocuments(string $storeName, bool $forceRefresh = false): array {
         $storeName = trim($storeName);
         if ($storeName === '') {
             return [];
         }
 
-        return $this->listStoreDocuments($storeName);
+        $cached = $this->getCachedStoreDocuments($storeName);
+        $cacheTimeBefore = $this->getCachedStoreDocumentsCacheTime($storeName);
+        if (!$forceRefresh) {
+            if (is_array($cached)) {
+                return $cached;
+            }
+        }
+
+        $lockToken = SharedRefreshLock::acquireGroup('gemini_store_documents_' . md5($storeName), 45);
+        if ($lockToken === null) {
+            if (!$forceRefresh && is_array($cached)) {
+                return $cached;
+            }
+
+            $waited = SharedRefreshLock::waitFor(function () use ($storeName, $cacheTimeBefore) {
+                $documents = $this->getCachedStoreDocuments($storeName);
+                $cacheTime = $this->getCachedStoreDocumentsCacheTime($storeName);
+                if (is_array($documents) && $cacheTime > $cacheTimeBefore) {
+                    return $documents;
+                }
+
+                return null;
+            }, 10000, 250);
+
+            if (is_array($waited)) {
+                return $waited;
+            }
+
+            if (is_array($cached)) {
+                return $cached;
+            }
+
+            $lockToken = SharedRefreshLock::acquireGroup('gemini_store_documents_' . md5($storeName), 45);
+        }
+
+        try {
+            $documents = $this->listStoreDocuments($storeName);
+            $this->saveStoreDocumentsCache($storeName, $documents);
+
+            return $documents;
+        } finally {
+            if (is_string($lockToken) && $lockToken !== '') {
+                SharedRefreshLock::releaseGroup('gemini_store_documents_' . md5($storeName), $lockToken);
+            }
+        }
+    }
+
+    public function hasStoreDocumentsCache(string $storeName): bool {
+        return is_array($this->getCachedStoreDocuments(trim($storeName)));
     }
 
     /**
@@ -447,81 +555,27 @@ class Gemini implements AIProviderInterface {
             throw new \Exception(sprintf('Invalid MIME type for upload: %s', $mimeType !== '' ? $mimeType : '[empty]'));
         }
 
-        $url = self::API_UPLOAD_BASE . '/' . $storeName . ':uploadToFileSearchStore?key=' . $this->apiKey;
+        $responseMeta = $this->performMultipartUploadRequest($storeName, $content, $displayName, $mimeType, true);
+        $httpCode = $responseMeta['http_code'];
+        $responseBody = $responseMeta['body'];
+        $elapsedMs = $responseMeta['elapsed_ms'];
 
-        $boundary = uniqid();
-        $metadata = wp_json_encode([
-            'displayName' => $displayName,
-            'mimeType'    => $mimeType,
-        ]);
-
-        $body  = "--{$boundary}\r\n";
-        $body .= "Content-Type: application/json; charset=UTF-8\r\n\r\n";
-        $body .= $metadata . "\r\n";
-        $body .= "--{$boundary}\r\n";
-        $body .= "Content-Type: {$mimeType}\r\n\r\n";
-        $body .= $content . "\r\n";
-        $body .= "--{$boundary}--";
-
-        $payloadBytes = strlen($body);
-        $contentBytes = strlen($content);
-        $startedAt = microtime(true);
-        $this->logInfo(sprintf(
-            'multipart upload starting displayName="%s" mimeType="%s" content_bytes=%d payload_bytes=%d timeout_seconds=%d store="%s"',
-            $displayName,
-            $mimeType,
-            $contentBytes,
-            $payloadBytes,
-            120,
-            $storeName
-        ));
-
-        $response = wp_remote_post($url, [
-            'timeout' => 120,
-            'headers' => [
-                'Content-Type'           => "multipart/related; boundary={$boundary}",
-                'Content-Length'        => (string) $payloadBytes,
-                'X-Goog-Upload-Protocol' => 'multipart',
-            ],
-            'body' => $body,
-        ]);
-
-        $elapsedMs = (int) round((microtime(true) - $startedAt) * 1000);
-
-        if (is_wp_error($response)) {
-            $this->logError(sprintf(
-                'multipart upload transport failure after %d ms displayName="%s" message="%s"',
-                $elapsedMs,
+        if (
+            $httpCode === 400 &&
+            $this->shouldRetrySpreadsheetUploadWithoutMimeType($displayName, $mimeType, $responseBody)
+        ) {
+            $this->logInfo(sprintf(
+                'retrying spreadsheet upload without explicit mimeType metadata displayName="%s" original_mimeType="%s"',
                 $displayName,
-                $response->get_error_message()
+                $mimeType
             ));
-            throw new \Exception(esc_html(sprintf(
-                'Upload failed during transport after %d ms: %s',
-                $elapsedMs,
-                $response->get_error_message()
-            )));
+            $responseMeta = $this->performMultipartUploadRequest($storeName, $content, $displayName, $mimeType, false);
+            $httpCode = $responseMeta['http_code'];
+            $responseBody = $responseMeta['body'];
+            $elapsedMs = $responseMeta['elapsed_ms'];
         }
 
-        $httpCode     = wp_remote_retrieve_response_code($response);
-        $responseBody = wp_remote_retrieve_body($response);
-        $responseBytes = strlen($responseBody);
-        $this->logInfo(sprintf(
-            'multipart upload response received displayName="%s" http_code=%d elapsed_ms=%d response_bytes=%d',
-            $displayName,
-            $httpCode,
-            $elapsedMs,
-            $responseBytes
-        ));
-
         if ($httpCode < 200 || $httpCode >= 300) {
-            $responseSnippet = trim(substr(preg_replace('/\s+/', ' ', $responseBody), 0, 300));
-            $this->logError(sprintf(
-                'multipart upload API failure displayName="%s" http_code=%d elapsed_ms=%d response_snippet="%s"',
-                $displayName,
-                $httpCode,
-                $elapsedMs,
-                $responseSnippet
-            ));
             throw new \Exception(esc_html(sprintf(
                 'Upload failed after %d ms with HTTP code %d',
                 $elapsedMs,
@@ -582,6 +636,169 @@ class Gemini implements AIProviderInterface {
         $this->clearStoresCache();
 
         return $documentName;
+    }
+
+    /**
+     * @return array{http_code:int,body:string,elapsed_ms:int}
+     * @throws \Exception
+     */
+    private function performMultipartUploadRequest(string $storeName, string $content, string $displayName, string $mimeType, bool $includeMimeTypeMetadata): array {
+        $url = self::API_UPLOAD_BASE . '/' . $storeName . ':uploadToFileSearchStore?key=' . $this->apiKey;
+        $boundary = uniqid();
+
+        $metadata = [
+            'displayName' => $displayName,
+        ];
+        if ($includeMimeTypeMetadata) {
+            $metadata['mimeType'] = $mimeType;
+        }
+
+        $metadataJson = wp_json_encode($metadata);
+        $body  = "--{$boundary}\r\n";
+        $body .= "Content-Type: application/json; charset=UTF-8\r\n\r\n";
+        $body .= $metadataJson . "\r\n";
+        $body .= "--{$boundary}\r\n";
+        $body .= "Content-Type: {$mimeType}\r\n\r\n";
+        $body .= $content . "\r\n";
+        $body .= "--{$boundary}--";
+
+        $payloadBytes = strlen($body);
+        $contentBytes = strlen($content);
+        $startedAt = microtime(true);
+        $this->logInfo(sprintf(
+            'multipart upload starting displayName="%s" mimeType="%s" metadata_mimeType=%s content_bytes=%d payload_bytes=%d timeout_seconds=%d store="%s"',
+            $displayName,
+            $mimeType,
+            $includeMimeTypeMetadata ? 'yes' : 'no',
+            $contentBytes,
+            $payloadBytes,
+            120,
+            $storeName
+        ));
+
+        $attempt = 0;
+        $maxAttempts = 2;
+
+        do {
+            $attempt++;
+            $response = wp_remote_post($url, [
+                'timeout' => 120,
+                'headers' => [
+                    'Content-Type'            => "multipart/related; boundary={$boundary}",
+                    'Content-Length'          => (string) $payloadBytes,
+                    'X-Goog-Upload-Protocol'  => 'multipart',
+                ],
+                'body' => $body,
+            ]);
+
+            $elapsedMs = (int) round((microtime(true) - $startedAt) * 1000);
+            if (is_wp_error($response)) {
+                $this->logError(sprintf(
+                    'multipart upload transport failure after %d ms displayName="%s" metadata_mimeType=%s attempt=%d/%d message="%s"',
+                    $elapsedMs,
+                    $displayName,
+                    $includeMimeTypeMetadata ? 'yes' : 'no',
+                    $attempt,
+                    $maxAttempts,
+                    $response->get_error_message()
+                ));
+                throw new \Exception(sprintf(
+                    'Upload failed during transport after %d ms: %s',
+                    $elapsedMs,
+                    $response->get_error_message()
+                ));
+            }
+
+            $httpCode = wp_remote_retrieve_response_code($response);
+            $responseBody = wp_remote_retrieve_body($response);
+            $responseBytes = strlen($responseBody);
+            $this->logInfo(sprintf(
+                'multipart upload response received displayName="%s" metadata_mimeType=%s attempt=%d/%d http_code=%d elapsed_ms=%d response_bytes=%d',
+                $displayName,
+                $includeMimeTypeMetadata ? 'yes' : 'no',
+                $attempt,
+                $maxAttempts,
+                $httpCode,
+                $elapsedMs,
+                $responseBytes
+            ));
+
+            if ($httpCode < 200 || $httpCode >= 300) {
+                $responseSnippet = trim(substr((string) preg_replace('/\s+/', ' ', $responseBody), 0, 300));
+                $this->logError(sprintf(
+                    'multipart upload API failure displayName="%s" metadata_mimeType=%s attempt=%d/%d http_code=%d elapsed_ms=%d response_snippet="%s"',
+                    $displayName,
+                    $includeMimeTypeMetadata ? 'yes' : 'no',
+                    $attempt,
+                    $maxAttempts,
+                    $httpCode,
+                    $elapsedMs,
+                    $responseSnippet
+                ));
+
+                if ($this->shouldRetryTransientMultipartUpload($displayName, $mimeType, $httpCode, $responseBody, $attempt, $maxAttempts)) {
+                    $this->logInfo(sprintf(
+                        'retrying multipart upload after transient API failure displayName="%s" metadata_mimeType=%s attempt=%d/%d http_code=%d',
+                        $displayName,
+                        $includeMimeTypeMetadata ? 'yes' : 'no',
+                        $attempt,
+                        $maxAttempts,
+                        $httpCode
+                    ));
+                    sleep(2);
+                    continue;
+                }
+            }
+
+            return [
+                'http_code' => (int) $httpCode,
+                'body' => (string) $responseBody,
+                'elapsed_ms' => $elapsedMs,
+            ];
+        } while ($attempt < $maxAttempts);
+
+        return [
+            'http_code' => (int) $httpCode,
+            'body' => (string) $responseBody,
+            'elapsed_ms' => $elapsedMs,
+        ];
+    }
+
+    private function shouldRetrySpreadsheetUploadWithoutMimeType(string $displayName, string $mimeType, string $responseBody): bool {
+        $extension = strtolower((string) pathinfo($displayName, PATHINFO_EXTENSION));
+        $isSpreadsheet = in_array($extension, ['xls', 'xlsx'], true)
+            || strpos($mimeType, 'spreadsheetml') !== false
+            || strpos($mimeType, 'ms-excel') !== false;
+
+        if (!$isSpreadsheet) {
+            return false;
+        }
+
+        $normalizedBody = strtolower((string) preg_replace('/\s+/', ' ', $responseBody));
+        return strpos($normalizedBody, 'mime type must be in a valid type/subtype format') !== false
+            || strpos($normalizedBody, 'uploadtofilesearchstorerequest.mime_type') !== false;
+    }
+
+    private function shouldRetryTransientMultipartUpload(string $displayName, string $mimeType, int $httpCode, string $responseBody, int $attempt, int $maxAttempts): bool {
+        if ($attempt >= $maxAttempts) {
+            return false;
+        }
+
+        $extension = strtolower((string) pathinfo($displayName, PATHINFO_EXTENSION));
+        $isSpreadsheet = in_array($extension, ['xls', 'xlsx'], true)
+            || strpos($mimeType, 'spreadsheetml') !== false
+            || strpos($mimeType, 'ms-excel') !== false;
+
+        if (!$isSpreadsheet) {
+            return false;
+        }
+
+        $normalizedBody = strtolower((string) preg_replace('/\s+/', ' ', $responseBody));
+        return $httpCode === 503
+            && (
+                strpos($normalizedBody, 'failed to count tokens') !== false
+                || strpos($normalizedBody, 'unavailable') !== false
+            );
     }
 
     /**
@@ -764,7 +981,7 @@ class Gemini implements AIProviderInterface {
      * @return array<int,array<string,mixed>>
      * @throws \Exception
      */
-    private function buildStoreOverview(): array {
+    private function buildStoreOverview(bool $forceRefresh = false): array {
         $stores = $this->listStores();
         $activeStore = $this->getStoreData();
         $items = [];
@@ -788,7 +1005,7 @@ class Gemini implements AIProviderInterface {
 
             $status = $name === $activeStore ? 'Active in plugin' : 'Likely orphaned';
             $statusColor = $name === $activeStore ? '#46b450' : '#996800';
-            $storeDocuments = $name === $activeStore ? $this->listStoreDocuments($name) : [];
+            $storeDocuments = $name === $activeStore ? $this->getStoreDocuments($name, $forceRefresh) : [];
 
             $items[] = [
                 'name' => $name,
@@ -810,6 +1027,44 @@ class Gemini implements AIProviderInterface {
         });
 
         return $items;
+    }
+
+    /**
+     * @return array<int,array<string,string>>|null
+     */
+    private function getCachedStoreDocuments(string $storeName): ?array {
+        $cache = $this->getScopedOption(self::OPTION_STORE_DOCUMENTS_CACHE, null);
+        $cacheTimes = $this->getScopedOption(self::OPTION_STORE_DOCUMENTS_CACHE_TIME, null);
+        if (!is_array($cache) || !isset($cache[$storeName]) || !is_array($cache[$storeName])) {
+            return null;
+        }
+
+        $cacheTime = is_array($cacheTimes) ? (int) ($cacheTimes[$storeName] ?? 0) : 0;
+        if ($cacheTime <= 0 || (time() - $cacheTime) >= self::STORE_DOCUMENTS_CACHE_MAX_AGE) {
+            return null;
+        }
+
+        return $cache[$storeName];
+    }
+
+    /**
+     * @param array<int,array<string,string>> $documents
+     */
+    private function saveStoreDocumentsCache(string $storeName, array $documents): void {
+        $cache = $this->getScopedOption(self::OPTION_STORE_DOCUMENTS_CACHE, []);
+        $cache = is_array($cache) ? $cache : [];
+        $cache[$storeName] = $documents;
+        $this->updateScopedOption(self::OPTION_STORE_DOCUMENTS_CACHE, $cache);
+
+        $cacheTimes = $this->getScopedOption(self::OPTION_STORE_DOCUMENTS_CACHE_TIME, []);
+        $cacheTimes = is_array($cacheTimes) ? $cacheTimes : [];
+        $cacheTimes[$storeName] = time();
+        $this->updateScopedOption(self::OPTION_STORE_DOCUMENTS_CACHE_TIME, $cacheTimes);
+    }
+
+    private function getCachedStoreDocumentsCacheTime(string $storeName): int {
+        $cacheTimes = $this->getScopedOption(self::OPTION_STORE_DOCUMENTS_CACHE_TIME, null);
+        return is_array($cacheTimes) ? (int) ($cacheTimes[$storeName] ?? 0) : 0;
     }
 
     /**
@@ -1058,6 +1313,23 @@ class Gemini implements AIProviderInterface {
         }
 
         return trim(implode("\n", $textParts));
+    }
+
+    /**
+     * @param array<string,mixed> $result
+     */
+    private function extractResolvedModelName(array $result, string $fallback = ''): string {
+        $modelVersion = isset($result['modelVersion']) ? trim((string) $result['modelVersion']) : '';
+        if ($modelVersion !== '') {
+            return $modelVersion;
+        }
+
+        $model = isset($result['model']) ? trim((string) $result['model']) : '';
+        if ($model !== '') {
+            return preg_replace('#^models/#', '', $model) ?: $model;
+        }
+
+        return trim($fallback);
     }
 
     /**
@@ -1822,7 +2094,7 @@ class Gemini implements AIProviderInterface {
 
         if (empty($this->apiKey)) {
             $this->recordConnectionStatus('missing', 'No API key saved.');
-            return apply_filters('geweb_aisearch_gemini_models', $this->filterStaleFailedModels($models));
+            return apply_filters('geweb_aisearch_gemini_models', $this->prependOfficialLatestAliases($this->filterStaleFailedModels($models)));
         }
 
         $cachedModels = get_transient(self::TRANSIENT_MODELS);
@@ -1833,7 +2105,7 @@ class Gemini implements AIProviderInterface {
             if (!empty($filteredCachedModels)) {
                 set_transient(self::TRANSIENT_MODELS, $filteredCachedModels, 12 * HOUR_IN_SECONDS);
                 if (!$forceRefresh) {
-                    return apply_filters('geweb_aisearch_gemini_models', $this->filterStaleFailedModels($filteredCachedModels));
+                    return apply_filters('geweb_aisearch_gemini_models', $this->prependOfficialLatestAliases($this->filterStaleFailedModels($filteredCachedModels)));
                 }
             }
         }
@@ -1843,17 +2115,17 @@ class Gemini implements AIProviderInterface {
             if (!empty($remoteModels)) {
                 set_transient(self::TRANSIENT_MODELS, $remoteModels, 12 * HOUR_IN_SECONDS);
                 $this->recordConnectionStatus('ok', 'Gemini API key is valid.');
-                return apply_filters('geweb_aisearch_gemini_models', $this->filterStaleFailedModels($remoteModels));
+                return apply_filters('geweb_aisearch_gemini_models', $this->prependOfficialLatestAliases($this->filterStaleFailedModels($remoteModels)));
             }
         } catch (\Exception $e) {
             $this->recordConnectionStatus('failed', $this->sanitizeConnectionErrorMessage($e->getMessage()));
         }
 
         if (!empty($filteredCachedModels)) {
-            return apply_filters('geweb_aisearch_gemini_models', $this->filterStaleFailedModels($filteredCachedModels));
+            return apply_filters('geweb_aisearch_gemini_models', $this->prependOfficialLatestAliases($this->filterStaleFailedModels($filteredCachedModels)));
         }
 
-        return apply_filters('geweb_aisearch_gemini_models', $this->filterStaleFailedModels($models));
+        return apply_filters('geweb_aisearch_gemini_models', $this->prependOfficialLatestAliases($this->filterStaleFailedModels($models)));
     }
 
     /**
@@ -2062,10 +2334,11 @@ class Gemini implements AIProviderInterface {
         }
 
         try {
+            $testPrompt = 'Reply with OK.';
             $body = [
                 'contents' => [[
                     'parts' => [[
-                        'text' => 'Reply with OK.',
+                        'text' => $testPrompt,
                     ]],
                 ]],
                 'generationConfig' => [
@@ -2075,20 +2348,36 @@ class Gemini implements AIProviderInterface {
             ];
 
             $url = self::API_BASE . '/models/' . $requestModel . ':generateContent';
-            $this->makeRequest($url, $body, 'POST', self::MODEL_TEST_TIMEOUT_SECONDS);
-            $this->recordModelStatus($requestModel, 'ok');
+            $response = $this->makeRequest($url, $body, 'POST', self::MODEL_TEST_TIMEOUT_SECONDS);
+            $responseText = $this->extractCandidateText($response);
+            $resolvedModel = $this->extractResolvedModelName($response, $requestModel);
+            $this->recordModelStatus($requestModel, 'ok', '', [
+                'test_prompt' => $testPrompt,
+                'test_response' => $responseText,
+                'resolved_model' => $resolvedModel,
+            ]);
 
             return [
                 'status' => 'ok',
                 'message' => 'Model responded successfully.',
+                'test_prompt' => $testPrompt,
+                'test_response' => $responseText,
+                'resolved_model' => $resolvedModel,
                 'timestamp' => current_time('timestamp'),
             ];
         } catch (\Exception $e) {
-            $this->recordModelStatus($requestModel, 'failed', $e->getMessage());
+            $this->recordModelStatus($requestModel, 'failed', $e->getMessage(), [
+                'test_prompt' => isset($testPrompt) ? $testPrompt : 'Reply with OK.',
+                'test_response' => '',
+                'resolved_model' => '',
+            ]);
 
             return [
                 'status' => 'failed',
                 'message' => $this->sanitizeConnectionErrorMessage($e->getMessage()),
+                'test_prompt' => isset($testPrompt) ? $testPrompt : 'Reply with OK.',
+                'test_response' => '',
+                'resolved_model' => '',
                 'timestamp' => current_time('timestamp'),
             ];
         }
@@ -2196,7 +2485,7 @@ class Gemini implements AIProviderInterface {
      * @param string $message Optional error message
      * @return void
      */
-    private function recordModelStatus(string $model, string $status, string $message = ''): void {
+    private function recordModelStatus(string $model, string $status, string $message = '', array $details = []): void {
         if ($model === '') {
             return;
         }
@@ -2206,6 +2495,9 @@ class Gemini implements AIProviderInterface {
             'status' => $status,
             'timestamp' => current_time('timestamp'),
             'message' => $message,
+            'test_prompt' => isset($details['test_prompt']) ? trim((string) $details['test_prompt']) : '',
+            'test_response' => isset($details['test_response']) ? trim((string) $details['test_response']) : '',
+            'resolved_model' => isset($details['resolved_model']) ? trim((string) $details['resolved_model']) : '',
         ];
 
         update_option(self::OPTION_MODEL_STATUS, $statuses);
@@ -2300,6 +2592,10 @@ class Gemini implements AIProviderInterface {
             return false;
         }
 
+        if (in_array($normalizedModel, self::OFFICIAL_LATEST_MODEL_ALIASES, true)) {
+            return true;
+        }
+
         $blockedFragments = [
             'tts',
             'speech',
@@ -2322,6 +2618,14 @@ class Gemini implements AIProviderInterface {
         }
 
         return preg_match('/^gemini-[0-9][a-z0-9.\-]*-(pro|flash|flash-lite)(?:-|$)/', $normalizedModel) === 1;
+    }
+
+    /**
+     * @param array<int,string> $models
+     * @return array<int,string>
+     */
+    private function prependOfficialLatestAliases(array $models): array {
+        return array_values(array_unique(array_merge(self::OFFICIAL_LATEST_MODEL_ALIASES, $models)));
     }
 
     /**

@@ -15,14 +15,25 @@ class AdminPageRenderer {
         extract($context, EXTR_SKIP);
         ?>
         <div class="wrap">
-            <h1>Geweb AI Search</h1>
+            <h1>Workspace AI Search</h1>
+            <div id="geweb-ai-admin-preload-state" data-needs-preload="<?php echo !empty($adminPanelsNeedPreload) ? '1' : '0'; ?>" hidden></div>
+            <div
+                id="geweb-ai-admin-cache-state"
+                data-prompts-revision="<?php echo esc_attr((string) ($adminViewCacheState['prompts'] ?? '')); ?>"
+                data-files-revision="<?php echo esc_attr((string) ($adminViewCacheState['files'] ?? '')); ?>"
+                data-chats-revision="<?php echo esc_attr((string) ($adminViewCacheState['chats'] ?? '')); ?>"
+                hidden
+            ></div>
             <?php if ($conflictNotice !== ''): ?>
                 <div class="notice notice-error"><p><?php echo esc_html((string) $conflictNotice); ?></p></div>
+            <?php endif; ?>
+            <?php if (!empty($pluginUpdateGuardActive)): ?>
+                <div class="notice notice-warning"><p><?php echo esc_html((string) $pluginUpdateGuardMessage); ?></p></div>
             <?php endif; ?>
             <h2 class="nav-tab-wrapper" style="margin-bottom:16px;">
                 <a href="<?php echo esc_url((string) $generalTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'general' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="general">General</a>
                 <a href="<?php echo esc_url((string) $promptsTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'prompts' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="prompts">Prompts</a>
-                <a href="<?php echo esc_url((string) $documentsTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'documents' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="documents">Documents</a>
+                <a href="<?php echo esc_url((string) $documentsTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'documents' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="documents">Files</a>
                 <a href="<?php echo esc_url((string) $storesTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'stores' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="stores">Gemini Stores</a>
                 <a href="<?php echo esc_url((string) $conversationsTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'conversations' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="conversations">Chats</a>
             </h2>
@@ -120,94 +131,25 @@ class AdminPageRenderer {
                                 <button type="button" class="button" id="geweb-test-selected-model">Test selected model</button>
                             </span>
                             <p class="description" id="geweb-ai-model-refresh-status" <?php echo (string) $inlineStyleHidden; ?>></p>
+                            <p class="description" style="margin-top:8px;">
+                                Gemini model info:
+                                <a href="<?php echo esc_url((string) $geminiChangelogUrl); ?>" target="_blank" rel="noopener noreferrer">Release notes</a>
+                                |
+                                <a href="<?php echo esc_url((string) $geminiDeprecationsUrl); ?>" target="_blank" rel="noopener noreferrer">Deprecations</a>
+                            </p>
                             <?php
-                            $selectedModelStatus = is_array($modelStatuses[$selectedModel] ?? null) ? (string) (($modelStatuses[$selectedModel]['status'] ?? '')) : '';
-                            $defaultModelStatus = is_array($modelStatuses[$defaultModel] ?? null) ? (string) (($modelStatuses[$defaultModel]['status'] ?? '')) : '';
+                            (new AdminPageSections(new ConversationManager()))->renderModelDiagnosticsSection([
+                                'models' => $models,
+                                'modelStatuses' => $modelStatuses,
+                                'selectedModel' => $selectedModel,
+                                'defaultModel' => $defaultModel,
+                                'officialLatestAliases' => $officialLatestAliases,
+                                'workingModelHints' => $workingModelHints,
+                                'latestModelHints' => $latestModelHints,
+                                'statusColorError' => $statusColorError,
+                                'statusColorSuccess' => $statusColorSuccess,
+                            ]);
                             ?>
-                            <p class="description">
-                                Current model:
-                                <code><?php echo esc_html((string) $selectedModel); ?></code>
-                                <?php if ($selectedModelStatus === 'failed'): ?>
-                                    <span style="color:#b32d2e;">failed recently</span>
-                                <?php elseif ($selectedModelStatus === 'ok'): ?>
-                                    <span style="color:#46b450;">working</span>
-                                <?php endif; ?>
-                            </p>
-                            <p class="description">
-                                Default model:
-                                <code><?php echo esc_html((string) $defaultModel); ?></code>
-                                <?php if ($defaultModelStatus === 'failed'): ?>
-                                    <span style="color:#b32d2e;">failed recently</span>
-                                <?php elseif ($defaultModelStatus === 'ok'): ?>
-                                    <span style="color:#46b450;">working</span>
-                                <?php endif; ?>
-                            </p>
-                            <?php if (!empty($officialLatestAliases['flash_latest']) || !empty($officialLatestAliases['pro_latest'])): ?>
-                                <p class="description">
-                                    Official Gemini alias targets:
-                                    <?php if (!empty($officialLatestAliases['flash_latest'])): ?>
-                                        <br><code>gemini-flash-latest</code> → <code><?php echo esc_html((string) $officialLatestAliases['flash_latest']); ?></code>
-                                    <?php endif; ?>
-                                    <?php if (!empty($officialLatestAliases['pro_latest'])): ?>
-                                        <br><code>gemini-pro-latest</code> → <code><?php echo esc_html((string) $officialLatestAliases['pro_latest']); ?></code>
-                                    <?php endif; ?>
-                                </p>
-                            <?php endif; ?>
-                            <?php if (!empty($workingModelHints['flash']) || !empty($workingModelHints['pro'])): ?>
-                                <p class="description">
-                                    Working now:
-                                    <?php if (!empty($workingModelHints['flash'])): ?>
-                                        <br>Flash: <code><?php echo esc_html((string) $workingModelHints['flash']); ?></code>
-                                    <?php endif; ?>
-                                    <?php if (!empty($workingModelHints['pro'])): ?>
-                                        <br>Pro: <code><?php echo esc_html((string) $workingModelHints['pro']); ?></code>
-                                    <?php endif; ?>
-                                </p>
-                            <?php endif; ?>
-                            <?php if ((!empty($latestModelHints['stable_flash']) || !empty($latestModelHints['stable_pro'])) && (($latestModelHints['stable_flash'] ?? '') !== ($workingModelHints['flash'] ?? '') || ($latestModelHints['stable_pro'] ?? '') !== ($workingModelHints['pro'] ?? ''))): ?>
-                                <p class="description">
-                                    Stable choices:
-                                    <?php if (!empty($latestModelHints['stable_flash'])): ?>
-                                        <br>Flash: <code><?php echo esc_html((string) $latestModelHints['stable_flash']); ?></code>
-                                    <?php endif; ?>
-                                    <?php if (!empty($latestModelHints['stable_pro'])): ?>
-                                        <br>Pro: <code><?php echo esc_html((string) $latestModelHints['stable_pro']); ?></code>
-                                    <?php endif; ?>
-                                </p>
-                            <?php endif; ?>
-                            <p class="description">The list above is fetched from Gemini when possible and falls back to the bundled defaults if the API is unavailable.</p>
-                            <?php if (!empty($modelStatuses)): ?>
-                                <div style="margin-top:12px;">
-                                    <strong>Model status</strong>
-                                    <ul style="margin:8px 0 0 18px;">
-                                        <?php foreach ($models as $model): ?>
-                                            <?php
-                                            $entry = $modelStatuses[$model] ?? null;
-                                            if (!is_array($entry) || empty($entry['status'])) {
-                                                continue;
-                                            }
-
-                                            $status = $entry['status'] === 'failed' ? 'Failed' : 'OK';
-                                            $color = $entry['status'] === 'failed' ? (string) $statusColorError : (string) $statusColorSuccess;
-                                            $timestamp = !empty($entry['timestamp'])
-                                                ? DateDisplay::formatDateTime(intval($entry['timestamp']))
-                                                : '';
-                                            $message = isset($entry['message']) ? (string) $entry['message'] : '';
-                                            ?>
-                                            <li style="color:<?php echo esc_attr($color); ?>;">
-                                                <code><?php echo esc_html((string) $model); ?></code>
-                                                <?php echo esc_html($status); ?>
-                                                <?php if ($timestamp !== ''): ?>
-                                                    at <?php echo esc_html($timestamp); ?>
-                                                <?php endif; ?>
-                                                <?php if ($message !== ''): ?>
-                                                    <br><small style="color:#50575e;"><?php echo esc_html($message); ?></small>
-                                                <?php endif; ?>
-                                            </li>
-                                        <?php endforeach; ?>
-                                    </ul>
-                                </div>
-                            <?php endif; ?>
                         </td>
                     </tr>
 
@@ -449,6 +391,12 @@ class AdminPageRenderer {
                         </td>
                     </tr>
                 </table>
+                <div class="notice notice-warning inline geweb-admin-view-stale-notice" data-cache-tab="prompts" style="display:none; margin-top:12px;">
+                    <p>
+                        Prompt data changed in another session. Refresh this view to see the latest server state.
+                        <button type="button" class="button button-link geweb-refresh-admin-view" data-cache-tab="prompts">Refresh View</button>
+                    </p>
+                </div>
                 </div>
                 <p class="submit">
                     <input type="submit" id="geweb-save-settings" class="button-primary" value="Save Settings" disabled>
@@ -457,7 +405,10 @@ class AdminPageRenderer {
 
             <div class="geweb-settings-tab-panel" data-geweb-tab-panel="documents" <?php echo $activeTab === 'documents' ? '' : (string) $inlineStyleHidden; ?>>
                 <p class="description" style="margin-top:0; max-width: 900px;">
-                    This table shows local files found in managed content, whether they have been uploaded to the Gemini store, and any uploaded documents that are no longer referenced.
+                    This Files tab shows documents from Simple File List, whether they have been uploaded to the Gemini store, and whether they are referenced from pages or posts.
+                </p>
+                <p class="description" style="max-width: 900px;">
+                    Some Simple File List documents are referenced in your site content and some are not. The table helps you see both states, jump to the matching File List item, and remove unreferenced File List entries when needed.
                 </p>
                 <?php if (!empty($documentsApiStatusLabel)): ?>
                     <p class="description" style="color: <?php echo esc_attr((string) $documentsApiStatusColor); ?>;">
@@ -468,22 +419,28 @@ class AdminPageRenderer {
                     </p>
                 <?php endif; ?>
                 <p>
-                    <button type="button" class="button" id="geweb-refresh-referenced-documents" <?php disabled(!$hasReferencedDocumentCache); ?>>Refresh List</button>
+                    <button type="button" class="button" id="geweb-refresh-referenced-documents">Refresh List</button>
                     <span id="geweb-referenced-documents-status" style="margin-left:10px; color:#646970;">
                         <?php if ($referencedCacheTime > 0): ?>
                             Showing cached list. Last refreshed: <?php echo esc_html((string) $referencedCacheLabel); ?>
                         <?php else: ?>
-                            Loading referenced documents...
+                            Loading files...
                         <?php endif; ?>
                     </span>
                 </p>
+                <div class="notice notice-warning inline geweb-admin-view-stale-notice" data-cache-tab="files" style="display:none; margin:12px 0 0;">
+                    <p>
+                        Files changed in another session. Refresh this view to load the latest server data.
+                        <button type="button" class="button button-link geweb-refresh-admin-view" data-cache-tab="files">Refresh View</button>
+                    </p>
+                </div>
                 <?php if (!empty($referencedDebug)): ?>
                     <p class="description">
-                        Scanned posts: <?php echo esc_html((string) ($referencedDebug['managed_posts'] ?? 0)); ?>,
-                        posts with document links: <?php echo esc_html((string) ($referencedDebug['posts_with_document_links'] ?? 0)); ?>,
+                        Scanned content items: <?php echo esc_html((string) ($referencedDebug['managed_posts'] ?? 0)); ?>,
+                        content items with document links: <?php echo esc_html((string) ($referencedDebug['posts_with_document_links'] ?? 0)); ?>,
                         accepted document references: <?php echo esc_html((string) ($referencedDebug['accepted_documents'] ?? 0)); ?>
                         <?php if (!empty($referencedDebug['using_all_public_post_types'])): ?>
-                            <br><small>No post types are configured yet, so this overview is scanning all public post types.</small>
+                            <br><small>No post types are configured yet, so this overview is scanning all public post types, including pages.</small>
                         <?php endif; ?>
                     </p>
                 <?php endif; ?>
@@ -503,6 +460,8 @@ class AdminPageRenderer {
                     $referencedCount = (int) ($storageEstimate['referenced_count'] ?? 0);
                     $referencedBytes = (int) ($storageEstimate['referenced_bytes'] ?? 0);
                     $remoteDocumentCount = (int) ($storageEstimate['remote_document_count'] ?? 0);
+                    $remoteDocumentsWithSize = (int) ($storageEstimate['remote_documents_with_size'] ?? 0);
+                    $remoteDocumentsWithoutSize = (int) ($storageEstimate['remote_documents_without_size'] ?? 0);
                     $remoteReferencedBytes = (int) ($storageEstimate['remote_referenced_bytes'] ?? 0);
                     $unknownReferencedCount = (int) ($storageEstimate['unknown_referenced_count'] ?? 0);
                     $rawKnownBytes = (int) ($storageEstimate['raw_known_bytes'] ?? 0);
@@ -517,6 +476,7 @@ class AdminPageRenderer {
                             Uploaded referenced files tracked by this plugin: <?php echo esc_html((string) $referencedCount); ?> item(s).
                             <?php if ($remoteDocumentCount > 0): ?>
                                 <br>Remote size returned by Gemini for current store documents: <?php echo esc_html((string) $remoteDocumentCount); ?> item(s) checked, <?php echo esc_html(GeminiStorageEstimator::formatBytes($remoteReferencedBytes)); ?> used in this estimate.
+                                <br><small>Debug: Gemini returned a usable <code>sizeBytes</code> value for <?php echo esc_html((string) $remoteDocumentsWithSize); ?> document(s) and no usable size for <?php echo esc_html((string) $remoteDocumentsWithoutSize); ?>.</small>
                             <?php endif; ?>
                             <?php if ($referencedBytes > 0): ?>
                                 <br>Fallback local file-size total where remote size was unavailable: <?php echo esc_html(GeminiStorageEstimator::formatBytes($referencedBytes)); ?>.
@@ -548,7 +508,7 @@ class AdminPageRenderer {
                     <p>This tab is only available when the Gemini provider is active.</p>
                 <?php else: ?>
                     <p>
-                        <button type="button" class="button" id="geweb-refresh-gemini-stores" <?php disabled(!$providerHasStoreCache); ?>>Refresh List</button>
+                        <button type="button" class="button" id="geweb-refresh-gemini-stores">Refresh List</button>
                         <span id="geweb-gemini-stores-status" style="margin-left:10px; color:#646970;">
                             <?php if ($providerStoreCacheTime > 0): ?>
                                 Last refreshed: <?php echo esc_html((string) $providerStoreCacheLabel); ?>
@@ -569,8 +529,20 @@ class AdminPageRenderer {
                 <p class="description" style="margin-top:0; max-width: 900px;">
                     Saved AI chats are grouped by browser-side chat ID and show the latest summary, last usage time, total token usage, and an estimated Gemini text-generation cost when usage metadata is available. Entries appear after a successful AI response, not only when the dialog is closed.
                 </p>
+                <p>
+                    <button type="button" class="button" id="geweb-refresh-conversations">Refresh List</button>
+                    <span id="geweb-conversations-status" style="margin-left:10px; color:#646970;">Loading chats...</span>
+                </p>
+                <div class="notice notice-warning inline geweb-admin-view-stale-notice" data-cache-tab="chats" style="display:none; margin:12px 0 0;">
+                    <p>
+                        Chats changed in another session. Refresh this view to load the latest server data.
+                        <button type="button" class="button button-link geweb-refresh-admin-view" data-cache-tab="chats">Refresh View</button>
+                    </p>
+                </div>
                 <div style="margin-top:16px;">
-                    <?php echo $conversationsHtml; ?>
+                    <div id="geweb-conversations-container">
+                        <?php echo $conversationsHtml; ?>
+                    </div>
                 </div>
             </div>
         </div>

@@ -38,6 +38,8 @@ class ConversationListTable extends \WP_List_Table {
     public function get_columns(): array {
         return [
             'summary' => 'Summary',
+            'group_scope' => 'Group',
+            'user_scope' => 'User',
             'model' => 'Model',
             'request_count' => 'Requests',
             'last_used_at' => 'Last Used',
@@ -52,6 +54,8 @@ class ConversationListTable extends \WP_List_Table {
     protected function get_sortable_columns(): array {
         return [
             'summary' => ['summary', false],
+            'group_scope' => ['group_scope', false],
+            'user_scope' => ['user_scope', false],
             'model' => ['model', false],
             'request_count' => ['request_count', false],
             'last_used_at' => ['last_used_at', true],
@@ -69,7 +73,12 @@ class ConversationListTable extends \WP_List_Table {
         $sortable = $this->get_sortable_columns();
         $this->_column_headers = [$columns, $hidden, $sortable];
 
-        $items = $this->filterItems($this->sourceItems);
+        $items = array_map(function (array $item): array {
+            $item['group_scope'] = UserScope::getCurrentGroupScopeKey();
+            $item['user_scope'] = UserScope::getCurrentUserScopeKey();
+            return $item;
+        }, $this->sourceItems);
+        $items = $this->filterItems($items);
         $items = $this->sortItems($items);
         $perPage = 20;
         $currentPage = $this->get_pagenum();
@@ -168,13 +177,7 @@ class ConversationListTable extends \WP_List_Table {
         $needle = function_exists('mb_strtolower') ? mb_strtolower($search, 'UTF-8') : strtolower($search);
 
         return array_values(array_filter($items, static function (array $item) use ($needle): bool {
-            $haystackParts = [
-                isset($item['summary']) ? (string) $item['summary'] : '',
-                isset($item['provider']) ? (string) $item['provider'] : '',
-                isset($item['model']) ? (string) $item['model'] : '',
-            ];
-
-            $haystack = implode(' ', $haystackParts);
+            $haystack = isset($item['summary']) ? (string) $item['summary'] : '';
             $haystack = function_exists('mb_strtolower') ? mb_strtolower($haystack, 'UTF-8') : strtolower($haystack);
 
             return strpos($haystack, $needle) !== false;
@@ -214,6 +217,24 @@ class ConversationListTable extends \WP_List_Table {
         }
 
         return esc_html($provider) . '<br><code>' . esc_html($model) . '</code>';
+    }
+
+    /**
+     * @param array<string,mixed> $item
+     * @return string
+     */
+    protected function column_group_scope($item): string {
+        $scope = trim((string) ($item['group_scope'] ?? ''));
+        return $scope !== '' ? '<code>' . esc_html($scope) . '</code>' : '—';
+    }
+
+    /**
+     * @param array<string,mixed> $item
+     * @return string
+     */
+    protected function column_user_scope($item): string {
+        $scope = trim((string) ($item['user_scope'] ?? ''));
+        return $scope !== '' ? '<code>' . esc_html($scope) . '</code>' : '—';
     }
 
     /**
@@ -273,7 +294,7 @@ class ConversationListTable extends \WP_List_Table {
     private function sortItems(array $items): array {
         $orderby = isset($_GET['orderby']) ? sanitize_key(wp_unslash($_GET['orderby'])) : 'last_used_at';
         $order = isset($_GET['order']) ? strtolower(sanitize_text_field(wp_unslash($_GET['order']))) : 'desc';
-        $allowedOrderBy = ['summary', 'model', 'request_count', 'last_used_at', 'total_tokens', 'estimated_cost_usd'];
+        $allowedOrderBy = ['summary', 'group_scope', 'user_scope', 'model', 'request_count', 'last_used_at', 'total_tokens', 'estimated_cost_usd'];
 
         if (!in_array($orderby, $allowedOrderBy, true)) {
             $orderby = 'last_used_at';

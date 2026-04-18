@@ -33,7 +33,7 @@ class ReferencedAttachmentResolver {
     }
 
     /**
-     * Resolve a linked local URL to a readable uploads file path and URL.
+     * Resolve a linked local URL to an uploads file path and URL.
      *
      * @param string $url
      * @return array<string,string>|null
@@ -49,11 +49,14 @@ class ReferencedAttachmentResolver {
             if ($baseUrl !== '' && $baseDir !== '') {
                 $normalizedUrl = self::normalizeReferencedUrl($url);
                 $filePath = self::resolveUploadsPathFromUrl($normalizedUrl, $baseUrl, $baseDir);
-                if ($filePath !== null && self::isSupportedReferencedFilePath($filePath)) {
+                if ($filePath !== null) {
                     $resolved = [
                         'file_path' => $filePath,
                         'file_url' => $normalizedUrl,
                     ];
+                    if (!self::isSupportedReferencedFilePath($filePath)) {
+                        $resolved['broken_reference'] = '1';
+                    }
                 }
             }
         }
@@ -140,7 +143,7 @@ class ReferencedAttachmentResolver {
         $filePath = wp_normalize_path(trailingslashit($baseDir) . $relativePath);
         $normalizedBaseDir = wp_normalize_path($baseDir);
 
-        if (strpos($filePath, $normalizedBaseDir) !== 0 || !is_readable($filePath)) {
+        if (strpos($filePath, $normalizedBaseDir) !== 0) {
             return null;
         }
 
@@ -148,10 +151,6 @@ class ReferencedAttachmentResolver {
     }
 
     private static function isSupportedReferencedFilePath(string $filePath): bool {
-        $fileType = wp_check_filetype(basename($filePath));
-        $extension = isset($fileType['ext']) ? (string) $fileType['ext'] : '';
-        $typeGroup = $extension !== '' ? wp_ext2type($extension) : false;
-
-        return !in_array($typeGroup, ['image', 'audio', 'video'], true);
+        return is_readable($filePath);
     }
 }

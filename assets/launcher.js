@@ -19,6 +19,9 @@ jQuery(document).ready(function ($) {
             }
 
             this.injectAIButtons();
+            this.injectMobileShortcut();
+            this.injectMobileMenuEntries();
+            this.bindMobileMenuInjection();
         },
 
         buildFrontendAiPageUrl(query) {
@@ -98,6 +101,141 @@ jQuery(document).ready(function ($) {
                     $form.append($button);
                 }
             });
+        },
+
+        injectMobileShortcut() {
+            if (!$('body').length || $('.geweb-ai-mobile-shortcut').length) {
+                return;
+            }
+
+            const $shortcut = $(
+                '<button type="button" class="geweb-ai-mobile-shortcut">' +
+                    '<span class="geweb-ai-mobile-shortcut-label"></span>' +
+                '</button>'
+            );
+
+            $shortcut.attr('aria-label', t('openAiSearch', 'Open AI Search'));
+            $shortcut.find('.geweb-ai-mobile-shortcut-label').text(t('searchWithAi', 'AI search'));
+            $shortcut.on('click', () => {
+                const query = this.resolveQueryText('');
+                globalThis.location.href = this.buildFrontendAiPageUrl(query);
+            });
+
+            $('body').append($shortcut);
+        },
+
+        isMobileMenuInjectionActive() {
+            return !!globalThis.matchMedia && globalThis.matchMedia('(max-width: 782px)').matches;
+        },
+
+        getStandardMenuContainers() {
+            const selectors = [
+                'nav .wp-block-navigation__container',
+                'nav ul.menu',
+                'nav ul[id^="menu-"]',
+                '.main-navigation ul.menu',
+                '.main-navigation ul[id^="menu-"]',
+                '.wp-block-navigation ul.wp-block-navigation__container',
+            ];
+
+            const seen = new Set();
+            const containers = [];
+
+            selectors.forEach((selector) => {
+                document.querySelectorAll(selector).forEach((element) => {
+                    if (!(element instanceof HTMLUListElement)) {
+                        return;
+                    }
+
+                    if (element.closest('#wpadminbar')) {
+                        return;
+                    }
+
+                    if (element.closest('li')) {
+                        return;
+                    }
+
+                    const key = element;
+                    if (seen.has(key)) {
+                        return;
+                    }
+
+                    seen.add(key);
+                    containers.push(element);
+                });
+            });
+
+            return containers;
+        },
+
+        buildMobileMenuEntry(container) {
+            const listItem = document.createElement('li');
+            listItem.className = 'menu-item geweb-ai-mobile-menu-item';
+
+            if (container.classList.contains('wp-block-navigation__container')) {
+                listItem.classList.add('wp-block-navigation-item');
+            }
+
+            const link = document.createElement('a');
+            link.className = 'geweb-ai-mobile-menu-link';
+            if (container.classList.contains('wp-block-navigation__container')) {
+                link.classList.add('wp-block-navigation-item__content');
+            }
+
+            link.href = this.buildFrontendAiPageUrl(this.resolveQueryText(''));
+            link.textContent = t('searchWithAi', 'AI search');
+            link.setAttribute('aria-label', t('openAiSearch', 'Open AI Search'));
+
+            listItem.appendChild(link);
+            return listItem;
+        },
+
+        injectMobileMenuEntries() {
+            if (!this.isMobileMenuInjectionActive()) {
+                return;
+            }
+
+            this.getStandardMenuContainers().forEach((container) => {
+                if (container.querySelector('.geweb-ai-mobile-menu-item, .geweb-ai-mobile-menu-link')) {
+                    return;
+                }
+
+                const firstChild = Array.from(container.children).find((child) => child instanceof HTMLLIElement);
+                const entry = this.buildMobileMenuEntry(container);
+
+                if (firstChild) {
+                    container.insertBefore(entry, firstChild);
+                    return;
+                }
+
+                container.appendChild(entry);
+            });
+        },
+
+        bindMobileMenuInjection() {
+            if (document.body?.dataset?.gewebAiMobileMenuBound === '1') {
+                return;
+            }
+
+            if (document.body) {
+                document.body.dataset.gewebAiMobileMenuBound = '1';
+            }
+
+            const inject = () => this.injectMobileMenuEntries();
+
+            if (typeof globalThis.matchMedia === 'function') {
+                const mediaQuery = globalThis.matchMedia('(max-width: 782px)');
+                if (typeof mediaQuery.addEventListener === 'function') {
+                    mediaQuery.addEventListener('change', inject);
+                } else if (typeof mediaQuery.addListener === 'function') {
+                    mediaQuery.addListener(inject);
+                }
+            }
+
+            if (typeof globalThis.MutationObserver === 'function') {
+                const observer = new globalThis.MutationObserver(() => inject());
+                observer.observe(document.body, { childList: true, subtree: true });
+            }
         },
 
         matchTriggerButtonSize($button, $referenceButton) {

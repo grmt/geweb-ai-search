@@ -1097,13 +1097,15 @@
         line-height: 1.45;
     }
     .geweb-aisearch-modal-window--page {
-        --geweb-ai-mobile-pane-footer-space: calc(82px + env(safe-area-inset-bottom, 0px));
-        padding-bottom: 82px;
-        overflow-y: auto;
+        --geweb-ai-mobile-pane-footer-space: 0px;
+        padding-bottom: 0;
+        overflow: hidden;
     }
     .geweb-aisearch-modal-window--page .geweb-ai-workspace {
-        display: block;
-        overflow: visible;
+        display: flex;
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: hidden;
         position: relative;
         touch-action: pan-y;
     }
@@ -1111,10 +1113,12 @@
     .geweb-aisearch-modal-window--page .geweb-ai-main-panel,
     .geweb-aisearch-modal-window--page .geweb-ai-sources-panel {
         display: none;
-        height: auto;
+        flex: 1 1 auto;
+        height: 100%;
+        max-height: 100%;
         min-height: 0;
         box-sizing: border-box;
-        padding-bottom: var(--geweb-ai-mobile-pane-footer-space);
+        padding-bottom: 0;
     }
     .geweb-aisearch-modal-window--page .geweb-ai-workspace:not([data-mobile-pane]) .geweb-ai-main-panel {
         display: flex;
@@ -1124,11 +1128,19 @@
     .geweb-aisearch-modal-window--page .geweb-ai-workspace[data-mobile-pane="right"] .geweb-ai-sources-panel {
         display: flex;
     }
+    .geweb-aisearch-modal-window--page .geweb-ai-sidebar,
+    .geweb-aisearch-modal-window--page .geweb-ai-sources-panel {
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+    }
     .geweb-aisearch-modal-window--page .answer-box {
         overflow-y: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
     }
     .geweb-aisearch-modal-window--page .geweb-ai-main-panel {
-        overflow: visible;
+        overflow: hidden;
         scroll-padding-bottom: 0;
     }
     .geweb-aisearch-modal-window--page .question-box {
@@ -1186,15 +1198,17 @@
         animation: geweb-ai-mobile-pane-slide-out-backward 0.32s cubic-bezier(0.22, 1, 0.36, 1);
     }
     .geweb-ai-mobile-pane-footer {
-        position: fixed;
-        left: 12px;
-        right: 12px;
-        bottom: 6px;
+        position: relative;
+        flex: 0 0 auto;
+        left: auto;
+        right: auto;
+        bottom: auto;
         z-index: 20;
         display: none;
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 0;
         padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
+        margin-top: 6px;
         border-top: 1px solid rgba(148, 163, 184, 0.24);
         background: rgba(255, 255, 255, 0.96);
         -webkit-backdrop-filter: blur(12px);

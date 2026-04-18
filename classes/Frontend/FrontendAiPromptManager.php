@@ -88,6 +88,10 @@ class FrontendAiPromptManager {
             return false;
         }
 
+        if (in_array($normalizedModel, ['gemini-flash-latest', 'gemini-pro-latest'], true)) {
+            return true;
+        }
+
         foreach ([
             'tts',
             'speech',

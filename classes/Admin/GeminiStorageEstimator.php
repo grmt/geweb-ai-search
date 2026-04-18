@@ -30,6 +30,8 @@ class GeminiStorageEstimator {
         $provider = ProviderFactory::make();
         $remoteSizeByGeminiName = [];
         $remoteDocumentCount = 0;
+        $remoteDocumentsWithSize = 0;
+        $remoteDocumentsWithoutSize = 0;
 
         if ($provider instanceof Gemini) {
             foreach ($provider->getStoreDocuments($provider->getStoreData()) as $document) {
@@ -46,7 +48,11 @@ class GeminiStorageEstimator {
                 $remoteDocumentCount++;
                 if ($sizeBytes > 0) {
                     $remoteSizeByGeminiName[$name] = $sizeBytes;
+                    $remoteDocumentsWithSize++;
+                    continue;
                 }
+
+                $remoteDocumentsWithoutSize++;
             }
         }
 
@@ -98,6 +104,8 @@ class GeminiStorageEstimator {
             'referenced_count' => $referencedCount,
             'referenced_bytes' => $referencedBytes,
             'remote_document_count' => $remoteDocumentCount,
+            'remote_documents_with_size' => $remoteDocumentsWithSize,
+            'remote_documents_without_size' => $remoteDocumentsWithoutSize,
             'remote_referenced_bytes' => $remoteReferencedBytes,
             'unknown_referenced_count' => $unknownReferencedCount,
             'raw_known_bytes' => $rawKnownBytes,

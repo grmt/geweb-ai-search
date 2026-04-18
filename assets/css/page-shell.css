@@ -11,9 +11,14 @@ body.geweb-ai-page-open {
 }
 html:has(body.geweb-ai-page),
 body.geweb-ai-page {
+    --geweb-ai-page-top-offset: 0px;
     width: 100%;
     max-width: 100%;
     overflow-x: hidden;
+}
+html:has(body.geweb-ai-page),
+body.geweb-ai-page.admin-bar {
+    margin-top: 0 !important;
 }
 .geweb-ai-page-root {
     min-height: 0;
@@ -21,7 +26,7 @@ body.geweb-ai-page {
     max-width: 100%;
     margin-left: 0;
     margin-right: 0;
-    padding: 0;
+    padding: var(--geweb-ai-page-top-offset, 0px) 0 0;
     box-sizing: border-box;
 }
 body.geweb-ai-page footer,
@@ -180,6 +185,42 @@ body.geweb-ai-page.geweb-ai-page-hide-adminbar #wpadminbar {
     padding: 0;
     text-transform: none;
 }
+.geweb-ai-mobile-shortcut {
+    position: fixed;
+    right: max(16px, env(safe-area-inset-right));
+    bottom: calc(16px + env(safe-area-inset-bottom));
+    z-index: 9998;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    min-height: 48px;
+    padding: 0 18px;
+    color: #fff !important;
+    background: #000 !important;
+    border: 1px solid rgba(0, 0, 0, 0.18) !important;
+    border-radius: 999px !important;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+    box-sizing: border-box;
+    cursor: pointer;
+    font: inherit;
+    font-size: 14px !important;
+    line-height: 1.1 !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.01em;
+    text-decoration: none;
+}
+.geweb-ai-mobile-shortcut:hover {
+    transform: translateY(-1px);
+}
+.geweb-ai-mobile-shortcut:focus-visible {
+    outline: 2px solid #2271b1;
+    outline-offset: 2px;
+}
+.geweb-ai-mobile-shortcut-label {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
 .geweb-aisearch-modal-window {
     max-width: 1200px;
     width: 100%;
@@ -309,6 +350,22 @@ body.geweb-ai-page-resizing {
         height: 6px;
     }
 }
+body.geweb-ai-page.geweb-ai-page-pseudo-fullscreen #wpadminbar,
+body.geweb-ai-page.geweb-ai-page-pseudo-fullscreen header,
+body.geweb-ai-page.geweb-ai-page-pseudo-fullscreen footer,
+body.geweb-ai-page.geweb-ai-page-pseudo-fullscreen .site-header,
+body.geweb-ai-page.geweb-ai-page-pseudo-fullscreen .site-footer {
+    display: none !important;
+}
+body.geweb-ai-page.geweb-ai-page-pseudo-fullscreen .geweb-ai-page-root,
+body.geweb-ai-page.geweb-ai-page-pseudo-fullscreen .geweb-aisearch-modal-window--page {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    min-width: 100vw !important;
+    min-height: 100vh !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+}
 .geweb-aisearch-modal-window .basic-button[disabled],
 .geweb-aisearch-modal-window .btn[disabled] {
     pointer-events: none;
@@ -395,4 +452,10 @@ body.geweb-ai-page-resizing {
     height: 24px;
     background: url(../img/ask-ai-icon-black.svg) center no-repeat;
     background-size: contain;
+}
+
+@media (max-width: 782px) {
+    .geweb-ai-mobile-shortcut {
+        display: inline-flex;
+    }
 }
