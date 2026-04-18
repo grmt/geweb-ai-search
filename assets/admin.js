@@ -1,3 +1,5 @@
+(function($) {
+
 function getAdminAjaxUrl() {
 		return globalThis.gewebAisearchAdmin?.ajaxUrl || globalThis.ajaxurl || '';
 }
@@ -322,6 +324,469 @@ function normalizePromptText(text) {
 				.join('\n');
 }
 
+function compareSortableValues(leftValue, rightValue, sortType, direction) {
+		const normalizedDirection = direction === 'desc' ? -1 : 1;
+		const left = String(leftValue || '').trim();
+		const right = String(rightValue || '').trim();
+
+		if (!left && !right) {
+				return 0;
+		}
+
+		if (!left) {
+				return 1;
+		}
+
+		if (!right) {
+				return -1;
+		}
+
+		if (sortType === 'date' || sortType === 'number') {
+				const leftNumber = Number(left);
+				const rightNumber = Number(right);
+				if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber) && leftNumber !== rightNumber) {
+						return (leftNumber - rightNumber) * normalizedDirection;
+				}
+		}
+
+		return left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' }) * normalizedDirection;
+}
+
+function getModelDiagnosticsSortSpecs($table) {
+		try {
+				const rawValue = String($table.attr('data-local-sort-specs') || '[]');
+				const parsedValue = JSON.parse(rawValue);
+				return Array.isArray(parsedValue)
+						? parsedValue.filter(function(spec) {
+								return spec && typeof spec.column === 'string' && typeof spec.direction === 'string';
+						})
+						: [];
+		} catch (_) {
+				return [];
+		}
+}
+
+function setModelDiagnosticsSortSpecs($table, specs) {
+		$table.attr('data-local-sort-specs', JSON.stringify(Array.isArray(specs) ? specs : []));
+}
+
+function cycleModelDiagnosticsSortDirection(currentDirection) {
+		if (currentDirection === 'asc') {
+				return 'desc';
+		}
+
+		if (currentDirection === 'desc') {
+				return '';
+		}
+
+		return 'asc';
+}
+
+function getModelDiagnosticsStatusRank(status) {
+		const normalizedStatus = String(status || '').trim().toLowerCase();
+		if (normalizedStatus === 'failed') {
+				return 0;
+		}
+
+		if (normalizedStatus === 'ok') {
+				return 1;
+		}
+
+		return 2;
+}
+
+function compareModelDiagnosticsRows($leftRow, $rightRow, spec) {
+		const column = String(spec?.column || '').trim();
+		const direction = String(spec?.direction || '').trim();
+		const sortType = String(spec?.sortType || 'text').trim();
+		if (!column || !direction) {
+				return 0;
+		}
+
+		if (column === 'test') {
+				const leftStatusRank = getModelDiagnosticsStatusRank($leftRow.attr('data-sort-test-status'));
+				const rightStatusRank = getModelDiagnosticsStatusRank($rightRow.attr('data-sort-test-status'));
+				if (leftStatusRank !== rightStatusRank) {
+						return (leftStatusRank - rightStatusRank) * (direction === 'desc' ? -1 : 1);
+				}
+		}
+
+		const leftValue = String($leftRow.attr('data-sort-' + column) || '');
+		const rightValue = String($rightRow.attr('data-sort-' + column) || '');
+		return compareSortableValues(leftValue, rightValue, sortType, direction);
+}
+
+function updateModelDiagnosticsHeaderState($table, specs) {
+		const activeSpecs = Array.isArray(specs) ? specs : [];
+		$table.find('.geweb-sortable-column').each(function() {
+				const $button = $(this);
+				const column = String($button.attr('data-sort-column') || '');
+				const specIndex = activeSpecs.findIndex(function(spec) {
+						return String(spec.column || '') === column;
+				});
+				const isActive = specIndex >= 0;
+				const direction = isActive ? String(activeSpecs[specIndex].direction || '') : '';
+				const indicator = isActive ? (direction === 'desc' ? '↓' : '↑') : '';
+				$button.attr('aria-pressed', isActive ? 'true' : 'false');
+				$button.css({
+						fontWeight: isActive ? '600' : '',
+						opacity: isActive ? '0.92' : ''
+				});
+				$button.find('[aria-hidden="true"]').text(indicator);
+				$button.closest('th').attr('aria-sort', direction === 'desc' ? 'descending' : (direction === 'asc' ? 'ascending' : 'none'));
+		});
+}
+
+function sortModelDiagnosticsTable($table, column, sortType) {
+		const $tbody = $table.find('tbody').first();
+		if (!$tbody.length) {
+				return;
+		}
+
+		const currentSpecs = getModelDiagnosticsSortSpecs($table);
+		const nextSpecs = currentSpecs.slice();
+		const existingIndex = nextSpecs.findIndex(function(spec) {
+				return String(spec.column || '') === column;
+		});
+		const currentDirection = existingIndex >= 0 ? String(nextSpecs[existingIndex].direction || '') : '';
+		const nextDirection = cycleModelDiagnosticsSortDirection(currentDirection);
+
+		if (!nextDirection) {
+				if (existingIndex >= 0) {
+						nextSpecs.splice(existingIndex, 1);
+				}
+		} else if (existingIndex >= 0) {
+				nextSpecs[existingIndex].direction = nextDirection;
+				nextSpecs[existingIndex].sortType = sortType;
+		} else {
+				nextSpecs.push({
+						column: column,
+						direction: nextDirection,
+						sortType: sortType
+				});
+		}
+
+		const rows = $tbody.find('tr').get();
+		rows.forEach(function(row, index) {
+				const $row = $(row);
+				if (typeof $row.attr('data-original-index') === 'undefined') {
+						$row.attr('data-original-index', String(index));
+				}
+		});
+
+		rows.sort(function(leftRow, rightRow) {
+				const $leftRow = $(leftRow);
+				const $rightRow = $(rightRow);
+
+				for (let specIndex = 0; specIndex < nextSpecs.length; specIndex += 1) {
+						const result = compareModelDiagnosticsRows($leftRow, $rightRow, nextSpecs[specIndex]);
+						if (result !== 0) {
+								return result;
+						}
+				}
+
+				const leftOriginalIndex = Number($leftRow.attr('data-original-index') || '0');
+				const rightOriginalIndex = Number($rightRow.attr('data-original-index') || '0');
+				return leftOriginalIndex - rightOriginalIndex;
+		});
+
+		rows.forEach(function(row) {
+				$tbody.append(row);
+		});
+
+		setModelDiagnosticsSortSpecs($table, nextSpecs);
+		updateModelDiagnosticsHeaderState($table, nextSpecs);
+}
+
+function prepareModelDiagnosticsTableHeaders() {
+		jQuery('.geweb-model-diagnostics-table').each(function() {
+				const $table = jQuery(this);
+				$table.find('tbody tr').each(function(index) {
+						const $row = jQuery(this);
+						if (typeof $row.attr('data-original-index') === 'undefined') {
+								$row.attr('data-original-index', String(index));
+						}
+				});
+				updateModelDiagnosticsHeaderState($table, getModelDiagnosticsSortSpecs($table));
+		});
+}
+
+function getReferencedDocumentsCellSortValue($row, column) {
+		const normalizedColumn = String(column || '').trim();
+		if (!normalizedColumn) {
+				return '';
+		}
+
+		const $cell = $row.find('td.column-' + normalizedColumn).first();
+		if (!$cell.length) {
+				return '';
+		}
+
+		if (normalizedColumn === 'last_modified' || normalizedColumn === 'last_uploaded') {
+				const text = String($cell.text() || '').trim();
+				const matched = text.match(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
+				return matched ? matched[0] : text;
+		}
+
+		if (normalizedColumn === 'actions') {
+				const statusText = String($cell.find('.geweb-ai-index-cell > p').first().text() || '').trim();
+				return statusText || String($cell.text() || '').trim();
+		}
+
+		if (normalizedColumn === 'nice_name') {
+				const inputValue = String($cell.find('.geweb-edit-nice-name-input').val() || '').trim();
+				const triggerText = String($cell.find('.geweb-edit-nice-name-trigger').first().text() || '').trim();
+				return inputValue || triggerText || String($cell.text() || '').trim();
+		}
+
+		return String($cell.text() || '').trim();
+}
+
+function getReferencedDocumentsSortSpecs($table) {
+		try {
+				const rawValue = String($table.attr('data-local-sort-specs') || '[]');
+				const parsedValue = JSON.parse(rawValue);
+				return Array.isArray(parsedValue)
+						? parsedValue.filter(function(spec) {
+								return spec && typeof spec.column === 'string' && typeof spec.direction === 'string';
+						})
+						: [];
+		} catch (_) {
+				return [];
+		}
+}
+
+function setReferencedDocumentsSortSpecs($table, specs) {
+		$table.attr('data-local-sort-specs', JSON.stringify(Array.isArray(specs) ? specs : []));
+}
+
+function getReferencedDocumentsColumnSortType(column) {
+		return column === 'last_modified' || column === 'last_uploaded' ? 'date' : 'text';
+}
+
+function cycleReferencedDocumentsSortDirection(currentDirection) {
+		if (currentDirection === 'asc') {
+				return 'desc';
+		}
+
+		if (currentDirection === 'desc') {
+				return '';
+		}
+
+		return 'asc';
+}
+
+function updateReferencedDocumentsHeaderState($table, specs) {
+		const activeSpecs = Array.isArray(specs) ? specs : [];
+		$table.find('thead th, tfoot th').each(function() {
+				const $th = $(this);
+				const column = String($th.attr('id') || '').trim();
+				const specIndex = activeSpecs.findIndex(function(spec) {
+						return String(spec.column || '') === column;
+				});
+				const isActive = specIndex >= 0;
+				const direction = isActive ? String(activeSpecs[specIndex].direction || '') : '';
+				const $link = $th.find('a').first();
+
+				$th.removeClass('sorted asc desc sortable');
+				$th.addClass(isActive ? ('sorted ' + direction) : 'sortable');
+				$th.attr('aria-sort', direction === 'desc' ? 'descending' : (direction === 'asc' ? 'ascending' : 'none'));
+
+				if ($link.length) {
+						$link.attr('aria-sort', direction === 'desc' ? 'descending' : (direction === 'asc' ? 'ascending' : 'none'));
+						$link.css({
+								fontWeight: isActive ? '600' : '',
+								opacity: isActive ? '0.92' : ''
+						});
+						$link.find('.sorting-indicator').hide();
+				}
+		});
+}
+
+function sortReferencedDocumentsTable($table, column) {
+		const $tbody = $table.find('tbody').first();
+		if (!$tbody.length) {
+				return;
+		}
+
+		const currentSpecs = getReferencedDocumentsSortSpecs($table);
+		const nextSpecs = currentSpecs.slice();
+		const existingIndex = nextSpecs.findIndex(function(spec) {
+				return String(spec.column || '') === column;
+		});
+		const currentDirection = existingIndex >= 0 ? String(nextSpecs[existingIndex].direction || '') : '';
+		const nextDirection = cycleReferencedDocumentsSortDirection(currentDirection);
+		if (!nextDirection) {
+				if (existingIndex >= 0) {
+						nextSpecs.splice(existingIndex, 1);
+				}
+		} else if (existingIndex >= 0) {
+				nextSpecs[existingIndex].direction = nextDirection;
+		} else {
+				nextSpecs.push({
+						column: column,
+						direction: nextDirection
+				});
+		}
+
+		const rows = $tbody.find('tr').get();
+		rows.forEach(function(row, index) {
+				const $row = $(row);
+				if (typeof $row.attr('data-original-index') === 'undefined') {
+						$row.attr('data-original-index', String(index));
+				}
+		});
+
+		rows.sort(function(leftRow, rightRow) {
+				const $leftRow = $(leftRow);
+				const $rightRow = $(rightRow);
+
+				for (let specIndex = 0; specIndex < nextSpecs.length; specIndex += 1) {
+						const spec = nextSpecs[specIndex] || {};
+						const specColumn = String(spec.column || '').trim();
+						const specDirection = String(spec.direction || '').trim();
+						if (!specColumn || !specDirection) {
+								continue;
+						}
+
+						const leftValue = getReferencedDocumentsCellSortValue($leftRow, specColumn);
+						const rightValue = getReferencedDocumentsCellSortValue($rightRow, specColumn);
+						const result = compareSortableValues(
+								leftValue,
+								rightValue,
+								getReferencedDocumentsColumnSortType(specColumn),
+								specDirection
+						);
+						if (result !== 0) {
+								return result;
+						}
+				}
+
+				const leftOriginalIndex = Number($leftRow.attr('data-original-index') || '0');
+				const rightOriginalIndex = Number($rightRow.attr('data-original-index') || '0');
+				return leftOriginalIndex - rightOriginalIndex;
+		});
+
+		rows.forEach(function(row) {
+				$tbody.append(row);
+		});
+
+		setReferencedDocumentsSortSpecs($table, nextSpecs);
+		updateReferencedDocumentsHeaderState($table, nextSpecs);
+}
+
+function prepareReferencedDocumentsTableHeaders() {
+		jQuery('.geweb-referenced-documents-table-form table').each(function() {
+				const $table = jQuery(this);
+				const $form = $table.closest('.geweb-referenced-documents-table-form');
+				const $searchInput = $form.find('input[name="s"]').first();
+				$table.find('th a .sorting-indicator').hide();
+				$searchInput.attr('autocomplete', 'on');
+				if ($searchInput.length && !$searchInput.val()) {
+						try {
+								const savedSearch = String(globalThis.localStorage?.getItem('gewebReferencedDocumentsSearch') || '');
+								if (savedSearch) {
+										$searchInput.val(savedSearch);
+								}
+						} catch (_) {}
+				}
+				$table.find('tbody tr').each(function(index) {
+						const $row = jQuery(this);
+						if (typeof $row.attr('data-original-index') === 'undefined') {
+								$row.attr('data-original-index', String(index));
+						}
+				});
+				updateReferencedDocumentsHeaderState($table, getReferencedDocumentsSortSpecs($table));
+			applyReferencedDocumentsFilters($form);
+		});
+}
+
+function getReferencedDocumentsFilters($form) {
+		return {
+			status: String($form.find('#geweb_ai_referenced_doc_status').first().val() || '').trim(),
+			type: String($form.find('#geweb_ai_referenced_doc_type').first().val() || '').trim(),
+			referencedIn: String($form.find('#geweb_ai_referenced_doc_referenced_in').first().val() || '').trim(),
+			searchTerm: String($form.find('input[name="s"]').first().val() || '').trim().toLowerCase(),
+		};
+}
+
+function rowMatchesReferencedDocumentsFilters($row, filters) {
+		if (filters.status && String($row.attr('data-referenced-document-status') || '').trim() !== filters.status) {
+			return false;
+		}
+
+		if (filters.type && String($row.attr('data-referenced-document-type') || '').trim() !== filters.type) {
+			return false;
+		}
+
+		if (filters.referencedIn && String($row.attr('data-referenced-document-referenced-in') || '').trim() !== filters.referencedIn) {
+			return false;
+		}
+
+		if (filters.searchTerm) {
+			const haystack = String($row.attr('data-referenced-document-search') || $row.text() || '').toLowerCase();
+			if (!haystack.includes(filters.searchTerm)) {
+				return false;
+			}
+		}
+
+		return true;
+}
+
+function applyReferencedDocumentsFilters($form) {
+		if (!$form || !$form.length) {
+			return;
+		}
+
+		const startTime = performance.now();
+		const filters = getReferencedDocumentsFilters($form);
+		const $table = $form.find('table').first();
+		if (!$table.length) {
+			return;
+		}
+
+		const $rows = $table.find('tbody tr');
+		let visibleCount = 0;
+		const rowFilterStart = performance.now();
+		$rows.each(function() {
+			const $row = jQuery(this);
+			const showRow = rowMatchesReferencedDocumentsFilters($row, filters);
+			$row.toggle(showRow);
+			if (showRow) {
+				visibleCount += 1;
+			}
+		});
+		const rowFilterMs = Math.round(performance.now() - rowFilterStart);
+
+		let $message = $form.find('.geweb-referenced-documents-no-results');
+		if (!$message.length) {
+			$message = jQuery('<div class="geweb-referenced-documents-no-results description" style="margin-top:12px;">No documents match the current filter.</div>');
+			$table.after($message);
+		}
+		$message.toggle(visibleCount === 0);
+
+		const totalMs = Math.round(performance.now() - startTime);
+		if (totalMs > 500 || $rows.length > 1000) {
+			console.log('[geweb-ai-search] Referenced document filter: ' + $rows.length + ' rows in ' + totalMs + 'ms (filtering: ' + rowFilterMs + 'ms, visible: ' + visibleCount + ')');
+		}
+}
+
+function prepareConversationsTableSearch() {
+		jQuery('.geweb-conversations-table-form').each(function() {
+				const $form = jQuery(this);
+				const $searchInput = $form.find('input[name="s"]').first();
+				$searchInput.attr('autocomplete', 'on');
+				if ($searchInput.length && !$searchInput.val()) {
+						try {
+								const savedSearch = String(globalThis.localStorage?.getItem('gewebConversationsSearch') || '');
+								if (savedSearch) {
+										$searchInput.val(savedSearch);
+								}
+						} catch (_) {}
+				}
+		});
+}
+
 function dispatchPromptEvent(element, eventName) {
 		if (!element) return;
 
@@ -362,6 +827,16 @@ function replaceMarkdownCacheCellHtml($trigger, html, postId) {
 		if (!$cell.length) return;
 
 		$cell.html(html);
+}
+
+function replaceReferencedDocumentRow($row, rowHtml) {
+		if (!$row || !$row.length || !rowHtml) {
+			return jQuery();
+		}
+
+		const $replacement = jQuery(rowHtml);
+		$row.replaceWith($replacement);
+		return $replacement;
 }
 
 function pollPostIndexStatus($trigger, postId, attempt) {
@@ -444,6 +919,40 @@ function setMarkdownCacheModalMode($modal, mode) {
 		$modal.find('.geweb-ai-markdown-cache-modal-browser').toggle(normalizedMode === 'browser');
 }
 
+function ensureModelTestDetailsModal() {
+		let $modal = jQuery('#geweb-ai-model-test-details-modal');
+		if ($modal.length) {
+				return $modal;
+		}
+
+		$modal = jQuery(
+				'<div id="geweb-ai-model-test-details-modal" style="display:none;position:fixed;inset:0;z-index:100001;background:rgba(17,24,39,0.72);padding:40px 24px;box-sizing:border-box;">' +
+						'<div style="max-width:640px;height:min(520px,calc(100vh - 80px));margin:0 auto;background:#fff;border-radius:16px;box-shadow:0 24px 60px rgba(15,23,42,0.35);display:flex;flex-direction:column;overflow:hidden;">' +
+								'<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #e5e7eb;gap:16px;">' +
+										'<div style="min-width:0;">' +
+												'<strong class="geweb-ai-model-test-details-title">Latest test</strong>' +
+												'<div class="geweb-ai-model-test-details-subtitle" style="margin-top:4px;color:#6b7280;font-size:12px;"></div>' +
+										'</div>' +
+										'<button type="button" class="button-link geweb-ai-model-test-details-close" style="font-size:20px;line-height:1;text-decoration:none;">×</button>' +
+								'</div>' +
+								'<div style="padding:18px 20px;overflow:auto;display:flex;flex-direction:column;gap:16px;background:#f8fafc;">' +
+										'<div>' +
+												'<div style="font-size:12px;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:.04em;">Question</div>' +
+												'<pre class="geweb-ai-model-test-details-prompt" style="margin:8px 0 0;padding:12px 14px;white-space:pre-wrap;word-break:break-word;font:12px/1.5 Consolas, Monaco, monospace;background:#fff;border:1px solid #e5e7eb;border-radius:10px;"></pre>' +
+										'</div>' +
+										'<div>' +
+												'<div style="font-size:12px;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:.04em;">Answer</div>' +
+												'<pre class="geweb-ai-model-test-details-response" style="margin:8px 0 0;padding:12px 14px;white-space:pre-wrap;word-break:break-word;font:12px/1.5 Consolas, Monaco, monospace;background:#fff;border:1px solid #e5e7eb;border-radius:10px;"></pre>' +
+										'</div>' +
+								'</div>' +
+						'</div>' +
+				'</div>'
+		);
+
+		jQuery('body').append($modal);
+		return $modal;
+}
+
 function clearStatusAfterFade($status) {
 		$status.fadeOut(200, function() {
 				$status.text('').css('display', 'none');
@@ -473,9 +982,15 @@ function syncModelSelectTint($select) {
 jQuery(document).ready(function($) {
 		const $settingsForm = $('form[action*="admin-post.php"]').has('input[name="action"][value="geweb_save"]').first();
 		const $groupRevisionField = $('#geweb_ai_search_group_revision');
+		const $adminViewCacheState = $('#geweb-ai-admin-cache-state');
 		let initialFormState = $settingsForm.length ? $settingsForm.serialize() : '';
 		let suppressBeforeUnloadWarning = false;
 		let promptDiffRequestToken = 0;
+		const renderedAdminViewRevisions = {
+				prompts: $.trim(String($adminViewCacheState.attr('data-prompts-revision') || '')),
+				files: $.trim(String($adminViewCacheState.attr('data-files-revision') || '')),
+				chats: $.trim(String($adminViewCacheState.attr('data-chats-revision') || ''))
+		};
 
 		function getGroupRevision() {
 				return $.trim(String($groupRevisionField.val() || gewebAisearchAdmin.groupDataRevision || ''));
@@ -502,6 +1017,51 @@ jQuery(document).ready(function($) {
 				});
 		}
 
+		function getRenderedAdminViewRevision(tab) {
+				return $.trim(String(renderedAdminViewRevisions[tab] || ''));
+		}
+
+		function setRenderedAdminViewRevision(tab, revision) {
+				const normalized = $.trim(String(revision || ''));
+				if (!normalized || !Object.prototype.hasOwnProperty.call(renderedAdminViewRevisions, tab)) return;
+
+				renderedAdminViewRevisions[tab] = normalized;
+				if ($adminViewCacheState.length) {
+						$adminViewCacheState.attr('data-' + tab + '-revision', normalized);
+				}
+		}
+
+		function setAdminViewStale(tab, stale) {
+				$('.geweb-admin-view-stale-notice[data-cache-tab="' + String(tab || '') + '"]').toggle(!!stale);
+		}
+
+		function syncAdminViewCacheState(payload, refreshedTabs) {
+				const cacheState = payload?.cache_state;
+				if (!cacheState || typeof cacheState !== 'object') return;
+
+				const refreshed = Array.isArray(refreshedTabs) ? refreshedTabs : [];
+				['prompts', 'files', 'chats'].forEach(function(tab) {
+						const serverRevision = $.trim(String(cacheState[tab] || ''));
+						if (!serverRevision) {
+								return;
+						}
+
+						if (refreshed.includes(tab)) {
+								setRenderedAdminViewRevision(tab, serverRevision);
+								setAdminViewStale(tab, false);
+								return;
+						}
+
+						const renderedRevision = getRenderedAdminViewRevision(tab);
+						if (!renderedRevision) {
+								setRenderedAdminViewRevision(tab, serverRevision);
+								return;
+						}
+
+						setAdminViewStale(tab, renderedRevision !== serverRevision);
+				});
+		}
+
 		function getAjaxErrorMessage(xhr, fallbackMessage) {
 				syncGroupRevisionFromPayload(xhr?.responseJSON?.data);
 				return xhr?.responseJSON?.data?.message || fallbackMessage;
@@ -522,6 +1082,107 @@ jQuery(document).ready(function($) {
 				if (!$saveButton.length) return;
 				$saveButton.prop('disabled', !hasUnsavedChanges());
 		}
+
+		function ensureAdminLoadingOverlay() {
+				let $overlay = $('#geweb-ai-admin-loading-overlay');
+				if ($overlay.length) {
+						return $overlay;
+				}
+
+				$overlay = $(
+						'<div id="geweb-ai-admin-loading-overlay" aria-hidden="true" style="display:none;position:fixed;inset:0;z-index:100000;background:rgba(15,23,42,0.18);backdrop-filter:blur(1px);">' +
+								'<div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(360px,calc(100vw - 40px));padding:20px 20px 18px;border-radius:16px;background:#ffffff;box-shadow:0 18px 50px rgba(15,23,42,0.22);border:1px solid rgba(148,163,184,0.28);">' +
+										'<div style="display:flex;align-items:center;justify-content:center;margin-bottom:14px;color:#0f172a;font-weight:600;text-align:center;">' +
+												'<span class="geweb-ai-admin-loading-title">Loading…</span>' +
+										'</div>' +
+										'<div class="geweb-ai-admin-loading-subtitle" style="display:none;margin:-6px 0 12px;color:#64748b;font-size:12px;text-align:center;"></div>' +
+										'<div style="height:10px;border-radius:999px;background:rgba(226,232,240,0.95);overflow:hidden;">' +
+												'<div class="geweb-ai-admin-loading-bar" style="width:38%;height:100%;border-radius:999px;background:linear-gradient(90deg,#2563eb 0%,#60a5fa 100%);animation:geweb-ai-admin-loading-bar 1.35s ease-in-out infinite;"></div>' +
+										'</div>' +
+										'<div class="geweb-ai-admin-loading-percent" style="display:none;margin-top:10px;color:#475569;font-size:12px;text-align:center;"></div>' +
+								'</div>' +
+						'</div>'
+				);
+
+				if (!document.getElementById('geweb-ai-admin-loading-overlay-style')) {
+						$('<style id="geweb-ai-admin-loading-overlay-style">@keyframes geweb-ai-admin-loading-bar{0%{transform:translateX(-85%);width:30%;}50%{transform:translateX(70%);width:52%;}100%{transform:translateX(210%);width:30%;}}</style>').appendTo('head');
+				}
+
+				$('body').append($overlay);
+				return $overlay;
+		}
+
+		function showAdminLoadingOverlay(title, message) {
+				const $overlay = ensureAdminLoadingOverlay();
+				$overlay.find('.geweb-ai-admin-loading-title').text(title || 'Loading…');
+				$overlay.find('.geweb-ai-admin-loading-subtitle').hide().text('');
+				$overlay.find('.geweb-ai-admin-loading-percent').hide().text('');
+				$overlay.find('.geweb-ai-admin-loading-bar').css({
+						width: '38%',
+						animation: 'geweb-ai-admin-loading-bar 1.35s ease-in-out infinite'
+				});
+				$overlay.show().attr('aria-hidden', 'false');
+		}
+
+		function updateAdminLoadingOverlayProgress(title, percent, subtitle) {
+				const $overlay = ensureAdminLoadingOverlay();
+				const normalizedPercent = Number(percent);
+				$overlay.find('.geweb-ai-admin-loading-title').text(title || 'Loading…');
+				if (subtitle) {
+						$overlay.find('.geweb-ai-admin-loading-subtitle').text(String(subtitle)).show();
+				} else {
+						$overlay.find('.geweb-ai-admin-loading-subtitle').hide().text('');
+				}
+				if (Number.isFinite(normalizedPercent)) {
+						const clampedPercent = Math.max(0, Math.min(100, Math.round(normalizedPercent)));
+						$overlay.find('.geweb-ai-admin-loading-bar').css({
+								width: clampedPercent + '%',
+								animation: 'none'
+						});
+						$overlay.find('.geweb-ai-admin-loading-percent').text(clampedPercent + '%').show();
+				} else {
+						$overlay.find('.geweb-ai-admin-loading-bar').css({
+								width: '38%',
+								animation: 'geweb-ai-admin-loading-bar 1.35s ease-in-out infinite'
+						});
+						$overlay.find('.geweb-ai-admin-loading-percent').hide().text('');
+				}
+				$overlay.show().attr('aria-hidden', 'false');
+		}
+
+		function hideAdminLoadingOverlay() {
+				$('#geweb-ai-admin-loading-overlay').hide().attr('aria-hidden', 'true');
+		}
+
+		$(document).on('click', '#adminmenu a[href*="page=geweb-ai-search"]', function() {
+				const href = String($(this).attr('href') || '');
+				const titleMap = {
+						documents: 'Loading Documents…',
+						stores: 'Loading Gemini Stores…',
+						conversations: 'Loading Chats…',
+						prompts: 'Loading Prompts…',
+						general: 'Loading Settings…'
+				};
+				let title = 'Loading Settings…';
+
+				try {
+						const url = new URL(href, globalThis.location?.origin || globalThis.location?.href || undefined);
+						const tab = String(url.searchParams.get('geweb_tab') || 'general').trim();
+						title = titleMap[tab] || title;
+				} catch (_) {
+						if (href.includes('geweb_tab=documents')) {
+								title = titleMap.documents;
+						} else if (href.includes('geweb_tab=stores')) {
+								title = titleMap.stores;
+						} else if (href.includes('geweb_tab=conversations')) {
+								title = titleMap.conversations;
+						} else if (href.includes('geweb_tab=prompts')) {
+								title = titleMap.prompts;
+						}
+				}
+
+				showAdminLoadingOverlay(title);
+		});
 
 		function getPromptTargetElements(scope, model) {
 				if (scope === 'model' && model) {
@@ -708,6 +1369,17 @@ jQuery(document).ready(function($) {
 				syncModelSelectTint($select);
 		}
 
+		function refreshModelDiagnosticsPanel(html) {
+				const markup = String(html || '');
+				if (!markup) return;
+
+				const $existing = $('#geweb-model-diagnostics');
+				if ($existing.length) {
+						$existing.replaceWith(markup);
+						prepareModelDiagnosticsTableHeaders();
+				}
+		}
+
 		$('#geweb-ai-restore-default-prompt').on('click', function(event) {
 				event.preventDefault();
 				const defaultPrompt = $('#geweb_ai_search_default_prompt').val() || decodeBase64Value($(this).attr('data-default-prompt'));
@@ -824,11 +1496,13 @@ jQuery(document).ready(function($) {
 						}
 				}).done(function(response) {
 						updateModelOptionStatuses($select, response?.data?.model_statuses || {});
+						refreshModelDiagnosticsPanel(response?.data?.model_diagnostics_html || '');
 						if ($status.length) {
-								$status.text(String(response?.data?.result?.message || 'Model responded successfully.')).css('color', '#46b450');
+								$status.text('').hide();
 						}
 				}).fail(function(xhr) {
 						updateModelOptionStatuses($select, xhr?.responseJSON?.data?.model_statuses || {});
+						refreshModelDiagnosticsPanel(xhr?.responseJSON?.data?.model_diagnostics_html || '');
 						if ($status.length) {
 								$status.text(getAjaxErrorMessage(xhr, 'Model test failed.')).css('color', '#d63638');
 						}
@@ -838,12 +1512,8 @@ jQuery(document).ready(function($) {
 		});
 
 		$('.nav-tab-wrapper').on('click', '[data-geweb-tab]', function(e) {
-				const tab = $(this).attr('data-geweb-tab');
-				if (['documents', 'stores', 'conversations'].includes(String(tab || ''))) {
-						globalThis.location.href = String($(this).attr('href') || globalThis.location.href);
-						return;
-				}
 				e.preventDefault();
+				const tab = String($(this).attr('data-geweb-tab') || '');
 				$('.nav-tab-wrapper [data-geweb-tab]').removeClass('nav-tab-active');
 				$(this).addClass('nav-tab-active');
 				$('.geweb-settings-tab-panel').hide();
@@ -1166,8 +1836,99 @@ jQuery(document).ready(function($) {
 				suppressBeforeUnloadWarning = true;
 		});
 
-		$(document).on('submit', '.geweb-referenced-documents-table-form, .geweb-gemini-stores-table-form', function() {
+$(document).on('submit', '.geweb-gemini-stores-table-form', function() {
+			suppressBeforeUnloadWarning = true;
+			showAdminLoadingOverlay('Loading Gemini Stores…', 'Refreshing the selected Gemini store view.');
+		});
+
+		$(document).on('submit', '.geweb-referenced-documents-table-form', function(event) {
+			event.preventDefault();
+			applyReferencedDocumentsFilters(jQuery(this));
+		});
+
+		$(document).on('click', '.geweb-referenced-documents-table-form .tablenav-pages a, .geweb-referenced-documents-table-form .first-page, .geweb-referenced-documents-table-form .prev-page, .geweb-referenced-documents-table-form .next-page, .geweb-referenced-documents-table-form .last-page', function(event) {
+			event.preventDefault();
+		});
+
+		$(document).on('change', '.geweb-referenced-documents-table-form #geweb_ai_referenced_doc_status, .geweb-referenced-documents-table-form #geweb_ai_referenced_doc_type, .geweb-referenced-documents-table-form #geweb_ai_referenced_doc_referenced_in', function() {
+			applyReferencedDocumentsFilters(jQuery(this).closest('.geweb-referenced-documents-table-form'));
+		});
+
+		$(document).on('input', '.geweb-referenced-documents-table-form input[name="s"]', function() {
+			const input = this;
+			const $form = jQuery(input).closest('.geweb-referenced-documents-table-form');
+			if (!$form.length) {
+				return;
+			}
+
+			globalThis.clearTimeout(referencedDocumentsFilterTimer);
+			referencedDocumentsFilterTimer = globalThis.setTimeout(function() {
+				try {
+					globalThis.localStorage?.setItem('gewebReferencedDocumentsSearch', String(input.value || ''));
+				} catch (_) {}
+
+				applyReferencedDocumentsFilters($form);
+			}, 350);
+		});
+
+		$(document).on('keydown', '.geweb-referenced-documents-table-form input[name="s"]', function(event) {
+			if (event.key !== 'Enter') {
+				return;
+			}
+
+			event.preventDefault();
+			const $form = jQuery(this).closest('.geweb-referenced-documents-table-form');
+			if (!$form.length) {
+				return;
+			}
+
+			globalThis.clearTimeout(referencedDocumentsFilterTimer);
+			applyReferencedDocumentsFilters($form);
+		});
+
+		$(document).on('submit', '.geweb-conversations-table-form', function() {
 				suppressBeforeUnloadWarning = true;
+				showAdminLoadingOverlay('Loading Chats…');
+		});
+
+		$(document).on('input', '.geweb-conversations-table-form input[name="s"]', function() {
+				const input = this;
+				const form = input.form;
+				if (!form) {
+						return;
+				}
+
+				globalThis.clearTimeout(conversationsFilterTimer);
+				conversationsFilterTimer = globalThis.setTimeout(function() {
+						try {
+								globalThis.localStorage?.setItem('gewebConversationsSearch', String(input.value || ''));
+						} catch (_) {}
+
+						suppressBeforeUnloadWarning = true;
+						showAdminLoadingOverlay('Loading Chats…');
+						form.requestSubmit ? form.requestSubmit() : form.submit();
+				}, 350);
+		});
+
+		$(document).on('keydown', '.geweb-conversations-table-form input[name="s"]', function(event) {
+				if (event.key !== 'Enter') {
+						return;
+				}
+
+				const input = this;
+				const form = input.form;
+				if (!form) {
+						return;
+				}
+
+				event.preventDefault();
+				globalThis.clearTimeout(conversationsFilterTimer);
+				try {
+						globalThis.localStorage?.setItem('gewebConversationsSearch', String(input.value || ''));
+				} catch (_) {}
+				suppressBeforeUnloadWarning = true;
+				showAdminLoadingOverlay('Loading Chats…');
+				form.requestSubmit ? form.requestSubmit() : form.submit();
 		});
 
 		$('#geweb_ai_search_preserve_data_on_uninstall').on('change', function() {
@@ -1374,7 +2135,10 @@ jQuery(document).ready(function($) {
 				event.preventDefault();
 				const $link = $(this);
 				const postId = Number($link.data('post-id') || 0);
-				if (!postId) return;
+				const cacheKind = String($link.data('cache-kind') || 'post');
+				const fileHash = String($link.data('file-hash') || '').trim();
+				if (cacheKind === 'post' && !postId) return;
+				if (cacheKind === 'document' && !fileHash) return;
 
 				const $modal = ensureMarkdownCacheModal();
 				$modal.find('.geweb-ai-markdown-cache-modal-title').text('Markdown cache');
@@ -1392,9 +2156,10 @@ jQuery(document).ready(function($) {
 						type: 'POST',
 						dataType: 'json',
 						data: {
-								action: 'geweb_get_markdown_cache',
+								action: cacheKind === 'document' ? 'geweb_get_referenced_document_markdown_cache' : 'geweb_get_markdown_cache',
 								nonce: gewebAisearchAdmin.adminActionNonce,
-								post_id: postId
+								post_id: postId,
+								file_hash: fileHash
 						}
 				}).done(function(response) {
 						if (!response?.success) {
@@ -1469,6 +2234,39 @@ jQuery(document).ready(function($) {
 		});
 
 		$(document).on('click', '#geweb-ai-markdown-cache-modal', function(event) {
+				if (event.target === this) {
+						$(this).hide();
+				}
+		});
+
+		$(document).on('click', '.geweb-model-test-details-trigger', function(event) {
+				event.preventDefault();
+				const $button = $(this);
+				const $modal = ensureModelTestDetailsModal();
+				const model = String($button.data('model') || '').trim();
+				const status = String($button.data('status') || '').trim();
+				const timestamp = String($button.data('timestamp') || '').trim();
+				const prompt = String($button.data('prompt') || '').trim();
+				const response = String($button.data('response') || '').trim();
+				const subtitleParts = [];
+
+				if (model) subtitleParts.push(model);
+				if (status) subtitleParts.push(status.toUpperCase());
+				if (timestamp) subtitleParts.push(timestamp);
+
+				$modal.find('.geweb-ai-model-test-details-title').text(model ? 'Latest test: ' + model : 'Latest test');
+				$modal.find('.geweb-ai-model-test-details-subtitle').text(subtitleParts.join(' · '));
+				$modal.find('.geweb-ai-model-test-details-prompt').text(prompt ? '"' + prompt + '"' : 'No stored test question.');
+				$modal.find('.geweb-ai-model-test-details-response').text(response ? '"' + response + '"' : 'No stored test answer.');
+				$modal.show();
+		});
+
+		$(document).on('click', '.geweb-ai-model-test-details-close', function(event) {
+				event.preventDefault();
+				$('#geweb-ai-model-test-details-modal').hide();
+		});
+
+		$(document).on('click', '#geweb-ai-model-test-details-modal', function(event) {
 				if (event.target === this) {
 						$(this).hide();
 				}
@@ -1600,8 +2398,15 @@ jQuery(document).ready(function($) {
 
 		let isRefreshingReferencedDocuments = false;
 		let isRefreshingGeminiStores = false;
+		let isRefreshingGeminiStoreDocuments = false;
+		let isRefreshingConversations = false;
+		let adminPreloadProgressJobId = '';
+		let adminPreloadPollTimer = 0;
+		let referencedDocumentsFilterTimer = 0;
+		let conversationsFilterTimer = 0;
 
-		function refreshReferencedDocuments() {
+		function refreshReferencedDocuments(preloadJobId, options) {
+				const normalizedOptions = options || {};
 				const $container = $('#geweb-referenced-documents-container');
 				const $button = $('#geweb-refresh-referenced-documents');
 				const $status = $('#geweb-referenced-documents-status');
@@ -1616,39 +2421,52 @@ jQuery(document).ready(function($) {
 						$status.text('Refreshing referenced documents... showing cached data until the update completes.');
 				}
 
-				$.ajax({
-						url: getAdminAjaxUrl(),
-						type: 'POST',
-						dataType: 'json',
-						data: {
-								action: 'geweb_refresh_referenced_documents',
-								nonce: gewebAisearchAdmin.adminActionNonce
-						}
-				}).done(function(response) {
+		$.ajax({
+				url: getAdminAjaxUrl(),
+				type: 'POST',
+				dataType: 'json',
+				data: {
+						action: 'geweb_refresh_referenced_documents',
+						nonce: gewebAisearchAdmin.adminActionNonce,
+						preload_job: preloadJobId || '',
+						force_refresh: normalizedOptions.forceRefresh ? 1 : 0
+				}
+		}).done(function(response) {
 						syncGroupRevisionFromPayload(response?.data);
 						if (!response?.success || !response?.data?.html) {
 								$status.text('Could not refresh referenced documents.');
+								if (!normalizedOptions.keepOverlay) {
+										hideAdminLoadingOverlay();
+								}
 								isRefreshingReferencedDocuments = false;
 								$button.prop('disabled', false).text('Refresh List');
 								return;
 						}
 
 						$container.html(response.data.html).attr('data-needs-refresh', '0');
+						prepareReferencedDocumentsTableHeaders();
 						const suffix = typeof response.data.count === 'number'
 								? ' (' + response.data.count + ' documents)'
 								: '';
 						$status.text('Last refreshed: ' + (response.data.refreshed_at || 'just now') + suffix);
+						if (!normalizedOptions.keepOverlay) {
+								hideAdminLoadingOverlay();
+						}
 						isRefreshingReferencedDocuments = false;
 						$button.prop('disabled', false).text('Refresh List');
 				}).fail(function() {
 						$status.text('Could not refresh referenced documents.');
 						$container.html('<p>Could not load referenced documents.</p>');
+						if (!normalizedOptions.keepOverlay) {
+								hideAdminLoadingOverlay();
+						}
 						isRefreshingReferencedDocuments = false;
 						$button.prop('disabled', false).text('Refresh List');
 				});
 		}
 
-		function refreshSelectedGeminiStoreDocuments(storeName, storeLabel) {
+		function refreshSelectedGeminiStoreDocuments(storeName, storeLabel, preloadJobId, options) {
+				const normalizedOptions = options || {};
 				const $panel = $('#geweb-gemini-store-documents-panel');
 				const $container = $('#geweb-gemini-store-documents-container');
 				const $status = $('#geweb-gemini-store-documents-status');
@@ -1656,8 +2474,9 @@ jQuery(document).ready(function($) {
 				const $title = $('#geweb-gemini-store-documents-title');
 				const $button = $('#geweb-refresh-gemini-store-documents');
 				const $storesRefreshButton = $('#geweb-refresh-gemini-stores');
-				if (!$panel.length || !$container.length || !storeName) return;
+				if (!$panel.length || !$container.length || !storeName || isRefreshingGeminiStoreDocuments) return;
 
+				isRefreshingGeminiStoreDocuments = true;
 				$panel.attr('data-store-name', storeName);
 				$title.text(storeLabel || storeName);
 				$button.prop('disabled', true).text('Refreshing...');
@@ -1674,7 +2493,8 @@ jQuery(document).ready(function($) {
 								action: 'geweb_refresh_gemini_store_documents',
 								store_name: storeName,
 								store_label: storeLabel || storeName,
-								nonce: gewebAisearchAdmin.adminActionNonce
+								nonce: gewebAisearchAdmin.adminActionNonce,
+								preload_job: preloadJobId || ''
 						}
 				}).done(function(response) {
 						syncGroupRevisionFromPayload(response?.data);
@@ -1685,6 +2505,7 @@ jQuery(document).ready(function($) {
 								$container.html('<p>Could not load uploaded items.</p>');
 								$button.prop('disabled', false).text('Refresh List');
 								$storesRefreshButton.prop('disabled', false).text('Refresh List');
+								isRefreshingGeminiStoreDocuments = false;
 								return;
 						}
 
@@ -1695,6 +2516,7 @@ jQuery(document).ready(function($) {
 						$error.hide().text('');
 						$button.prop('disabled', false).text('Refresh List');
 						$storesRefreshButton.prop('disabled', false).text('Refresh List');
+						isRefreshingGeminiStoreDocuments = false;
 				}).fail(function(xhr) {
 						const message = xhr?.responseJSON?.data?.message || 'Could not refresh uploaded items.';
 						$status.text(message);
@@ -1702,6 +2524,61 @@ jQuery(document).ready(function($) {
 						$container.html('<p>Could not load uploaded items.</p>');
 						$button.prop('disabled', false).text('Refresh List');
 						$storesRefreshButton.prop('disabled', false).text('Refresh List');
+						isRefreshingGeminiStoreDocuments = false;
+				});
+		}
+
+		function refreshConversations(preloadJobId, options) {
+				const normalizedOptions = options || {};
+				const $container = $('#geweb-conversations-container');
+				const $button = $('#geweb-refresh-conversations');
+				const $status = $('#geweb-conversations-status');
+				if (!$container.length || !$button.length || isRefreshingConversations) return;
+
+				isRefreshingConversations = true;
+				$button.prop('disabled', true).text('Refreshing...');
+				$status.text('Loading chats...');
+				$container.html('<p>Loading chats...</p>');
+
+				$.ajax({
+						url: getAdminAjaxUrl(),
+						type: 'POST',
+						dataType: 'json',
+						data: {
+								action: 'geweb_refresh_conversations',
+								nonce: gewebAisearchAdmin.adminActionNonce,
+								preload_job: preloadJobId || ''
+						}
+				}).done(function(response) {
+						if (!response?.success || typeof response?.data?.html !== 'string') {
+								$status.text('Could not refresh chats.');
+								if (!normalizedOptions.keepOverlay) {
+										hideAdminLoadingOverlay();
+								}
+								isRefreshingConversations = false;
+								$button.prop('disabled', false).text('Refresh List');
+								return;
+						}
+
+						$container.html(response.data.html);
+						prepareConversationsTableSearch();
+						const suffix = typeof response.data.count === 'number'
+								? ' (' + response.data.count + ' ' + (response.data.count === 1 ? 'chat' : 'chats') + ')'
+								: '';
+						$status.text('Last refreshed: ' + (response.data.refreshed_at || 'just now') + suffix);
+						if (!normalizedOptions.keepOverlay) {
+								hideAdminLoadingOverlay();
+						}
+						isRefreshingConversations = false;
+						$button.prop('disabled', false).text('Refresh List');
+				}).fail(function() {
+						$status.text('Could not refresh chats.');
+						$container.html('<p>Could not load chats.</p>');
+						if (!normalizedOptions.keepOverlay) {
+								hideAdminLoadingOverlay();
+						}
+						isRefreshingConversations = false;
+						$button.prop('disabled', false).text('Refresh List');
 				});
 		}
 
@@ -1781,14 +2658,115 @@ jQuery(document).ready(function($) {
 				});
 		}
 
+		function stopAdminPreloadProgressPolling() {
+				if (adminPreloadPollTimer) {
+						globalThis.clearInterval(adminPreloadPollTimer);
+						adminPreloadPollTimer = 0;
+				}
+		}
+
+		function pollAdminPreloadProgress(jobId) {
+				if (!jobId) {
+						return;
+				}
+
+				stopAdminPreloadProgressPolling();
+				adminPreloadPollTimer = globalThis.setInterval(function() {
+						$.ajax({
+								url: getAdminAjaxUrl(),
+								type: 'POST',
+								dataType: 'json',
+								data: {
+										action: 'geweb_get_admin_preload_progress',
+										nonce: gewebAisearchAdmin.adminActionNonce,
+										job_id: jobId
+								}
+						}).done(function(response) {
+								if (!response?.success || !response?.data) {
+										return;
+								}
+
+								const progress = response.data;
+								const title = String(progress.current_label || (progress.finished ? 'Loading Settings…' : 'Loading…'));
+								const subtitle = typeof progress.total_steps === 'number'
+										? String((progress.completed_steps || 0) + (progress.failed_steps || 0)) + ' / ' + String(progress.total_steps) + ' steps'
+										: '';
+								updateAdminLoadingOverlayProgress(title, Number(progress.percent || 0), subtitle);
+								if (progress.finished) {
+										stopAdminPreloadProgressPolling();
+								}
+						});
+				}, 350);
+		}
+
+		function startAdminPanelPreload() {
+				const $state = $('#geweb-ai-admin-preload-state');
+				if (!$state.length || String($state.attr('data-needs-preload') || '0') !== '1') {
+						return;
+				}
+
+				showAdminLoadingOverlay('Loading Settings…');
+
+				$.ajax({
+						url: getAdminAjaxUrl(),
+						type: 'POST',
+						dataType: 'json',
+						data: {
+								action: 'geweb_start_admin_preload',
+								nonce: gewebAisearchAdmin.adminActionNonce
+						}
+				}).done(function(response) {
+						if (!response?.success || !response?.data?.job_id) {
+								hideAdminLoadingOverlay();
+								return;
+						}
+
+						adminPreloadProgressJobId = String(response.data.job_id || '');
+						pollAdminPreloadProgress(adminPreloadProgressJobId);
+
+						refreshReferencedDocuments(adminPreloadProgressJobId, { keepOverlay: true });
+						refreshGeminiStores(adminPreloadProgressJobId, { keepOverlay: true, preload: true });
+						refreshConversations(adminPreloadProgressJobId, { keepOverlay: true });
+
+						globalThis.setTimeout(function() {
+								$state.attr('data-needs-preload', '0');
+						}, 0);
+
+						const finishCheck = globalThis.setInterval(function() {
+								if (isRefreshingReferencedDocuments || isRefreshingGeminiStores || isRefreshingGeminiStoreDocuments || isRefreshingConversations) {
+										return;
+								}
+
+								globalThis.clearInterval(finishCheck);
+								globalThis.setTimeout(function() {
+										stopAdminPreloadProgressPolling();
+										updateAdminLoadingOverlayProgress('Loading Settings…', 100, 'Ready');
+										globalThis.setTimeout(function() {
+												hideAdminLoadingOverlay();
+										}, 250);
+								}, 200);
+						}, 200);
+				}).fail(function() {
+						hideAdminLoadingOverlay();
+				});
+		}
+
 		$('#geweb-refresh-referenced-documents').on('click', function() {
-				refreshReferencedDocuments();
+				showAdminLoadingOverlay('Loading Documents…');
+				refreshReferencedDocuments('', { forceRefresh: true });
+		});
+
+		$('#geweb-refresh-conversations').on('click', function() {
+				showAdminLoadingOverlay('Loading Chats…');
+				refreshConversations('', { keepOverlay: false });
 		});
 
 		$(document).on('click', '.geweb-referenced-document-upload-now', function() {
 				const $button = $(this);
 				const fileHash = String($button.data('file-hash') || '');
 				const $cell = $button.closest('.geweb-ai-index-cell');
+				const $row = $button.closest('tr');
+				const $form = $button.closest('.geweb-referenced-documents-table-form');
 				const $status = $('#geweb-referenced-documents-status');
 				if (!fileHash) return;
 
@@ -1810,8 +2788,15 @@ jQuery(document).ready(function($) {
 						})
 				}).done(function(response) {
 						syncGroupRevisionFromPayload(response?.data);
+						syncAdminViewCacheState(response?.data, ['files']);
 						if (!response?.success || !response?.data) {
 								const message = response?.data?.message || 'The document upload could not be completed.';
+								if (response?.data?.row_html && $row.length) {
+										replaceReferencedDocumentRow($row, response.data.row_html);
+										if ($form.length) {
+												applyReferencedDocumentsFilters($form);
+										}
+								}
 								showCellFeedback($cell, message, true);
 								$button.prop('disabled', false).text('Upload');
 								if ($status.length) {
@@ -1828,17 +2813,22 @@ jQuery(document).ready(function($) {
 								if (response.data.actions_html) {
 										$row.find('td.column-actions').html(response.data.actions_html);
 								}
+								if (response.data.markdown_cache_html) {
+										$row.find('td.column-markdown_cache').html(response.data.markdown_cache_html);
+								}
 						}
-
-						if ($status.length) {
-								$status.text(response.data.message || 'Document uploaded.');
-						}
-
-						if ($('#geweb-gemini-stores-container').length) {
-								refreshGeminiStores();
-						}
+						// Do not refresh the whole Gemini stores list here; local row update is enough.
 				}).fail(function(xhr) {
 						const message = getAjaxErrorMessage(xhr, 'The document upload could not be completed.');
+						const responseData = xhr?.responseJSON?.data;
+						syncGroupRevisionFromPayload(responseData);
+						syncAdminViewCacheState(responseData, ['files']);
+						if (responseData?.row_html && $row.length) {
+								replaceReferencedDocumentRow($row, responseData.row_html);
+								if ($form.length) {
+										applyReferencedDocumentsFilters($form);
+								}
+						}
 						showCellFeedback($cell, message, true);
 						$button.prop('disabled', false).text('Upload');
 						if ($status.length) {
@@ -1850,6 +2840,8 @@ jQuery(document).ready(function($) {
 		$(document).on('change', '.geweb-referenced-document-toggle-exclude', function() {
 				const $checkbox = $(this);
 				const $cell = $checkbox.closest('.geweb-ai-index-cell');
+				const $row = $checkbox.closest('tr');
+				const $form = $checkbox.closest('.geweb-referenced-documents-table-form');
 				const fileHash = String($checkbox.data('file-hash') || '');
 				const exclude = $checkbox.is(':checked') ? 1 : 0;
 				const $status = $('#geweb-referenced-documents-status');
@@ -1870,8 +2862,15 @@ jQuery(document).ready(function($) {
 						})
 				}).done(function(response) {
 						syncGroupRevisionFromPayload(response?.data);
+						syncAdminViewCacheState(response?.data, ['files']);
 						if (!response?.success || !response?.data) {
 								const message = response?.data?.message || 'Could not update exclusion.';
+								if (response?.data?.row_html && $row.length) {
+										replaceReferencedDocumentRow($row, response.data.row_html);
+										if ($form.length) {
+												applyReferencedDocumentsFilters($form);
+										}
+								}
 								showCellFeedback($cell, message, true);
 								$checkbox.prop('disabled', false).prop('checked', !exclude);
 								if ($status.length) {
@@ -1882,11 +2881,11 @@ jQuery(document).ready(function($) {
 
 						const $row = $checkbox.closest('tr');
 						if ($row.length) {
-								if (response.data.status_html) {
-										$row.find('td.column-status').html(response.data.status_html);
-								}
 								if (response.data.actions_html) {
 										$row.find('td.column-actions').html(response.data.actions_html);
+								}
+								if (response.data.markdown_cache_html) {
+										$row.find('td.column-markdown_cache').html(response.data.markdown_cache_html);
 								}
 						}
 
@@ -1899,8 +2898,158 @@ jQuery(document).ready(function($) {
 						}
 				}).fail(function(xhr) {
 						const message = getAjaxErrorMessage(xhr, 'Could not update exclusion.');
+						const responseData = xhr?.responseJSON?.data;
+						syncGroupRevisionFromPayload(responseData);
+						syncAdminViewCacheState(responseData, ['files']);
+						if (responseData?.row_html && $row.length) {
+								replaceReferencedDocumentRow($row, responseData.row_html);
+								if ($form.length) {
+										applyReferencedDocumentsFilters($form);
+								}
+						}
 						showCellFeedback($cell, message, true);
 						$checkbox.prop('disabled', false).prop('checked', !exclude);
+						if ($status.length) {
+								$status.text(message);
+						}
+				});
+		});
+
+		$(document).on('click', '.geweb-referenced-document-remove-now', function() {
+				const $button = $(this);
+				const $cell = $button.closest('.geweb-ai-index-cell');
+				const $row = $button.closest('tr');
+				const $status = $('#geweb-referenced-documents-status');
+				const fileHash = String($button.data('file-hash') || '');
+				const $exclude = $row.find('.geweb-referenced-document-toggle-exclude').first();
+				if (!fileHash) return;
+
+				$button.prop('disabled', true).text('Removing...');
+				if ($exclude.length) {
+						$exclude.prop('disabled', true);
+				}
+				showCellFeedback($cell, 'Removing from Gemini store...', false);
+				if ($status.length) {
+						$status.text('Removing document from Gemini store...');
+				}
+
+				$.ajax({
+						url: getAdminAjaxUrl(),
+						type: 'POST',
+						dataType: 'json',
+						data: buildGroupRevisionData({
+								action: 'geweb_toggle_referenced_document_exclude',
+								file_hash: fileHash,
+								exclude: 1,
+								nonce: gewebAisearchAdmin.adminActionNonce
+						})
+				}).done(function(response) {
+						syncGroupRevisionFromPayload(response?.data);
+						syncAdminViewCacheState(response?.data, ['files']);
+						if (!response?.success || !response?.data) {
+								const message = response?.data?.message || 'Could not remove this document from the Gemini store.';
+								showCellFeedback($cell, message, true);
+								$button.prop('disabled', false).text('Remove from store');
+								if ($exclude.length) {
+										$exclude.prop('disabled', false).prop('checked', false);
+								}
+								if ($status.length) {
+										$status.text(message);
+								}
+								return;
+						}
+
+						if ($row.length) {
+								if (response.data.status_html) {
+										$row.find('td.column-actions .geweb-ai-index-cell > p').first().html(response.data.status_html);
+								}
+								if (response.data.actions_html) {
+										$row.find('td.column-actions').html(response.data.actions_html);
+								}
+								if (response.data.markdown_cache_html) {
+										$row.find('td.column-markdown_cache').html(response.data.markdown_cache_html);
+								}
+						}
+
+						if ($status.length) {
+								$status.text('Removed from Gemini store.');
+						}
+
+						if ($('#geweb-gemini-stores-container').length) {
+								refreshGeminiStores();
+						}
+				}).fail(function(xhr) {
+						const message = getAjaxErrorMessage(xhr, 'Could not remove this document from the Gemini store.');
+						showCellFeedback($cell, message, true);
+						$button.prop('disabled', false).text('Remove from store');
+						if ($exclude.length) {
+								$exclude.prop('disabled', false).prop('checked', false);
+						}
+						if ($status.length) {
+								$status.text(message);
+						}
+				});
+		});
+
+		$(document).on('change', '.geweb-ai-referenced-document-image-mode', function() {
+				const $select = $(this);
+				const $cell = $select.closest('.geweb-ai-index-cell');
+				const fileHash = String($select.data('file-hash') || '');
+				const mode = String($select.val() || 'none');
+				const $status = $('#geweb-referenced-documents-status');
+				const messages = {
+						none: 'Disabling image processing...',
+						ocr: 'Enabling OCR for this image...',
+						describe: 'Enabling image description for this image...'
+				};
+				if (!fileHash) return;
+
+				$select.prop('disabled', true);
+				showCellFeedback($cell, messages[mode] || 'Updating image processing...', false);
+				if ($status.length) {
+						$status.text(messages[mode] || 'Updating image processing...');
+				}
+
+				$.ajax({
+						url: getAdminAjaxUrl(),
+						type: 'POST',
+						dataType: 'json',
+						data: buildGroupRevisionData({
+								action: 'geweb_set_referenced_document_image_processing_mode',
+								file_hash: fileHash,
+								mode: mode,
+								nonce: gewebAisearchAdmin.adminActionNonce
+						})
+				}).done(function(response) {
+						syncGroupRevisionFromPayload(response?.data);
+						syncAdminViewCacheState(response?.data, ['files']);
+						if (!response?.success || !response?.data) {
+								const message = response?.data?.message || 'Could not update image processing mode.';
+								showCellFeedback($cell, message, true);
+								$select.prop('disabled', false);
+								if ($status.length) {
+										$status.text(message);
+								}
+								return;
+						}
+
+						const $row = $select.closest('tr');
+						if ($row.length) {
+								if (response.data.actions_html) {
+										$row.find('td.column-actions').html(response.data.actions_html);
+								}
+								if (typeof response.data.markdown_cache_html === 'string') {
+										$row.find('td.column-markdown_cache').html(response.data.markdown_cache_html);
+								}
+						}
+
+						if ($status.length) {
+								$status.text(response.data.message || 'Image processing updated.');
+						}
+				}).fail(function(xhr) {
+						const message = getAjaxErrorMessage(xhr, 'Could not update image processing mode.');
+						showCellFeedback($cell, message, true);
+						$select.prop('disabled', false);
 						if ($status.length) {
 								$status.text(message);
 						}
@@ -2007,14 +3156,10 @@ jQuery(document).ready(function($) {
 				});
 		});
 
-		if ($('#geweb-referenced-documents-container').attr('data-needs-refresh') === '1') {
-				$('#geweb-refresh-referenced-documents').prop('disabled', true).text('Refreshing...');
-				refreshReferencedDocuments();
-		}
-
 		applyPendingReferencedDocumentTargets();
 
-		function refreshGeminiStores() {
+		function refreshGeminiStores(preloadJobId, options) {
+				const normalizedOptions = options || {};
 				const $container = $('#geweb-gemini-stores-container');
 				const $button = $('#geweb-refresh-gemini-stores');
 				const $status = $('#geweb-gemini-stores-status');
@@ -2027,18 +3172,23 @@ jQuery(document).ready(function($) {
 				$error.hide().text('');
 				$container.html('<p>Loading Gemini stores...</p>');
 
-				$.ajax({
-						url: getAdminAjaxUrl(),
-						type: 'POST',
-						dataType: 'json',
-						data: {
-								action: 'geweb_refresh_gemini_stores',
-								nonce: gewebAisearchAdmin.adminActionNonce
-						}
-				}).done(function(response) {
+		$.ajax({
+				url: getAdminAjaxUrl(),
+				type: 'POST',
+				dataType: 'json',
+				data: {
+						action: 'geweb_refresh_gemini_stores',
+						nonce: gewebAisearchAdmin.adminActionNonce,
+						preload_job: preloadJobId || '',
+						force_refresh: normalizedOptions.forceRefresh ? 1 : 0
+				}
+		}).done(function(response) {
 						syncGroupRevisionFromPayload(response?.data);
 						if (!response?.success || !response?.data?.html) {
 								$status.text('Could not refresh Gemini stores.');
+								if (!normalizedOptions.keepOverlay) {
+										hideAdminLoadingOverlay();
+								}
 								isRefreshingGeminiStores = false;
 								$button.prop('disabled', false).text('Refresh List');
 								return;
@@ -2066,10 +3216,15 @@ jQuery(document).ready(function($) {
 						if ($selectedButton.length) {
 								refreshSelectedGeminiStoreDocuments(
 										String($selectedButton.data('store-name') || ''),
-										String($selectedButton.data('store-label') || '')
+										String($selectedButton.data('store-label') || ''),
+										preloadJobId || '',
+										normalizedOptions
 								);
 						} else {
 								$('#geweb-refresh-gemini-store-documents').prop('disabled', false).text('Refresh List');
+						}
+						if (!normalizedOptions.keepOverlay) {
+								hideAdminLoadingOverlay();
 						}
 						isRefreshingGeminiStores = false;
 						$button.prop('disabled', false).text('Refresh List');
@@ -2078,13 +3233,17 @@ jQuery(document).ready(function($) {
 						$error.hide().text('');
 						$container.html('<p>Could not load Gemini stores.</p>');
 						$('#geweb-refresh-gemini-store-documents').prop('disabled', false).text('Refresh List');
+						if (!normalizedOptions.keepOverlay) {
+								hideAdminLoadingOverlay();
+						}
 						isRefreshingGeminiStores = false;
 						$button.prop('disabled', false).text('Refresh List');
 				});
 		}
 
 		$('#geweb-refresh-gemini-stores').on('click', function() {
-				refreshGeminiStores();
+				showAdminLoadingOverlay('Loading Gemini Stores…');
+				refreshGeminiStores('', { forceRefresh: true });
 		});
 
 		$(document).on('click', '.geweb-select-gemini-store', function(e) {
@@ -2190,14 +3349,45 @@ jQuery(document).ready(function($) {
 						$status.text(message);
 						$error.text(message).show();
 						$button.prop('disabled', false).text('Delete');
-						$row.css('opacity', '1');
-				});
+				$row.css('opacity', '1');
+			});
 		});
 
-		if ($('#geweb-gemini-stores-container').attr('data-needs-refresh') === '1') {
-				$('#geweb-refresh-gemini-stores').prop('disabled', true).text('Refreshing...');
-				refreshGeminiStores();
-		}
+		$(document).on('click', '.geweb-model-diagnostics-table .geweb-sortable-column', function(event) {
+				event.preventDefault();
+				const $button = $(this);
+				const $table = $button.closest('.geweb-model-diagnostics-table');
+				if (!$table.length) {
+						return;
+				}
+
+				const column = String($button.attr('data-sort-column') || '');
+				const sortType = String($button.attr('data-sort-type') || 'text');
+				if (!column) {
+						return;
+				}
+
+				sortModelDiagnosticsTable($table, column, sortType);
+		});
+
+		$(document).on('click', '.geweb-referenced-documents-table-form th.sortable a, .geweb-referenced-documents-table-form th.sorted a', function(event) {
+				event.preventDefault();
+				const $link = $(this);
+				const $th = $link.closest('th');
+				const $table = $link.closest('table');
+				const column = String($th.attr('id') || '').trim();
+				if (!column || !$table.length) {
+						return;
+				}
+
+				sortReferencedDocumentsTable($table, column);
+		});
 
 		applyGeminiStoreDocumentsBrowserState();
+		prepareModelDiagnosticsTableHeaders();
+		prepareReferencedDocumentsTableHeaders();
+		prepareConversationsTableSearch();
+		startAdminPanelPreload();
 	});
+
+})(jQuery);

@@ -141,6 +141,7 @@ class DocumentStore {
     private function uploadAndTrackDocument(string $filePath, int $postId, string $fileHash): ?int {
         global $wpdb;
         $documentId = null;
+        $documentMarkdownCacheStore = new ReferencedDocumentMarkdownCacheStore();
 
         $mimeType = $this->resolveMimeType($filePath);
         if ($mimeType === '') {
@@ -150,7 +151,7 @@ class DocumentStore {
 
             try {
                 $gemini = ProviderFactory::make();
-                $geminiDocName = $this->uploadDocumentToGemini($gemini, $filePath, $displayName, $mimeType);
+                $geminiDocName = $this->uploadDocumentToGemini($gemini, $filePath, $displayName, $mimeType, $fileHash);
                 $insertedId = $this->insertTrackedDocumentRow($wpdb, $fileHash, $geminiDocName, basename($filePath));
 
                 if ($insertedId !== null) {
@@ -159,6 +160,7 @@ class DocumentStore {
                     $documentId = $this->resolveDocumentInsertRace($wpdb, $gemini, $fileHash, $geminiDocName, $displayName);
                 }
             } catch (\Exception $e) {
+                $documentMarkdownCacheStore->deleteMarkdown($fileHash);
                 error_log('geweb-ai-search: referenced document upload failed for ' . basename($filePath) . ': ' . $e->getMessage());
             }
         }
@@ -170,12 +172,134 @@ class DocumentStore {
      * @param AIProviderInterface $gemini
      * @return string
      */
-    private function uploadDocumentToGemini(AIProviderInterface $gemini, string $filePath, string $displayName, string $mimeType): string {
+    private function uploadDocumentToGemini(AIProviderInterface $gemini, string $filePath, string $displayName, string $mimeType, string $fileHash): string {
+        $documentMarkdownCacheStore = new ReferencedDocumentMarkdownCacheStore();
+        $extension = strtolower((string) pathinfo($filePath, PATHINFO_EXTENSION));
+        $imageProcessingMode = (new ReferencedDocumentManager($this))->getReferencedDocumentImageProcessingMode($fileHash);
+
+        if (strpos($mimeType, 'image/') === 0 && $imageProcessingMode !== ImageOcrService::MODE_NONE) {
+            $markdownPath = '';
+            try {
+                $markdown = $this->buildReferencedImageMarkdown($filePath, $displayName, $mimeType, $imageProcessingMode);
+                $documentMarkdownCacheStore->saveMarkdown($fileHash, basename($filePath), $markdown);
+                $markdownPath = $this->createTemporaryMarkdownFile($markdown);
+                $markdownDisplayName = preg_replace('/\.[^.]+$/', '.md', $displayName);
+                $markdownDisplayName = is_string($markdownDisplayName) && $markdownDisplayName !== '' ? $markdownDisplayName : ($displayName . '.md');
+
+                error_log('geweb-ai-search: [IMAGE] processing as markdown (' . $imageProcessingMode . ') before Gemini upload: ' . $displayName);
+                $geminiDocName = $gemini->uploadLocalFile($markdownPath, $markdownDisplayName, 'text/markdown');
+                error_log('geweb-ai-search: [IMAGE] markdown upload succeeded as ' . $geminiDocName);
+
+                return $geminiDocName;
+            } catch (\Exception $exception) {
+                $documentMarkdownCacheStore->deleteMarkdown($fileHash);
+                error_log('geweb-ai-search: [IMAGE] processing and upload failed, falling back to direct upload: ' . $exception->getMessage());
+            } finally {
+                if ($markdownPath !== '' && file_exists($markdownPath)) {
+                    @unlink($markdownPath);
+                }
+            }
+        }
+
+        if ($extension === 'xlsx') {
+            try {
+                // Try direct XLSX upload first
+                error_log('geweb-ai-search: [SPREADSHEET] direct upload starting for ' . $displayName);
+                return $gemini->uploadLocalFile($filePath, $displayName, $mimeType);
+            } catch (\Exception $directUploadException) {
+                // If direct upload fails, try markdown conversion as fallback
+                $markdownPath = '';
+                try {
+                    error_log('geweb-ai-search: [SPREADSHEET] direct upload FAILED: ' . $directUploadException->getMessage() . ' - now attempting markdown conversion');
+                    $extractor = new XlsxMarkdownExtractor();
+                    $markdown = $extractor->extract($filePath, basename($filePath));
+                    $documentMarkdownCacheStore->saveMarkdown($fileHash, basename($filePath), $markdown);
+                    $markdownPath = $this->createTemporaryMarkdownFile($markdown, 'geweb_ai_xlsx_');
+                    $markdownDisplayName = preg_replace('/\.xlsx$/i', '.md', $displayName);
+                    $markdownDisplayName = is_string($markdownDisplayName) && $markdownDisplayName !== '' ? $markdownDisplayName : ($displayName . '.md');
+
+                    error_log('geweb-ai-search: [SPREADSHEET] markdown conversion successful, uploading to Gemini: ' . $displayName);
+                    $geminiDocName = $gemini->uploadLocalFile($markdownPath, $markdownDisplayName, 'text/markdown');
+                    error_log('geweb-ai-search: [SPREADSHEET] markdown upload succeeded as ' . $geminiDocName);
+
+                    return $geminiDocName;
+                } catch (\Exception $markdownException) {
+                    $documentMarkdownCacheStore->deleteMarkdown($fileHash);
+                    error_log('geweb-ai-search: [SPREADSHEET] markdown conversion and upload both failed - ' . $markdownException->getMessage() . ' (original direct upload error: ' . $directUploadException->getMessage() . ')');
+                    throw $markdownException;
+                } finally {
+                    if ($markdownPath !== '' && file_exists($markdownPath)) {
+                        @unlink($markdownPath);
+                    }
+                }
+            }
+        }
+
         error_log('geweb-ai-search: uploading referenced document to Gemini: ' . $displayName . ' (' . $mimeType . ')');
         $geminiDocName = $gemini->uploadLocalFile($filePath, $displayName, $mimeType);
         error_log('geweb-ai-search: uploaded referenced document to Gemini as ' . $geminiDocName);
 
         return $geminiDocName;
+    }
+
+    private function getCurrentFileHash(string $filePath): string {
+        $fileHash = hash_file('sha256', $filePath);
+        return is_string($fileHash) ? $fileHash : '';
+    }
+
+    private function createTemporaryMarkdownFile(string $markdown, string $prefix = 'geweb_ai_md_'): string {
+        $tempPath = tempnam(sys_get_temp_dir(), $prefix);
+        if (!is_string($tempPath) || $tempPath === '') {
+            throw new \Exception('Could not create a temporary Markdown file.');
+        }
+
+        $markdownPath = $tempPath . '.md';
+        @rename($tempPath, $markdownPath);
+        if (file_put_contents($markdownPath, $markdown) === false) {
+            @unlink($markdownPath);
+            throw new \Exception('Could not write converted Markdown.');
+        }
+
+        return $markdownPath;
+    }
+
+    private function buildReferencedImageMarkdown(string $filePath, string $displayName, string $mimeType, string $mode): string {
+        try {
+            $provider = ProviderFactory::make();
+            $processedText = $mode === ImageOcrService::MODE_DESCRIBE
+                ? trim($provider->describeImage($filePath, $mimeType))
+                : trim($provider->extractImageText($filePath, $mimeType));
+        } catch (\Exception $e) {
+            throw new \Exception('Image processing failed: ' . $e->getMessage(), 0, $e);
+        }
+
+        if ($processedText === '') {
+            throw new \Exception('Image processing returned no text.');
+        }
+
+        $uploadUrl = wp_get_upload_dir();
+        $documentUrl = '';
+        if (is_array($uploadUrl)) {
+            $baseDir = isset($uploadUrl['basedir']) ? (string) $uploadUrl['basedir'] : '';
+            $baseUrl = isset($uploadUrl['baseurl']) ? (string) $uploadUrl['baseurl'] : '';
+            if ($baseDir !== '' && $baseUrl !== '' && str_starts_with($filePath, $baseDir)) {
+                $relativePath = ltrim(str_replace('\\', '/', substr($filePath, strlen($baseDir))), '/');
+                $documentUrl = trailingslashit($baseUrl) . $relativePath;
+            }
+        }
+
+        $frontmatter = "---\n";
+        if ($documentUrl !== '') {
+            $frontmatter .= "url: {$documentUrl}\n";
+        }
+        $frontmatter .= "title: " . basename($filePath) . "\n";
+        $frontmatter .= "document_name: " . basename($filePath) . "\n";
+        $frontmatter .= "---\n\n";
+        $frontmatter .= '# ' . basename($filePath) . "\n\n";
+        $frontmatter .= ($mode === ImageOcrService::MODE_DESCRIBE ? "Image description:\n\n" : "OCR text extracted from image:\n\n");
+        $frontmatter .= $processedText . "\n";
+
+        return $frontmatter;
     }
 
     /**
