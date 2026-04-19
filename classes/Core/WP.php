@@ -374,11 +374,26 @@ class WP {
         try {
             $provider = ProviderFactory::make();
             $selectedModel = $this->resolveRequestedModel($provider, $requestedModel);
+            $requestId = 'chat-' . wp_generate_password(10, false, false);
 
             $latestUserMessage = $this->conversationManager->extractLatestUserMessage($messages);
+            if (method_exists($provider, 'setRuntimeLogContext')) {
+                $provider->setRuntimeLogContext([
+                    'request_id' => $requestId,
+                    'conversation_id' => $conversationId !== '' ? $conversationId : 'pending',
+                    'ajax_action' => 'geweb_ai_chat',
+                ]);
+            }
             $fullMessages = $this->conversationManager->buildFullConversationMessages($conversationId, $messages, $latestUserMessage);
             $context = $this->conversationManager->compactConversationForRequest($fullMessages);
             $context = $this->refineTrimmedContext($context, $fullMessages, $provider, $selectedModel, $conversationId);
+            $this->conversationManager->saveFrontendConversation(
+                $conversationId,
+                $fullMessages,
+                '',
+                !empty($context['compacted']),
+                (string) ($context['summary'] ?? '')
+            );
 
             $excludedSources = $this->extractExcludedSourcesFromRequest();
             $result = $provider->search(

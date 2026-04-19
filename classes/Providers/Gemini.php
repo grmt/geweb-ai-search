@@ -108,6 +108,7 @@ class Gemini implements AIProviderInterface {
     private const DEFAULT_OCR_MODEL = 'gemini-2.5-flash';
     private const STALE_FAILED_MODEL_RETENTION_SECONDS = WEEK_IN_SECONDS;
     private const MODEL_TEST_TIMEOUT_SECONDS = 20;
+    private const REGEX_WHITESPACE = '/\s+/';
 
     /**
      * @var string Gemini API key
@@ -118,6 +119,11 @@ class Gemini implements AIProviderInterface {
      * @var string Selected model name
      */
     private string $model;
+
+    /**
+     * @var array<string,string|int>
+     */
+    private array $runtimeLogContext = [];
 
     /**
      * Constructor
@@ -142,6 +148,35 @@ class Gemini implements AIProviderInterface {
 
     private function logError(string $message): void {
         error_log('ERROR geweb-ai-search: ' . $message);
+    }
+
+    /**
+     * @param array<string,string|int> $context
+     * @return void
+     */
+    public function setRuntimeLogContext(array $context): void {
+        $normalized = [];
+
+        foreach ($context as $key => $value) {
+            $normalizedKey = sanitize_key((string) $key);
+            if ($normalizedKey === '') {
+                continue;
+            }
+
+            if (is_int($value)) {
+                $normalized[$normalizedKey] = $value;
+                continue;
+            }
+
+            $normalizedValue = trim((string) $value);
+            if ($normalizedValue === '') {
+                continue;
+            }
+
+            $normalized[$normalizedKey] = $normalizedValue;
+        }
+
+        $this->runtimeLogContext = $normalized;
     }
 
     /**
@@ -1224,6 +1259,25 @@ class Gemini implements AIProviderInterface {
 
         $requestModel = is_string($model) && $model !== '' ? $model : $this->model;
         $latestQuestion = $this->extractLatestUserQuestion($messages);
+        $questionHash = $latestQuestion !== '' ? $this->buildQuestionHash($latestQuestion) : '';
+        $requestId = isset($this->runtimeLogContext['request_id']) ? trim((string) $this->runtimeLogContext['request_id']) : '';
+        if ($requestId === '') {
+            $requestId = 'gem-' . wp_generate_password(10, false, false);
+        }
+        $this->runtimeLogContext['request_id'] = $requestId;
+        $this->runtimeLogContext['model'] = $requestModel;
+        if ($questionHash !== '') {
+            $this->runtimeLogContext['question_hash'] = $questionHash;
+        }
+        $this->logInfo(sprintf(
+            'Gemini search dispatch request_id=%s question_hash=%s conversation_id=%s message_count=%d excluded_sources=%d model="%s"',
+            $requestId,
+            $questionHash !== '' ? $questionHash : 'none',
+            isset($this->runtimeLogContext['conversation_id']) ? (string) $this->runtimeLogContext['conversation_id'] : 'none',
+            count($messages),
+            count($excludedSources),
+            $requestModel
+        ));
         $timeoutSeconds = $this->getSearchTimeoutSecondsForQuestion($latestQuestion);
 
         // Build request body
@@ -1512,11 +1566,12 @@ class Gemini implements AIProviderInterface {
         $startedAt = microtime(true);
         $bodyBytes = isset($args['body']) ? strlen((string) $args['body']) : 0;
         $this->logInfo(sprintf(
-            'Gemini request starting method=%s timeout_seconds=%d body_bytes=%d endpoint="%s"',
+            'Gemini request starting method=%s timeout_seconds=%d body_bytes=%d endpoint="%s"%s',
             $method,
             $timeoutSeconds,
             $bodyBytes,
-            $this->redactApiKeyFromUrl($originalUrl)
+            $this->redactApiKeyFromUrl($originalUrl),
+            $this->formatRuntimeLogContextSuffix()
         ));
 
         $response = wp_remote_request($url, $args);
@@ -1524,11 +1579,12 @@ class Gemini implements AIProviderInterface {
 
         if (is_wp_error($response)) {
             $this->logError(sprintf(
-                'Gemini request transport failure method=%s elapsed_ms=%d endpoint="%s" message="%s"',
+                'Gemini request transport failure method=%s elapsed_ms=%d endpoint="%s" message="%s"%s',
                 $method,
                 $elapsedMs,
                 $this->redactApiKeyFromUrl($originalUrl),
-                $response->get_error_message()
+                $response->get_error_message(),
+                $this->formatRuntimeLogContextSuffix()
             ));
             throw new \Exception(esc_html(sprintf(
                 'API request failed after %d ms: %s',
@@ -1541,23 +1597,36 @@ class Gemini implements AIProviderInterface {
         $responseBody = wp_remote_retrieve_body($response);
         $responseBytes = strlen($responseBody);
         $this->logInfo(sprintf(
-            'Gemini request response method=%s http_code=%d elapsed_ms=%d response_bytes=%d endpoint="%s"',
+            'Gemini request response method=%s http_code=%d elapsed_ms=%d response_bytes=%d endpoint="%s"%s',
             $method,
             $httpCode,
             $elapsedMs,
             $responseBytes,
-            $this->redactApiKeyFromUrl($originalUrl)
+            $this->redactApiKeyFromUrl($originalUrl),
+            $this->formatRuntimeLogContextSuffix()
         ));
 
         if ($httpCode < 200 || $httpCode >= 300) {
             $responseSnippet = trim(substr(preg_replace('/\s+/', ' ', $responseBody), 0, 400));
+            $requestModel = $this->extractRequestedModelFromUrl($originalUrl);
+            if ($requestModel !== '' && $this->shouldMarkModelPermanentlyUnavailable($requestModel, $httpCode, $responseBody)) {
+                $this->recordModelStatus($requestModel, 'failed', $responseBody, [
+                    'permanent_unavailable' => true,
+                ]);
+                $this->clearModelsCache();
+                if ((string) get_option(self::OPTION_MODEL, '') === $requestModel) {
+                    update_option(self::OPTION_MODEL, self::DEFAULT_MODEL);
+                    update_option(self::OPTION_MODEL_SELECTION_MODE, self::MODEL_SELECTION_MODE_DEFAULT);
+                }
+            }
             $this->logError(sprintf(
-                'Gemini request API failure method=%s http_code=%d elapsed_ms=%d endpoint="%s" response_snippet="%s"',
+                'Gemini request API failure method=%s http_code=%d elapsed_ms=%d endpoint="%s" response_snippet="%s"%s',
                 $method,
                 $httpCode,
                 $elapsedMs,
                 $this->redactApiKeyFromUrl($originalUrl),
-                $responseSnippet
+                $responseSnippet,
+                $this->formatRuntimeLogContextSuffix()
             ));
             throw new \Exception(esc_html(sprintf(
                 'API request failed after %d ms with HTTP code %d: %s',
@@ -1570,11 +1639,12 @@ class Gemini implements AIProviderInterface {
         $result = json_decode($responseBody, true);
         if (json_last_error() !== JSON_ERROR_NONE) {
             $this->logError(sprintf(
-                'Gemini request JSON decode failure method=%s elapsed_ms=%d endpoint="%s" json_error="%s"',
+                'Gemini request JSON decode failure method=%s elapsed_ms=%d endpoint="%s" json_error="%s"%s',
                 $method,
                 $elapsedMs,
                 $this->redactApiKeyFromUrl($originalUrl),
-                json_last_error_msg()
+                json_last_error_msg(),
+                $this->formatRuntimeLogContextSuffix()
             ));
             throw new \Exception(esc_html(sprintf(
                 'Failed to decode JSON response after %d ms: %s',
@@ -1588,6 +1658,34 @@ class Gemini implements AIProviderInterface {
 
     private function redactApiKeyFromUrl(string $url): string {
         return preg_replace('/([?&]key=)[^&]+/i', '$1[redacted]', $url) ?? $url;
+    }
+
+    private function formatRuntimeLogContextSuffix(): string {
+        if (empty($this->runtimeLogContext)) {
+            return '';
+        }
+
+        $parts = [];
+        foreach ($this->runtimeLogContext as $key => $value) {
+            $normalizedKey = sanitize_key((string) $key);
+            if ($normalizedKey === '') {
+                continue;
+            }
+
+            if (is_int($value)) {
+                $parts[] = $normalizedKey . '=' . $value;
+                continue;
+            }
+
+            $normalizedValue = trim((string) $value);
+            if ($normalizedValue === '') {
+                continue;
+            }
+
+            $parts[] = $normalizedKey . '="' . str_replace('"', '\"', $normalizedValue) . '"';
+        }
+
+        return empty($parts) ? '' : ' ' . implode(' ', $parts);
     }
 
     private function formatByteSize(int $bytes): string {
@@ -1703,7 +1801,8 @@ class Gemini implements AIProviderInterface {
     }
 
     private function buildQuestionHash(string $question): string {
-        $normalized = strtolower(trim(preg_replace(self::REGEX_WHITESPACE, ' ', $question) ?? $question));
+        $normalizedQuestion = preg_replace('/\s+/', ' ', $question);
+        $normalized = strtolower(trim($normalizedQuestion ?? $question));
         return hash('sha256', $normalized);
     }
 
@@ -2282,6 +2381,11 @@ class Gemini implements AIProviderInterface {
     public function getModel(): string {
         $selectionMode = $this->getModelSelectionMode();
         $storedModel = (string) get_option(self::OPTION_MODEL, '');
+        if ($this->isPermanentlyUnavailableModel($storedModel)) {
+            $storedModel = '';
+            update_option(self::OPTION_MODEL, self::DEFAULT_MODEL);
+            update_option(self::OPTION_MODEL_SELECTION_MODE, self::MODEL_SELECTION_MODE_DEFAULT);
+        }
 
         if ($selectionMode === self::MODEL_SELECTION_MODE_DEFAULT) {
             if ($storedModel !== self::DEFAULT_MODEL) {
@@ -2360,6 +2464,10 @@ class Gemini implements AIProviderInterface {
             $status = $statuses[$model] ?? null;
             if (!is_array($status) || ($status['status'] ?? '') !== 'failed') {
                 return true;
+            }
+
+            if (!empty($status['permanent_unavailable'])) {
+                return false;
             }
 
             $timestamp = isset($status['timestamp']) ? (int) $status['timestamp'] : 0;
@@ -2484,6 +2592,11 @@ class Gemini implements AIProviderInterface {
                 'test_prompt' => isset($testPrompt) ? $testPrompt : 'Reply with OK.',
                 'test_response' => '',
                 'resolved_model' => '',
+                'permanent_unavailable' => $this->shouldMarkModelPermanentlyUnavailable(
+                    $requestModel,
+                    $this->extractHttpCodeFromMessage($e->getMessage()),
+                    $e->getMessage()
+                ),
             ]);
 
             return [
@@ -2612,6 +2725,7 @@ class Gemini implements AIProviderInterface {
             'test_prompt' => isset($details['test_prompt']) ? trim((string) $details['test_prompt']) : '',
             'test_response' => isset($details['test_response']) ? trim((string) $details['test_response']) : '',
             'resolved_model' => isset($details['resolved_model']) ? trim((string) $details['resolved_model']) : '',
+            'permanent_unavailable' => !empty($details['permanent_unavailable']),
         ];
 
         update_option(self::OPTION_MODEL_STATUS, $statuses);
@@ -2726,6 +2840,10 @@ class Gemini implements AIProviderInterface {
             return false;
         }
 
+        if ($this->isPermanentlyUnavailableModel($normalizedModel)) {
+            return false;
+        }
+
         if (in_array($normalizedModel, self::OFFICIAL_LATEST_MODEL_ALIASES, true)) {
             return true;
         }
@@ -2752,6 +2870,52 @@ class Gemini implements AIProviderInterface {
         }
 
         return preg_match('/^gemini-[0-9][a-z0-9.\-]*-(pro|flash|flash-lite)(?:-|$)/', $normalizedModel) === 1;
+    }
+
+    private function isPermanentlyUnavailableModel(string $model): bool {
+        $normalizedModel = strtolower(trim($model));
+        if ($normalizedModel === '') {
+            return false;
+        }
+
+        $statuses = $this->getModelStatuses();
+        $entry = $statuses[$normalizedModel] ?? null;
+        return is_array($entry) && !empty($entry['permanent_unavailable']);
+    }
+
+    private function extractRequestedModelFromUrl(string $url): string {
+        if (preg_match('#/models/([^:/?]+):generateContent#', $url, $matches) !== 1) {
+            return '';
+        }
+
+        return strtolower(trim((string) ($matches[1] ?? '')));
+    }
+
+    private function extractHttpCodeFromMessage(string $message): int {
+        if (preg_match('/HTTP code\s+(\d{3})/i', $message, $matches) === 1) {
+            return (int) $matches[1];
+        }
+
+        return 0;
+    }
+
+    private function shouldMarkModelPermanentlyUnavailable(string $model, int $httpCode, string $message): bool {
+        $normalizedModel = strtolower(trim($model));
+        if ($normalizedModel === '' || $httpCode !== 404) {
+            return false;
+        }
+
+        $normalizedMessage = strtolower($message);
+        if ($normalizedMessage === '') {
+            return false;
+        }
+
+        return strpos($normalizedMessage, $normalizedModel) !== false
+            && (
+                strpos($normalizedMessage, 'no longer available') !== false
+                || strpos($normalizedMessage, 'not available') !== false
+                || strpos($normalizedMessage, 'not found') !== false
+            );
     }
 
     /**

@@ -313,6 +313,7 @@ class ReferencedDocumentListTable extends \WP_List_Table {
     private function getIndexedErrorHtml(array $item): string {
         $operationStatus = sanitize_key((string) ($item['operation_status'] ?? ''));
         $operationError = trim((string) ($item['operation_error'] ?? ''));
+        $operationUpdatedAt = (int) ($item['operation_updated_at'] ?? 0);
         $isBrokenReference = !empty($item['broken_reference']);
         $isMissingFromSimpleFileList = $this->hasReferencedPosts($item) && empty($item['managed_by_simple_file_list']);
 
@@ -328,7 +329,12 @@ class ReferencedDocumentListTable extends \WP_List_Table {
             return '';
         }
 
-        return '<p style="margin:6px 0 0; color:#d63638;">' . esc_html($operationError) . '</p>';
+        $html = '<p style="margin:6px 0 0; color:#d63638;">' . esc_html($operationError) . '</p>';
+        if ($operationUpdatedAt > 0) {
+            $html .= '<p style="margin:4px 0 0; color:#646970;"><small>Last error: ' . esc_html(DateDisplay::formatDateTime($operationUpdatedAt)) . '</small></p>';
+        }
+
+        return $html;
     }
 
     /**
@@ -450,7 +456,14 @@ class ReferencedDocumentListTable extends \WP_List_Table {
         }
 
         $title = $details !== '' ? ' title="' . esc_attr($details) . '"' : '';
-        return '<span style="color:' . esc_attr($color) . ';"' . $title . '>' . esc_html($label) . '</span>';
+        $html = '<span style="color:' . esc_attr($color) . ';"' . $title . '>' . esc_html($label) . '</span>';
+        $processingControlHtml = $this->buildPdfProcessingControlHtml($item, in_array(sanitize_key((string) ($item['operation_status'] ?? '')), ['uploading', 'excluding'], true));
+        if ($processingControlHtml !== '') {
+            $html .= '<div style="margin-top:6px;">' . $processingControlHtml . '</div>';
+            $html .= '<p class="geweb-ai-index-feedback" style="display:none; margin:4px 0 0;"></p>';
+        }
+
+        return $html;
     }
 
     /**
@@ -569,6 +582,16 @@ class ReferencedDocumentListTable extends \WP_List_Table {
      */
     public function renderMarkdownCacheCell(array $item): string {
         return $this->column_markdown_cache($item);
+    }
+
+    /**
+     * Render PDF-analysis cell HTML for a single overview item.
+     *
+     * @param array<string,mixed> $item
+     * @return string
+     */
+    public function renderPdfAnalysisCell(array $item): string {
+        return $this->column_pdf_analysis($item);
     }
 
     /**
@@ -1017,6 +1040,10 @@ class ReferencedDocumentListTable extends \WP_List_Table {
             return ((string) ($item['image_processing_mode'] ?? ImageOcrService::MODE_NONE)) !== ImageOcrService::MODE_NONE;
         }
 
+        if ($mimeType === 'application/pdf') {
+            return ((string) ($item['image_processing_mode'] ?? ImageOcrService::MODE_NONE)) !== ImageOcrService::MODE_NONE;
+        }
+
         return strpos($mimeType, 'spreadsheetml') !== false || strpos($mimeType, 'ms-excel') !== false;
     }
 
@@ -1043,6 +1070,38 @@ class ReferencedDocumentListTable extends \WP_List_Table {
         $html = '<label for="' . esc_attr($selectId) . '" style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap;margin-left:8px;">';
         $html .= '<span>Image</span>';
         $html .= '<select id="' . esc_attr($selectId) . '" class="geweb-ai-referenced-document-image-mode" data-file-hash="' . esc_attr($fileHash) . '" style="min-width:96px;"' . disabled($disabled, true, false) . '>';
+        $html .= '<option value="' . esc_attr(ImageOcrService::MODE_NONE) . '"' . selected($currentMode, ImageOcrService::MODE_NONE, false) . '>None</option>';
+        $html .= '<option value="' . esc_attr(ImageOcrService::MODE_OCR) . '"' . selected($currentMode, ImageOcrService::MODE_OCR, false) . '>OCR</option>';
+        $html .= '<option value="' . esc_attr(ImageOcrService::MODE_DESCRIBE) . '"' . selected($currentMode, ImageOcrService::MODE_DESCRIBE, false) . '>Describe</option>';
+        $html .= '</select>';
+        $html .= '</label>';
+
+        return $html;
+    }
+
+    /**
+     * @param array<string,mixed> $item
+     */
+    private function buildPdfProcessingControlHtml(array $item, bool $disabled): string {
+        $mimeType = strtolower(trim((string) ($item['mime_type'] ?? '')));
+        if ($mimeType !== 'application/pdf') {
+            return '';
+        }
+
+        $fileHash = (string) ($item['file_hash'] ?? '');
+        if ($fileHash === '') {
+            return '';
+        }
+
+        $selectId = 'geweb-referenced-document-pdf-mode-' . substr(sanitize_html_class($fileHash), 0, 12);
+        $currentMode = (string) ($item['image_processing_mode'] ?? ImageOcrService::MODE_NONE);
+        if (!in_array($currentMode, [ImageOcrService::MODE_NONE, ImageOcrService::MODE_OCR, ImageOcrService::MODE_DESCRIBE], true)) {
+            $currentMode = ImageOcrService::MODE_NONE;
+        }
+
+        $html = '<label for="' . esc_attr($selectId) . '" style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap;">';
+        $html .= '<span>PDF</span>';
+        $html .= '<select id="' . esc_attr($selectId) . '" class="geweb-ai-referenced-document-image-mode" data-file-hash="' . esc_attr($fileHash) . '" data-processing-subject="pdf" style="min-width:96px;"' . disabled($disabled, true, false) . '>';
         $html .= '<option value="' . esc_attr(ImageOcrService::MODE_NONE) . '"' . selected($currentMode, ImageOcrService::MODE_NONE, false) . '>None</option>';
         $html .= '<option value="' . esc_attr(ImageOcrService::MODE_OCR) . '"' . selected($currentMode, ImageOcrService::MODE_OCR, false) . '>OCR</option>';
         $html .= '<option value="' . esc_attr(ImageOcrService::MODE_DESCRIBE) . '"' . selected($currentMode, ImageOcrService::MODE_DESCRIBE, false) . '>Describe</option>';

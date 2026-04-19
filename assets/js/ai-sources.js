@@ -472,13 +472,7 @@
                 return '';
             }
 
-            const sentenceMatch = normalized.match(/^(.{24,220}?[.!?;:])(?:\s|$)/);
-            const sentenceCandidate = String(sentenceMatch?.[1] || '').trim();
-            if (sentenceCandidate) {
-                return sentenceCandidate;
-            }
-
-            return words.slice(0, Math.min(16, words.length)).join(' ');
+            return words.slice(0, Math.min(6, words.length)).join(' ');
         },
 
         isDocumentLikeTitle(title) {
@@ -1593,8 +1587,9 @@
         },
 
         buildSourceListItem(source) {
+            const resolvedReference = this.getResolvedManagedSourceReference(source.url);
             const title = this.getPreferredSourceLabel(source.title, source.url);
-            const url = source.url;
+            const url = String(resolvedReference?.url || source.url || '').trim();
             const footnote = Number(source.footnote || 0);
             const snippet = String(source.snippet || '').trim();
             const contexts = Array.isArray(source.contexts) ? source.contexts : [];
@@ -1753,9 +1748,7 @@
             const $detailsHeader = $('<div class="geweb-ai-source-details-header"></div>');
             const sourceInfo = $sourceItem?.data('sourceInfo') || {};
             const sourceKind = this.getSourceKind(sourceInfo);
-            const listingUrl = sourceKind === 'document'
-                ? String(getAiSearchConfig().frontend_ai_manage_documents_url || '').trim()
-                : String(getAiSearchConfig().frontend_ai_manage_pages_url || '').trim();
+            const listingUrl = this.getManagedSourceAdminListingUrl(sourceInfo);
             const listingLabel = sourceKind === 'document'
                 ? t('openDocumentsListing', 'Open documents listing')
                 : t('openPagesListing', 'Open pages listing');
@@ -1790,6 +1783,27 @@
             };
 
             return $details;
+        },
+
+        getManagedSourceAdminListingUrl(source) {
+            const sourceInfo = source && typeof source === 'object' ? source : {};
+            const sourceKind = this.getSourceKind(sourceInfo);
+            if (sourceKind === 'document') {
+                return String(getAiSearchConfig().frontend_ai_manage_documents_url || '').trim();
+            }
+
+            const postId = this.extractManagedSourcePostId(sourceInfo.url || '');
+            const editPostBaseUrl = String(getAiSearchConfig().frontend_ai_edit_post_url || '').trim();
+            if (postId > 0 && editPostBaseUrl) {
+                const parsed = safeParseUrl(editPostBaseUrl, globalThis.location?.origin || undefined);
+                if (parsed) {
+                    parsed.searchParams.set('post', String(postId));
+                    parsed.searchParams.set('action', 'edit');
+                    return parsed.toString();
+                }
+            }
+
+            return String(getAiSearchConfig().frontend_ai_manage_pages_url || '').trim();
         },
 
         buildSourceContextList(url, contexts, $sourceItem, footnote = 0) {
@@ -2330,6 +2344,13 @@
                 return;
             }
 
+            const mode = String(options?.mode || 'active').trim().toLowerCase();
+            if (mode === 'preview') {
+                this.previewSourceReferenceItem($target);
+                this.highlightBestSourceContext($target, 'preview');
+                return;
+            }
+
 	            this.setScrollablePaneActive?.('sources');
 	            this.ensureSourcesPanelVisible();
 	            this.activateSourceReferenceItem($target);
@@ -2687,10 +2708,33 @@
             return extracted;
         },
 
+        getResolvedManagedSourceReference(url) {
+            const rawUrl = String(url || '').trim();
+            const normalizedUrl = this.normalizeManagedSourceUrl(rawUrl);
+            const candidates = [rawUrl, normalizedUrl].filter(Boolean);
+
+            for (const candidate of candidates) {
+                const reference = this.sourceReferenceCache?.[candidate];
+                if (reference && typeof reference === 'object') {
+                    return reference;
+                }
+            }
+
+            return null;
+        },
+
         getPreferredSourceLabel(title, url) {
             const normalizedTitle = String(title || '').trim();
-            const normalizedUrl = this.normalizeManagedSourceUrl(url);
+            const resolvedReference = this.getResolvedManagedSourceReference(url);
+            const resolvedUrl = String(resolvedReference?.url || '').trim();
+            const resolvedLabel = String(resolvedReference?.label || resolvedReference?.title || '').trim();
+            const normalizedUrl = resolvedUrl || this.normalizeManagedSourceUrl(url);
             const urlLabel = this.formatManagedSourcePath(normalizedUrl);
+            const postId = this.extractManagedSourcePostId(normalizedUrl);
+
+            if (resolvedLabel) {
+                return resolvedLabel;
+            }
 
             if (!normalizedTitle) {
                 return urlLabel || normalizedUrl || t('untitledConversation', 'Untitled conversation');
@@ -2701,6 +2745,9 @@
                 normalizedTitle === normalizedUrl ||
                 /^https?:\/\//i.test(normalizedTitle)
             ) {
+                if (postId > 0) {
+                    return `page ${postId}`;
+                }
                 return urlLabel || normalizedTitle;
             }
 
@@ -2720,22 +2767,27 @@
 
             const pathname = parsed.pathname.replace(/^\/+/, '');
             if (pathname) {
+                const markdownPageIdMatch = /^(\d+)\.md$/i.exec(pathname);
+                if (markdownPageIdMatch?.[1]) {
+                    return `page ${markdownPageIdMatch[1]}`;
+                }
+
+                const prefixedMarkdownPageIdMatch = /^(\d+)-.+\.[a-z0-9]{2,8}$/i.exec(pathname);
+                if (prefixedMarkdownPageIdMatch?.[1]) {
+                    return `page ${prefixedMarkdownPageIdMatch[1]}`;
+                }
+
                 return pathname.replace(TRAILING_SLASH_REGEX, '/');
             }
 
             const postId = parsed.searchParams.get('p');
             if (postId) {
-                return `?p=${postId}`;
+                return `page ${postId}`;
             }
 
             const pageId = parsed.searchParams.get('page_id');
             if (pageId) {
                 return `page ${pageId}`;
-            }
-
-            const postId = parsed.searchParams.get('p');
-            if (postId) {
-                return `page ${postId}`;
             }
 
             return parsed.search.replace(/^\?/, '');
@@ -2754,6 +2806,36 @@
 
             const pageId = String(parsed.searchParams.get('page_id') || parsed.searchParams.get('p') || '').trim();
             return /^\d+$/.test(pageId) ? `[page ${pageId}]` : '';
+        },
+
+        extractManagedSourcePostId(url) {
+            const normalizedUrl = this.normalizeManagedSourceUrl(url);
+            if (!normalizedUrl) {
+                return 0;
+            }
+
+            const parsed = safeParseUrl(normalizedUrl);
+            if (!parsed) {
+                return 0;
+            }
+
+            const directId = String(parsed.searchParams.get('page_id') || parsed.searchParams.get('p') || '').trim();
+            if (/^\d+$/.test(directId)) {
+                return Number(directId);
+            }
+
+            const pathname = parsed.pathname.replace(/^\/+/, '');
+            const markdownPageIdMatch = /^(\d+)\.md$/i.exec(pathname);
+            if (markdownPageIdMatch?.[1]) {
+                return Number(markdownPageIdMatch[1]);
+            }
+
+            const prefixedMarkdownPageIdMatch = /^(\d+)-.+\.[a-z0-9]{2,8}$/i.exec(pathname);
+            if (prefixedMarkdownPageIdMatch?.[1]) {
+                return Number(prefixedMarkdownPageIdMatch[1]);
+            }
+
+            return 0;
         },
 
         normalizeManagedSourceUrl(url) {

@@ -431,9 +431,14 @@ class AdminDataAjaxController {
         }
 
         $table = new ReferencedDocumentListTable();
+        $processingSubject = is_array($updatedItem) && ((string) ($updatedItem['mime_type'] ?? '')) === 'application/pdf'
+            ? 'PDF'
+            : 'image';
         $message = $mode === ImageOcrService::MODE_DESCRIBE
-            ? 'Image description enabled.'
-            : ($mode === ImageOcrService::MODE_OCR ? 'OCR enabled for this image.' : 'Image processing disabled.');
+            ? ($processingSubject === 'PDF' ? 'PDF description enabled.' : 'Image description enabled.')
+            : ($mode === ImageOcrService::MODE_OCR
+                ? ($processingSubject === 'PDF' ? 'OCR enabled for this PDF.' : 'OCR enabled for this image.')
+                : ($processingSubject === 'PDF' ? 'PDF processing disabled.' : 'Image processing disabled.'));
         if ($cacheWarning !== '') {
             $message .= ' Cache could not be generated yet: ' . $cacheWarning;
         }
@@ -442,6 +447,7 @@ class AdminDataAjaxController {
             'message' => $message,
             'row_exists' => is_array($updatedItem),
             'actions_html' => is_array($updatedItem) ? $table->renderActionsCell($updatedItem) : '',
+            'pdf_analysis_html' => is_array($updatedItem) ? $table->renderPdfAnalysisCell($updatedItem) : '',
             'markdown_cache_html' => is_array($updatedItem) ? $table->renderMarkdownCacheCell($updatedItem) : '',
             'group_revision' => GroupDataRevision::touch(),
             'cache_state' => (function (): array {

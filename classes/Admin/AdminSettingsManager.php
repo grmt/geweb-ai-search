@@ -109,9 +109,9 @@ class AdminSettingsManager {
 
         if (isset($_POST['geweb_ai_search_model'])) {
             $submittedModel = sanitize_text_field(wp_unslash($_POST['geweb_ai_search_model']));
+            $provider = ProviderFactory::make();
             update_option('geweb_aisearch_model', $submittedModel);
 
-            $provider = ProviderFactory::make();
             $selectionMode = $submittedModel === $provider->getDefaultModel()
                 ? self::MODEL_SELECTION_MODE_DEFAULT
                 : self::MODEL_SELECTION_MODE_CUSTOM;

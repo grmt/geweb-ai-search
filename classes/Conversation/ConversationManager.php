@@ -372,7 +372,8 @@ class ConversationManager {
         }
 
         $role = isset($message['role']) ? (string) $message['role'] : 'user';
-        $content = trim((string) ($message['content'] ?? ''));
+        $rawContent = $message['content'] ?? $message['answer'] ?? $message['text'] ?? $message['message'] ?? '';
+        $content = trim((string) $rawContent);
         if ($content === '') {
             return null;
         }
@@ -383,7 +384,7 @@ class ConversationManager {
         $meta = isset($message['meta']) && is_array($message['meta'])
             ? $message['meta']
             : [];
-        $isModelMessage = $role === 'model';
+        $isModelMessage = in_array($role, ['model', 'assistant', 'ai'], true);
 
         return [
             'role' => $isModelMessage ? 'model' : 'user',

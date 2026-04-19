@@ -367,12 +367,12 @@ class ReferencedDocumentManager {
 
         $reference = $this->findReferenceByHash($fileHash);
         if (!is_array($reference) || empty($reference['file_path'])) {
-            throw new \Exception('Could not resolve the referenced image.');
+            throw new \Exception('Could not resolve the referenced document.');
         }
 
         $mode = $this->getReferencedDocumentImageProcessingMode($fileHash);
         if (!in_array($mode, [ImageOcrService::MODE_OCR, ImageOcrService::MODE_DESCRIBE], true)) {
-            throw new \Exception('Image processing is disabled for this file.');
+            throw new \Exception('Document processing is disabled for this file.');
         }
 
         $this->documentStore->refreshReferencedImageMarkdownCache(

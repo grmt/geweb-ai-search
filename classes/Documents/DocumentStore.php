@@ -177,7 +177,10 @@ class DocumentStore {
         $extension = strtolower((string) pathinfo($filePath, PATHINFO_EXTENSION));
         $imageProcessingMode = (new ReferencedDocumentManager($this))->getReferencedDocumentImageProcessingMode($fileHash);
 
-        if (strpos($mimeType, 'image/') === 0 && $imageProcessingMode !== ImageOcrService::MODE_NONE) {
+        if (
+            $imageProcessingMode !== ImageOcrService::MODE_NONE
+            && (strpos($mimeType, 'image/') === 0 || $mimeType === 'application/pdf')
+        ) {
             $markdownPath = '';
             try {
                 $markdown = $this->buildReferencedImageMarkdown($filePath, $displayName, $mimeType, $imageProcessingMode);
@@ -186,14 +189,14 @@ class DocumentStore {
                 $markdownDisplayName = preg_replace('/\.[^.]+$/', '.md', $displayName);
                 $markdownDisplayName = is_string($markdownDisplayName) && $markdownDisplayName !== '' ? $markdownDisplayName : ($displayName . '.md');
 
-                error_log('geweb-ai-search: [IMAGE] processing as markdown (' . $imageProcessingMode . ') before Gemini upload: ' . $displayName);
+                error_log('geweb-ai-search: [DOCUMENT] processing as markdown (' . $imageProcessingMode . ') before Gemini upload: ' . $displayName);
                 $geminiDocName = $gemini->uploadLocalFile($markdownPath, $markdownDisplayName, 'text/markdown');
-                error_log('geweb-ai-search: [IMAGE] markdown upload succeeded as ' . $geminiDocName);
+                error_log('geweb-ai-search: [DOCUMENT] markdown upload succeeded as ' . $geminiDocName);
 
                 return $geminiDocName;
             } catch (\Exception $exception) {
                 $documentMarkdownCacheStore->deleteMarkdown($fileHash);
-                error_log('geweb-ai-search: [IMAGE] processing and upload failed, falling back to direct upload: ' . $exception->getMessage());
+                error_log('geweb-ai-search: [DOCUMENT] processing and upload failed, falling back to direct upload: ' . $exception->getMessage());
             } finally {
                 if ($markdownPath !== '' && file_exists($markdownPath)) {
                     @unlink($markdownPath);
@@ -300,6 +303,29 @@ class DocumentStore {
         $frontmatter .= $processedText . "\n";
 
         return $frontmatter;
+    }
+
+    public function refreshReferencedImageMarkdownCache(string $fileHash, string $filePath, string $displayName, string $mimeType, string $mode): void {
+        $fileHash = sanitize_text_field($fileHash);
+        $filePath = (string) $filePath;
+        $mimeType = strtolower(trim((string) $mimeType));
+        if ($fileHash === '' || $filePath === '' || $mimeType === '') {
+            throw new \Exception('Missing document data for markdown cache refresh.');
+        }
+
+        if (
+            strpos($mimeType, 'image/') !== 0
+            && $mimeType !== 'application/pdf'
+        ) {
+            throw new \Exception('Markdown cache refresh is only supported for images and PDFs.');
+        }
+
+        if (!in_array($mode, [ImageOcrService::MODE_OCR, ImageOcrService::MODE_DESCRIBE], true)) {
+            throw new \Exception('Document processing is disabled for this file.');
+        }
+
+        $markdown = $this->buildReferencedImageMarkdown($filePath, $displayName, $mimeType, $mode);
+        (new ReferencedDocumentMarkdownCacheStore())->saveMarkdown($fileHash, basename($filePath), $markdown);
     }
 
     /**

@@ -680,6 +680,7 @@ function prepareReferencedDocumentsTableHeaders() {
 				const $table = jQuery(this);
 				const $form = $table.closest('.geweb-referenced-documents-table-form');
 				const $searchInput = $form.find('input[name="s"]').first();
+				prepareReferencedDocumentsSearchBox($form);
 				$table.find('th a .sorting-indicator').hide();
 				$searchInput.attr('autocomplete', 'on');
 				if ($searchInput.length && !$searchInput.val()) {
@@ -700,6 +701,48 @@ function prepareReferencedDocumentsTableHeaders() {
 			applyReferencedDocumentsFilters($form);
 		});
 }
+
+function updateReferencedDocumentsSearchBoxState($form, expanded) {
+		if (!$form || !$form.length) {
+			return;
+		}
+
+		const $toggle = $form.find('.geweb-referenced-documents-search-toggle').first();
+		const $searchBox = $form.find('.search-box').first();
+		const shouldExpand = !!expanded;
+
+		$form.attr('data-search-expanded', shouldExpand ? '1' : '0');
+		$searchBox.toggleClass('is-collapsed', !shouldExpand);
+		if ($toggle.length) {
+			$toggle.attr('aria-expanded', shouldExpand ? 'true' : 'false');
+			$toggle.text(shouldExpand ? 'Hide search' : 'Show search');
+		}
+	}
+
+function prepareReferencedDocumentsSearchBox($form) {
+		if (!$form || !$form.length) {
+			return;
+		}
+
+		const $searchBox = $form.find('.search-box').first();
+		const $searchInput = $searchBox.find('input[name="s"]').first();
+		if (!$searchBox.length || !$searchInput.length) {
+			return;
+		}
+
+		$form.addClass('geweb-referenced-documents-search-ready');
+		const inputId = String($searchInput.attr('id') || 'search-input');
+		let $toggle = $form.find('.geweb-referenced-documents-search-toggle').first();
+		if (!$toggle.length) {
+			$toggle = jQuery('<button type="button" class="button geweb-referenced-documents-search-toggle">Show search</button>');
+			$searchBox.before($toggle);
+		}
+
+		$toggle.attr('aria-controls', inputId);
+		const hasSearchValue = $.trim(String($searchInput.val() || '')) !== '';
+		const isMobileViewport = globalThis.matchMedia ? globalThis.matchMedia('(max-width: 782px)').matches : false;
+		updateReferencedDocumentsSearchBoxState($form, !isMobileViewport || hasSearchValue);
+	}
 
 function getReferencedDocumentsFilters($form) {
 		return {
@@ -1325,13 +1368,16 @@ jQuery(document).ready(function($) {
 
 				if (remoteSelected && $select.find('option[value="' + escapeSelectorAttributeValue(remoteSelected) + '"]').length === 0) {
 						const statusEntry = response?.data?.model_statuses?.[remoteSelected];
-						const isFailedModel = statusEntry && String(statusEntry.status || '') === 'failed';
-						const option = new Option(remoteSelected, remoteSelected, true, true);
-						option.setAttribute('data-model-status', isFailedModel ? 'failed' : 'ok');
-						if (isFailedModel) {
-								option.style.color = '#b32d2e';
+						const isPermanentlyUnavailable = !!(statusEntry && statusEntry.permanent_unavailable);
+						if (!isPermanentlyUnavailable) {
+								const isFailedModel = statusEntry && String(statusEntry.status || '') === 'failed';
+								const option = new Option(remoteSelected, remoteSelected, true, true);
+								option.setAttribute('data-model-status', isFailedModel ? 'failed' : 'ok');
+								if (isFailedModel) {
+										option.style.color = '#b32d2e';
+								}
+								$select.prepend(option);
 						}
-						$select.prepend(option);
 				} else if (remoteSelected) {
 						$select.val(remoteSelected);
 				}
@@ -1448,13 +1494,16 @@ jQuery(document).ready(function($) {
 
 						if (remoteSelected && $select.find('option[value="' + escapeSelectorAttributeValue(remoteSelected) + '"]').length === 0) {
 								const statusEntry = response?.data?.model_statuses?.[remoteSelected];
-								const isFailedModel = statusEntry && String(statusEntry.status || '') === 'failed';
-								const option = new Option(remoteSelected, remoteSelected, true, true);
-								option.setAttribute('data-model-status', isFailedModel ? 'failed' : 'ok');
-								if (isFailedModel) {
-										option.style.color = '#b32d2e';
+								const isPermanentlyUnavailable = !!(statusEntry && statusEntry.permanent_unavailable);
+								if (!isPermanentlyUnavailable) {
+										const isFailedModel = statusEntry && String(statusEntry.status || '') === 'failed';
+										const option = new Option(remoteSelected, remoteSelected, true, true);
+										option.setAttribute('data-model-status', isFailedModel ? 'failed' : 'ok');
+										if (isFailedModel) {
+												option.style.color = '#b32d2e';
+										}
+										$select.prepend(option);
 								}
-								$select.prepend(option);
 						} else if (remoteSelected) {
 								$select.val(remoteSelected);
 						}
@@ -1854,12 +1903,27 @@ $(document).on('submit', '.geweb-gemini-stores-table-form', function() {
 			applyReferencedDocumentsFilters(jQuery(this).closest('.geweb-referenced-documents-table-form'));
 		});
 
+		$(document).on('click', '.geweb-referenced-documents-search-toggle', function() {
+			const $form = jQuery(this).closest('.geweb-referenced-documents-table-form');
+			if (!$form.length) {
+				return;
+			}
+
+			const isExpanded = String($form.attr('data-search-expanded') || '0') === '1';
+			updateReferencedDocumentsSearchBoxState($form, !isExpanded);
+			if (!isExpanded) {
+				$form.find('input[name="s"]').first().trigger('focus');
+			}
+		});
+
 		$(document).on('input', '.geweb-referenced-documents-table-form input[name="s"]', function() {
 			const input = this;
 			const $form = jQuery(input).closest('.geweb-referenced-documents-table-form');
 			if (!$form.length) {
 				return;
 			}
+
+			updateReferencedDocumentsSearchBoxState($form, true);
 
 			globalThis.clearTimeout(referencedDocumentsFilterTimer);
 			referencedDocumentsFilterTimer = globalThis.setTimeout(function() {
@@ -2993,14 +3057,15 @@ $(document).on('submit', '.geweb-gemini-stores-table-form', function() {
 
 		$(document).on('change', '.geweb-ai-referenced-document-image-mode', function() {
 				const $select = $(this);
-				const $cell = $select.closest('.geweb-ai-index-cell');
+				const $cell = $select.closest('.geweb-ai-index-cell, td');
 				const fileHash = String($select.data('file-hash') || '');
 				const mode = String($select.val() || 'none');
+				const subject = String($select.data('processing-subject') || 'image');
 				const $status = $('#geweb-referenced-documents-status');
 				const messages = {
-						none: 'Disabling image processing...',
-						ocr: 'Enabling OCR for this image...',
-						describe: 'Enabling image description for this image...'
+						none: subject === 'pdf' ? 'Disabling PDF processing...' : 'Disabling image processing...',
+						ocr: subject === 'pdf' ? 'Enabling OCR for this PDF...' : 'Enabling OCR for this image...',
+						describe: subject === 'pdf' ? 'Enabling description for this PDF...' : 'Enabling image description for this image...'
 				};
 				if (!fileHash) return;
 
@@ -3038,16 +3103,19 @@ $(document).on('submit', '.geweb-gemini-stores-table-form', function() {
 								if (response.data.actions_html) {
 										$row.find('td.column-actions').html(response.data.actions_html);
 								}
+								if (typeof response.data.pdf_analysis_html === 'string') {
+										$row.find('td.column-pdf_analysis').html(response.data.pdf_analysis_html);
+								}
 								if (typeof response.data.markdown_cache_html === 'string') {
 										$row.find('td.column-markdown_cache').html(response.data.markdown_cache_html);
 								}
 						}
 
 						if ($status.length) {
-								$status.text(response.data.message || 'Image processing updated.');
+								$status.text(response.data.message || (subject === 'pdf' ? 'PDF processing updated.' : 'Image processing updated.'));
 						}
 				}).fail(function(xhr) {
-						const message = getAjaxErrorMessage(xhr, 'Could not update image processing mode.');
+						const message = getAjaxErrorMessage(xhr, subject === 'pdf' ? 'Could not update PDF processing mode.' : 'Could not update image processing mode.');
 						showCellFeedback($cell, message, true);
 						$select.prop('disabled', false);
 						if ($status.length) {

@@ -23,3 +23,19 @@
     max-width: 100%;
     height: auto;
 }
+
+.geweb-referenced-documents-table-form .geweb-referenced-documents-search-toggle {
+    display: none;
+}
+
+@media (max-width: 782px) {
+    .geweb-referenced-documents-table-form.geweb-referenced-documents-search-ready .geweb-referenced-documents-search-toggle {
+        display: inline-flex;
+        align-items: center;
+        margin: 0 0 8px;
+    }
+
+    .geweb-referenced-documents-table-form .search-box.is-collapsed {
+        display: none;
+    }
+}

@@ -128,6 +128,7 @@ class FrontendAiWorkspaceController {
             'frontend_ai_manage_conversations_url' => current_user_can('manage_options') ? ($this->getTabUrl)('conversations') : '',
             'frontend_ai_manage_documents_url' => current_user_can('manage_options') ? ($this->getTabUrl)('documents') : '',
             'frontend_ai_manage_pages_url' => current_user_can('edit_pages') ? admin_url('edit.php?post_type=page') : '',
+            'frontend_ai_edit_post_url' => current_user_can('edit_pages') ? admin_url('post.php') : '',
             'current_scope_key' => UserScope::getCurrentUserScopeStorageKey(),
             'is_frontend_ai_page' => FrontendAiContext::isFrontendAiPageRequest($this->shortcodePageViewActive),
             'frontend_ai_conversation_id' => FrontendAiContext::getRequestedFrontendConversationId(),

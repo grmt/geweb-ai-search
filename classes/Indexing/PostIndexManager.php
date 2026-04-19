@@ -57,6 +57,7 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
                     add_filter('manage_upload_columns', [$this, 'addAdminColumns']);
                     add_filter('manage_upload_sortable_columns', [$this, 'addSortableAdminColumns']);
                     add_action('manage_media_custom_column', [$this, 'renderIndexedColumn'], 10, 2);
+                    add_action('manage_media_custom_column', [$this, 'renderDuplicatesColumn'], 10, 2);
                     add_action('manage_media_custom_column', [$this, 'renderMarkdownCacheColumn'], 10, 2);
                     add_action('manage_media_custom_column', [$this, 'renderIdColumn'], 10, 2);
                     continue;
@@ -71,7 +72,10 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
     }
 
     public function addAdminColumns(array $columns): array {
+        global $typenow;
+
         $updated = [];
+        $isAttachmentScreen = (string) $typenow === 'attachment';
 
         foreach ($columns as $key => $label) {
             $updated[$key] = $label;
@@ -79,6 +83,9 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
             if ($key === 'title') {
                 $updated['geweb_post_id'] = 'ID';
                 $updated['geweb_ai_indexed'] = 'AI Indexed';
+                if ($isAttachmentScreen) {
+                    $updated['geweb_ai_duplicates'] = 'Duplicates';
+                }
                 $updated['geweb_ai_markdown_cache'] = 'MD Cache';
                 continue;
             }
@@ -93,6 +100,9 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
         }
         if (!isset($updated['geweb_ai_indexed'])) {
             $updated['geweb_ai_indexed'] = 'AI Indexed';
+        }
+        if ($isAttachmentScreen && !isset($updated['geweb_ai_duplicates'])) {
+            $updated['geweb_ai_duplicates'] = 'Duplicates';
         }
         if (!isset($updated['geweb_ai_markdown_cache'])) {
             $updated['geweb_ai_markdown_cache'] = 'MD Cache';
@@ -122,9 +132,34 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
         }
     }
 
+    public function renderDuplicatesColumn(string $column, int $postId): void {
+        if ($column !== 'geweb_ai_duplicates') {
+            return;
+        }
+
+        if (get_post_type($postId) !== 'attachment') {
+            echo '—';
+            return;
+        }
+
+        echo wp_kses((new FileDuplicateHashIndex())->getAttachmentDuplicateColumnHtml($postId), [
+            'strong' => ['style' => true],
+            'div' => [],
+            'small' => ['style' => true],
+            'br' => [],
+            'a' => ['href' => true],
+            'span' => ['style' => true],
+        ]);
+    }
+
     public function addSortableAdminColumns(array $columns): array {
+        global $typenow;
+
         $columns['geweb_post_id'] = 'ID';
         $columns['geweb_ai_indexed'] = 'geweb_ai_indexed';
+        if ((string) $typenow === 'attachment') {
+            $columns['geweb_ai_duplicates'] = 'geweb_ai_duplicates';
+        }
         $columns['geweb_ai_markdown_cache'] = 'geweb_ai_markdown_cache';
         $columns['geweb_last_modified'] = 'modified';
         return $columns;
@@ -625,6 +660,7 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
         }
 
         $selected = sanitize_key(wp_unslash($_GET['geweb_ai_index_status'] ?? ''));
+        $selectedDuplicates = sanitize_key(wp_unslash($_GET['geweb_ai_duplicates_filter'] ?? ''));
         ?>
         <select name="geweb_ai_index_status">
             <option value="">All AI statuses</option>
@@ -635,6 +671,13 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
             <option value="error" <?php selected($selected, 'error'); ?>>Index error</option>
             <option value="excluded" <?php selected($selected, 'excluded'); ?>>Excluded</option>
         </select>
+        <?php if ((string) $typenow === 'attachment') : ?>
+            <select name="geweb_ai_duplicates_filter">
+                <option value="">All duplicate states</option>
+                <option value="duplicates" <?php selected($selectedDuplicates, 'duplicates'); ?>>Duplicates only</option>
+                <option value="unique" <?php selected($selectedDuplicates, 'unique'); ?>>Unique only</option>
+            </select>
+        <?php endif; ?>
         <?php
     }
 
@@ -642,14 +685,23 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
         $postType = $query->get('post_type');
         $canFilter = is_admin() && $query->is_main_query() && !is_array($postType) && $this->isManagedPostType((string) $postType);
         $status = sanitize_key(wp_unslash($_GET['geweb_ai_index_status'] ?? ''));
+        $duplicateFilter = sanitize_key(wp_unslash($_GET['geweb_ai_duplicates_filter'] ?? ''));
 
         if ($canFilter && $status !== '') {
             if ($status === 'out_of_sync') {
                 $query->set('post__in', $this->getOutOfSyncPostIds((string) $postType));
-                return;
+            } else {
+                $query->set('meta_query', $this->buildStatusFilterMetaQuery($status));
             }
+        }
 
-            $query->set('meta_query', $this->buildStatusFilterMetaQuery($status));
+        if ($canFilter && (string) $postType === 'attachment' && $duplicateFilter !== '') {
+            $duplicateIds = array_keys((new FileDuplicateHashIndex())->getAttachmentDuplicateCounts());
+            if ($duplicateFilter === 'duplicates') {
+                $query->set('post__in', empty($duplicateIds) ? [0] : array_map('intval', $duplicateIds));
+            } elseif ($duplicateFilter === 'unique') {
+                $query->set('post__not_in', array_map('intval', $duplicateIds));
+            }
         }
     }
 
@@ -905,6 +957,32 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
         } elseif ($orderby === 'geweb_ai_indexed') {
             $query->set('meta_key', self::META_STATUS);
             $query->set('orderby', 'meta_value');
+        } elseif ($orderby === 'geweb_ai_duplicates' && (string) $postType === 'attachment') {
+            $counts = (new FileDuplicateHashIndex())->getAttachmentDuplicateCounts();
+            $order = strtolower((string) $query->get('order')) === 'asc' ? 'asc' : 'desc';
+            $attachmentIds = get_posts([
+                'post_type' => 'attachment',
+                'post_status' => 'inherit',
+                'numberposts' => -1,
+                'fields' => 'ids',
+            ]);
+
+            if (is_array($attachmentIds)) {
+                usort($attachmentIds, static function ($left, $right) use ($counts, $order): int {
+                    $leftId = (int) $left;
+                    $rightId = (int) $right;
+                    $leftCount = (int) ($counts[$leftId] ?? 0);
+                    $rightCount = (int) ($counts[$rightId] ?? 0);
+                    if ($leftCount === $rightCount) {
+                        return $order === 'asc' ? ($leftId <=> $rightId) : ($rightId <=> $leftId);
+                    }
+
+                    return $order === 'asc' ? ($leftCount <=> $rightCount) : ($rightCount <=> $leftCount);
+                });
+
+                $query->set('post__in', array_map('intval', $attachmentIds));
+                $query->set('orderby', 'post__in');
+            }
         } elseif ($orderby === 'ID') {
             $query->set('orderby', 'ID');
         } elseif ($orderby === 'modified') {

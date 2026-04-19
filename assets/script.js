@@ -13,7 +13,46 @@ function getLocalConversationArchiveLimit() {
 }
 
 function normalizeInlineMatchText(text) {
-	return String(text || '').replaceAll(/\s+/g, ' ').trim().toLowerCase();
+	return buildNormalizedInlineMatchData(text).text;
+}
+
+function isInlineMatchWordCharacter(character) {
+	return /[\p{L}\p{N}]/u.test(character) || ['€', '$', '%'].includes(character);
+}
+
+function buildNormalizedInlineMatchData(text) {
+	const sourceText = String(text || '');
+	let normalizedText = '';
+	const normalizedToRawIndex = [];
+	let previousWasSpace = false;
+
+	for (let index = 0; index < sourceText.length; index += 1) {
+		const character = sourceText[index];
+		if (isInlineMatchWordCharacter(character)) {
+			normalizedText += character.toLowerCase();
+			normalizedToRawIndex.push(index);
+			previousWasSpace = false;
+			continue;
+		}
+
+		if (!normalizedText.length || previousWasSpace) {
+			continue;
+		}
+
+		normalizedText += ' ';
+		normalizedToRawIndex.push(index);
+		previousWasSpace = true;
+	}
+
+	normalizedText = normalizedText.trimEnd();
+	while (normalizedToRawIndex.length > normalizedText.length) {
+		normalizedToRawIndex.pop();
+	}
+
+	return {
+		text: normalizedText,
+		indexMap: normalizedToRawIndex,
+	};
 }
 
 function buildInlineMatchCandidates(phrase) {
@@ -49,32 +88,9 @@ function findInlineMatchRangeInText(rawText, phrase) {
 		return null;
 	}
 
-	let normalizedText = '';
-	const normalizedToRawIndex = [];
-	let previousWasSpace = false;
-
-	for (let index = 0; index < sourceText.length; index += 1) {
-		const character = sourceText[index];
-		if (/\s/.test(character)) {
-			if (!normalizedText.length || previousWasSpace) {
-				continue;
-			}
-			normalizedText += ' ';
-			normalizedToRawIndex.push(index);
-			previousWasSpace = true;
-			continue;
-		}
-
-		normalizedText += character.toLowerCase();
-		normalizedToRawIndex.push(index);
-		previousWasSpace = false;
-	}
-
-	normalizedText = normalizedText.trimEnd();
-	while (normalizedToRawIndex.length > normalizedText.length) {
-		normalizedToRawIndex.pop();
-	}
-
+	const normalizedSource = buildNormalizedInlineMatchData(sourceText);
+	const normalizedText = normalizedSource.text;
+	const normalizedToRawIndex = normalizedSource.indexMap;
 	const normalizedPhrase = normalizeInlineMatchText(targetPhrase);
 	if (!normalizedPhrase) {
 		return null;
@@ -1211,15 +1227,13 @@ jQuery(document).ready(function($) {
             return;
         }
 
-        const workspace = this.getWorkspaceElement();
-        if (this.isMobileWorkspaceNavigationActive(workspace)) {
-            $searchPanel.toggleClass('is-hidden');
-            if (!$searchPanel.hasClass('is-hidden')) {
-                $searchPanel.removeClass('is-collapsed');
-            }
-        } else {
-            $searchPanel.toggleClass('is-collapsed');
+        const willHide = !$searchPanel.hasClass('is-hidden');
+        $searchPanel.toggleClass('is-hidden', willHide);
+
+        if (!willHide) {
+            $searchPanel.removeClass('is-collapsed');
         }
+
         this.syncPanelCollapseButtons();
     },
 
@@ -1434,13 +1448,14 @@ jQuery(document).ready(function($) {
 	                    return;
 	                }
 	                workspace.classList.toggle('is-right-collapsed');
-	            } else if (target === 'search') {
-	                $searchPanel.toggleClass('is-collapsed');
-	            }
+            } else if (target === 'search') {
+                $searchPanel.removeClass('is-hidden');
+                $searchPanel.toggleClass('is-collapsed');
+            }
 
-	            GewebModal.syncPanelCollapseButtons();
-	        });
-	    },
+            GewebModal.syncPanelCollapseButtons();
+        });
+    },
 
 	    syncPanelCollapseButtons() {
 	        const workspace = this.ai ? this.ai.querySelector('.geweb-ai-workspace') : null;
@@ -1449,7 +1464,9 @@ jQuery(document).ready(function($) {
 	        const mobilePane = workspace?.dataset.mobilePane || 'main';
 	        const mobileNavigationActive = this.isMobileWorkspaceNavigationActive(workspace);
 	        const $searchPanel = $('.geweb-ai-search-results-panel');
-	        const searchCollapsed = $searchPanel.hasClass('is-collapsed') || $searchPanel.hasClass('is-hidden');
+	        const searchHidden = $searchPanel.hasClass('is-hidden');
+	        const searchCollapsed = $searchPanel.hasClass('is-collapsed');
+	        const searchExpanded = !searchHidden && !searchCollapsed;
 
 	        const applyButtonState = ($button, expanded, icon, label) => {
 	            $button.attr('aria-expanded', expanded ? 'true' : 'false');
@@ -1476,10 +1493,18 @@ jQuery(document).ready(function($) {
 	        );
 	        applyButtonState(
 	            $(this.ai).find('.geweb-ai-panel-collapse[data-panel-toggle="search"]'),
-	            !searchCollapsed,
-	            searchCollapsed ? '▾' : '▴',
-	            searchCollapsed ? 'Show classic search results' : 'Hide classic search results'
+	            searchExpanded,
+	            searchExpanded ? '▴' : '▾',
+	            searchExpanded ? 'Hide classic search results' : 'Show classic search results'
 	        );
+	        const $toolbarSearchButton = $(this.ai).find('#geweb-ai-toggle-search-panel');
+	        if ($toolbarSearchButton.length) {
+	            const toolbarLabel = searchHidden ? 'Show classic search results' : 'Hide classic search results';
+	            $toolbarSearchButton.attr('aria-expanded', searchHidden ? 'false' : 'true');
+	            $toolbarSearchButton.attr('aria-label', toolbarLabel);
+	            $toolbarSearchButton.attr('title', toolbarLabel);
+	            $toolbarSearchButton.toggleClass('is-active', !searchHidden);
+	        }
 	        this.syncMobilePaneFooter(mobilePane);
 	    },
 
@@ -1709,23 +1734,62 @@ jQuery(document).ready(function($) {
 		        this.resetTemporarySettings();
 		        this.updateTemporarySettingsAvailability(false);
 		        this.syncModelSelectorWidth();
+		        this.normalizeWorkspaceControlTitles();
 		        void this.bootstrap();
 		    },
 
-	    async bootstrap() {
-	        this.hydrateFromStoredChatState();
-	        await this.loadConversationArchive();
+		    async bootstrap() {
+		        this.hydrateFromStoredChatState();
+		        await this.loadConversationArchive();
 	        try {
 	            await this.applyFrontendRequestState();
 	        } catch (error) {
 	            console.debug('Applying frontend request state failed.', error);
 	        }
 	        this.renderConversationOverview();
-	        this.renderConversationSummary();
-	        this.renderSources();
-	        this.syncModelSelectorWidth();
-	        this.toggleSubmitButton();
-	        this.syncStoredChatState();
+		        this.renderConversationSummary();
+		        this.renderSources();
+		        this.syncModelSelectorWidth();
+		        this.normalizeWorkspaceControlTitles();
+		        this.toggleSubmitButton();
+		        this.syncStoredChatState();
+		    },
+
+	    normalizeWorkspaceControlTitles(scope = null) {
+	        const root = scope
+	            ? $(scope)
+	            : (this.ai ? $(this.ai) : $());
+	        if (!root.length) {
+	            return;
+	        }
+
+	        const inlineLabelSelectors = [
+	            '.geweb-ai-message-action-label',
+	            '.geweb-ai-overview-action-label',
+	            '.geweb-ai-page-toolbar-button-label',
+	            '.geweb-ai-trigger-label',
+	        ].join(', ');
+
+	        const controlSelectors = [
+	            'button',
+	            'a.button',
+	            '.geweb-ai-source-details-link',
+	        ].join(', ');
+
+	        root.find(controlSelectors).each((_, element) => {
+	            const $control = $(element);
+	            const ariaLabel = String($control.attr('aria-label') || '').trim();
+	            const hasInlineLabel = $control.find(inlineLabelSelectors).length > 0;
+
+	            if (hasInlineLabel) {
+	                $control.removeAttr('title');
+	                return;
+	            }
+
+	            if (!$control.attr('title') && ariaLabel) {
+	                $control.attr('title', ariaLabel);
+	            }
+	        });
 	    },
 
 	    isBackForwardNavigation(event) {
@@ -2785,8 +2849,11 @@ jQuery(document).ready(function($) {
 		    },
 
 		    handleDocumentClick(event) {
-		        this.hideFootnotePreview();
 		        const $target = $(event.target);
+		        const clickedInsideFootnotePreview = $target.closest('.geweb-ai-footnote-preview, .geweb-ai-footnote-ref').length > 0;
+		        if (!clickedInsideFootnotePreview) {
+		            this.hideFootnotePreview();
+		        }
 		        const clickedInsideInfoPopover = $target.closest('.geweb-ai-message-info-popover, .geweb-ai-message-info-toggle').length > 0;
 		        if (!clickedInsideInfoPopover) {
 		            this.hideMessageInfoPopover();
@@ -3010,9 +3077,6 @@ jQuery(document).ready(function($) {
 		            responseMeta: responseMeta,
 		            includeReuseHint: false,
 		        });
-		        if (aiTooltip) {
-		            $container.attr('title', aiTooltip);
-		        }
 		        const sourceFootnoteMap = this.getResponseSourceFootnoteMap(text.sources || [], text.answer || '', responseMeta);
 		        const answerWithFootnotes = this.decorateAnswerWithGroundingFootnotes(String(text.answer || ''), responseMeta, sourceFootnoteMap, text.sources || []);
 		        const sanitizedAnswer = this.sanitizeAnswer(answerWithFootnotes);
@@ -3042,19 +3106,19 @@ jQuery(document).ready(function($) {
 		                event.stopPropagation();
 		                this.toggleResponseDetails($container);
 		                $detailsButton.attr('aria-expanded', 'false');
-		                $detailsButton.attr('title', t('showDetails', 'Show details'));
+		                $detailsButton.attr('aria-label', t('showDetails', 'Show details'));
 		                $detailsButton.find('.geweb-ai-message-action-label').text(t('showDetails', 'Show details'));
 		            });
 		            const $detailsButton = $('<button type="button" class="geweb-ai-message-details-toggle"></button>');
 		            $detailsButton.attr('aria-expanded', 'false');
-		            $detailsButton.attr('title', t('showDetails', 'Show details'));
+		            $detailsButton.attr('aria-label', t('showDetails', 'Show details'));
 		            $detailsButton.append($('<span class="geweb-ai-message-action-icon geweb-ai-message-action-icon--details" aria-hidden="true">ⓘ</span>'));
 		            $detailsButton.append($('<span class="geweb-ai-message-action-label"></span>').text(t('showDetails', 'Show details')));
 		            $detailsButton.on('click', () => {
 		                this.toggleResponseDetails($container);
 		                const expanded = $details.hasClass('is-open');
 		                $detailsButton.attr('aria-expanded', expanded ? 'true' : 'false');
-		                $detailsButton.attr('title', expanded ? t('hideDetails', 'Hide details') : t('showDetails', 'Show details'));
+		                $detailsButton.attr('aria-label', expanded ? t('hideDetails', 'Hide details') : t('showDetails', 'Show details'));
 		                $detailsButton.find('.geweb-ai-message-action-label').text(expanded ? t('hideDetails', 'Hide details') : t('showDetails', 'Show details'));
 		            });
 		            $messageActions.append($detailsButton);
@@ -3067,6 +3131,7 @@ jQuery(document).ready(function($) {
 		        if ($details) {
 		            $container.append($details);
 		        }
+		        this.normalizeWorkspaceControlTitles($container);
 
 		        this.$answerBox.append($container);
 		        this.scrollElementIntoView($container.get(0));
@@ -3156,7 +3221,6 @@ jQuery(document).ready(function($) {
 	        const $button = $(`<button type="button" class="${buttonClassName}"></button>`);
 	        const infoLabel = t('messageInfo', 'Message info');
 	        $button.attr('aria-label', infoLabel);
-	        $button.attr('title', infoLabel);
 	        $button.append($('<span class="geweb-ai-message-action-icon geweb-ai-message-action-icon--details" aria-hidden="true">ⓘ</span>'));
 	        if (showActionLabel) {
 	            $button.append($('<span class="geweb-ai-message-action-label"></span>').text(infoLabel));
@@ -3256,19 +3320,16 @@ jQuery(document).ready(function($) {
 
 	        const $button = $('<button type="button" class="geweb-ai-copy-answer" aria-live="polite"></button>');
 	        $button.attr('aria-label', t('copyAnswer', 'Copy answer'));
-	        $button.attr('title', t('copyAnswer', 'Copy answer'));
 	        $button.append($('<span class="geweb-ai-copy-answer-icon" aria-hidden="true">⧉</span>'));
 	        $button.append($('<span class="geweb-ai-message-action-label"></span>').text(t('copyAnswer', 'Copy answer')));
 	        $button.on('click', async () => {
 	            const copied = await this.copyTextToClipboard(plainText);
 	            $button.toggleClass('is-copied', copied);
 	            $button.attr('aria-label', copied ? t('copied', 'Copied') : t('copyFailed', 'Could not copy'));
-	            $button.attr('title', copied ? t('copied', 'Copied') : t('copyFailed', 'Could not copy'));
 
 	            globalThis.setTimeout(() => {
 	                $button.removeClass('is-copied');
 	                $button.attr('aria-label', t('copyAnswer', 'Copy answer'));
-	                $button.attr('title', t('copyAnswer', 'Copy answer'));
 	            }, 1600);
 	        });
 
@@ -3310,10 +3371,19 @@ jQuery(document).ready(function($) {
 	        $footnotes.on('click', (event) => {
 	            event.preventDefault();
 	            event.stopPropagation();
-	            const footnote = Number($(event.currentTarget).attr('data-footnote') || 0);
+	            const $footnote = $(event.currentTarget);
+	            const footnote = Number($footnote.attr('data-footnote') || 0);
 	            if (footnote > 0) {
-	                this.showFootnotePreview($(event.currentTarget), footnote);
-	                this.highlightSourceReference(footnote, { mode: 'active' });
+	                const isSamePreviewOpen = this.$footnotePreview?.hasClass('is-visible')
+	                    && Number(this.$footnotePreview.attr('data-footnote') || 0) === footnote;
+	                if (this.shouldUseTapPreviewForFootnotes() && isSamePreviewOpen) {
+	                    this.highlightSourceReference(footnote, { mode: 'active' });
+	                    this.hideFootnotePreview();
+	                    return;
+	                }
+
+	                this.showFootnotePreview($footnote, footnote);
+	                this.highlightSourceReference(footnote, { mode: this.shouldUseTapPreviewForFootnotes() ? 'preview' : 'active' });
 	            }
 	        });
 
@@ -3324,12 +3394,18 @@ jQuery(document).ready(function($) {
 
 	            event.preventDefault();
 	            event.stopPropagation();
-	            const footnote = Number($(event.currentTarget).attr('data-footnote') || 0);
+	            const $footnote = $(event.currentTarget);
+	            const footnote = Number($footnote.attr('data-footnote') || 0);
 	            if (footnote > 0) {
-	                this.showFootnotePreview($(event.currentTarget), footnote);
+	                this.showFootnotePreview($footnote, footnote);
 	                this.highlightSourceReference(footnote, { mode: 'active' });
 	            }
 	        });
+	    },
+
+	    shouldUseTapPreviewForFootnotes() {
+	        return !!globalThis.matchMedia
+	            && globalThis.matchMedia('(hover: none) and (pointer: coarse)').matches;
 	    },
 
 	    getSourceReferenceItem(footnote) {
@@ -3357,22 +3433,63 @@ jQuery(document).ready(function($) {
 	        }
 
 	        if (!this.$footnotePreview?.length) {
-	            this.$footnotePreview = $('<div class="geweb-ai-footnote-preview" role="tooltip"></div>');
+	            this.$footnotePreview = $('<div class="geweb-ai-footnote-preview" role="dialog" tabindex="0"></div>');
+	            this.$footnotePreview.on('click', (event) => {
+	                if ($(event.target).closest('.geweb-ai-footnote-preview-close').length) {
+	                    return;
+	                }
+
+	                event.preventDefault();
+	                event.stopPropagation();
+	                const activeFootnote = Number(this.$footnotePreview.attr('data-footnote') || 0);
+	                if (activeFootnote > 0) {
+	                    this.highlightSourceReference(activeFootnote, { mode: 'active' });
+	                    this.hideFootnotePreview();
+	                }
+	            });
+	            this.$footnotePreview.on('keydown', (event) => {
+	                if (event.key !== 'Enter' && event.key !== ' ') {
+	                    return;
+	                }
+
+	                event.preventDefault();
+	                event.stopPropagation();
+	                const activeFootnote = Number(this.$footnotePreview.attr('data-footnote') || 0);
+	                if (activeFootnote > 0) {
+	                    this.highlightSourceReference(activeFootnote, { mode: 'active' });
+	                    this.hideFootnotePreview();
+	                }
+	            });
+	            this.$footnotePreview.on('click', '.geweb-ai-footnote-preview-close', (event) => {
+	                event.preventDefault();
+	                event.stopPropagation();
+	                this.clearAllSourceReferencePreviews?.();
+	                this.hideFootnotePreview();
+	            });
 	            $('body').append(this.$footnotePreview);
 	        }
 
 	        this.$footnotePreview.empty();
+	        this.$footnotePreview.attr('data-footnote', String(footnote));
+	        this.$footnotePreview.attr('aria-label', `Open source reference ${footnote}`);
+	        const $header = $('<div class="geweb-ai-footnote-preview-header"></div>');
+	        const $body = $('<div class="geweb-ai-footnote-preview-body"></div>');
+	        const $closeButton = $('<button type="button" class="geweb-ai-footnote-preview-close" aria-label="Close source preview" title="Close source preview"></button>');
+	        $closeButton.append($('<span aria-hidden="true">×</span>'));
+	        $header.append($closeButton);
+	        this.$footnotePreview.append($header, $body);
+	        this.$footnotePreview.toggleClass('is-touch-preview', this.shouldUseTapPreviewForFootnotes());
 	        if (title) {
-	            this.$footnotePreview.append($('<div class="geweb-ai-footnote-preview-title"></div>').text(title));
+	            $body.append($('<div class="geweb-ai-footnote-preview-title"></div>').text(title));
 	        }
 	        if (path) {
-	            this.$footnotePreview.append($('<div class="geweb-ai-footnote-preview-meta"></div>').text(path));
+	            $body.append($('<div class="geweb-ai-footnote-preview-meta"></div>').text(path));
 	        }
 	        if (contextCount > 1) {
-	            this.$footnotePreview.append($('<div class="geweb-ai-footnote-preview-meta"></div>').text(`${contextCount} contexts`));
+	            $body.append($('<div class="geweb-ai-footnote-preview-meta"></div>').text(`${contextCount} contexts`));
 	        }
 	        if (snippet) {
-	            this.$footnotePreview.append($('<div class="geweb-ai-footnote-preview-snippet"></div>').text(snippet));
+	            $body.append($('<div class="geweb-ai-footnote-preview-snippet"></div>').text(snippet));
 	        }
 
 	        const rect = $footnote.get(0).getBoundingClientRect();
@@ -3387,6 +3504,7 @@ jQuery(document).ready(function($) {
 	    hideFootnotePreview() {
 	        if (this.$footnotePreview?.length) {
 	            this.$footnotePreview.removeClass('is-visible');
+	            this.$footnotePreview.removeAttr('data-footnote');
 	        }
 	    },
 
@@ -3422,12 +3540,10 @@ jQuery(document).ready(function($) {
 	        const copied = await this.copyTextToClipboard(text);
 	        this.$copyConversationBtn.toggleClass('is-copied', copied);
 	        this.$copyConversationBtn.attr('aria-label', copied ? t('copied', 'Copied') : t('copyFailed', 'Could not copy'));
-	        this.$copyConversationBtn.attr('title', copied ? t('copied', 'Copied') : t('copyFailed', 'Could not copy'));
 
 	        globalThis.setTimeout(() => {
 	            this.$copyConversationBtn.removeClass('is-copied');
 	            this.$copyConversationBtn.attr('aria-label', t('copyConversation', 'Copy chat'));
-	            this.$copyConversationBtn.attr('title', t('copyConversation', 'Copy chat'));
 	        }, 1600);
 	    },
 
@@ -3536,21 +3652,13 @@ jQuery(document).ready(function($) {
 
 	    async loadConversationArchive() {
 	        try {
-	            const existingArchiveById = new Map(this.conversationArchive.map((entry) => [entry.id, entry]));
 	            const response = await this.requestFrontendConversation('geweb_get_frontend_conversations', {});
 	            const conversations = Array.isArray(response?.data?.conversations)
 	                ? response.data.conversations
 	                : [];
 	            this.conversationArchive = conversations
 	                .filter((entry) => entry && typeof entry === 'object')
-	                .map((entry) => {
-	                    const normalizedEntry = this.normalizeStoredConversation(entry);
-	                    const existingEntry = existingArchiveById.get(normalizedEntry.id);
-	                    if (existingEntry?.messages?.length) {
-	                        normalizedEntry.messages = existingEntry.messages;
-	                    }
-	                    return normalizedEntry;
-	                });
+	                .map((entry) => this.normalizeStoredConversation(entry));
 	        } catch (error) {
 	            console.debug('Load conversation archive failed.', error);
 	        }
@@ -3572,6 +3680,7 @@ jQuery(document).ready(function($) {
 	        this.$conversationOverview.append($('<div class="geweb-ai-overview-list"></div>'));
 
 	        this.renderMoreConversationOverviewItems();
+	        this.normalizeWorkspaceControlTitles(this.$conversationOverview);
 	    },
 
 	    renderMoreConversationOverviewItems() {
@@ -3622,6 +3731,7 @@ jQuery(document).ready(function($) {
 	        });
 
 	        this.conversationOverviewRenderedCount += nextEntries.length;
+	        this.normalizeWorkspaceControlTitles($overviewList);
 	    },
 
 	    handleConversationOverviewScroll() {
@@ -3808,8 +3918,8 @@ jQuery(document).ready(function($) {
 	            ? storedState.conversationHistory
 	                .filter((entry) => entry && typeof entry === 'object')
 	                .map((entry) => ({
-	                    role: entry.role === 'model' ? 'model' : 'user',
-	                    content: String(entry.content || ''),
+	                    role: ['model', 'assistant', 'ai'].includes(String(entry.role || '').trim()) ? 'model' : 'user',
+	                    content: String(entry.content ?? entry.answer ?? entry.text ?? entry.message ?? ''),
 	                    sources: Array.isArray(entry.sources) ? entry.sources : [],
 	                    meta: entry.meta && typeof entry.meta === 'object' ? entry.meta : {},
 	                    created_at: this.normalizeEpochSeconds(entry.created_at ?? entry.createdAt)
@@ -3848,8 +3958,8 @@ jQuery(document).ready(function($) {
 	        const normalizedMessages = messages
 	            .filter((item) => item && typeof item === 'object')
 	            .map((item) => ({
-	                role: item.role === 'model' ? 'model' : 'user',
-	                content: String(item.content || ''),
+	                role: ['model', 'assistant', 'ai'].includes(String(item.role || '').trim()) ? 'model' : 'user',
+	                content: String(item.content ?? item.answer ?? item.text ?? item.message ?? ''),
 	                sources: Array.isArray(item.sources) ? item.sources : [],
 	                meta: item.meta && typeof item.meta === 'object' ? item.meta : {},
 	                created_at: this.normalizeEpochSeconds(item.created_at ?? item.createdAt)
@@ -3998,7 +4108,10 @@ jQuery(document).ready(function($) {
 	                conversation_id: conversationId
 	            });
 	            if (!(response?.success && response?.data?.conversation)) {
-	                if (!cachedEntry?.messages?.length) {
+	                const hasRenderableCachedConversation = Array.isArray(cachedEntry?.messages)
+	                    && cachedEntry.messages.length > 1
+	                    && cachedEntry.messages.some((item) => item?.role === 'model');
+	                if (!hasRenderableCachedConversation) {
 	                    this.conversationArchive = this.conversationArchive.filter((item) => item.id !== conversationId);
 	                    this.renderConversationOverview();
 	                    return false;
@@ -4012,7 +4125,10 @@ jQuery(document).ready(function($) {
 	            }
 	        } catch (error) {
 	            console.debug('Load conversation failed.', error);
-	            if (!cachedEntry?.messages?.length) {
+	            const hasRenderableCachedConversation = Array.isArray(cachedEntry?.messages)
+	                && cachedEntry.messages.length > 1
+	                && cachedEntry.messages.some((item) => item?.role === 'model');
+	            if (!hasRenderableCachedConversation) {
 	                this.conversationArchive = this.conversationArchive.filter((item) => item.id !== conversationId);
 	                this.renderConversationOverview();
 	                this.renderConversationSummary();

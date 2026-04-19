@@ -67,7 +67,13 @@ class AdminPageConfigBuilder {
 
         $models = $provider->getModels();
         $selectedModel = $provider->getModel();
-        if ($selectedModel !== '' && !in_array($selectedModel, $models, true) && ($this->supportsFileSearchModel)($selectedModel)) {
+        $modelStatuses = $provider->getModelStatuses();
+        if (
+            $selectedModel !== ''
+            && !in_array($selectedModel, $models, true)
+            && ($this->supportsFileSearchModel)($selectedModel)
+            && !$this->isPermanentlyUnavailableModel($selectedModel, $modelStatuses)
+        ) {
             array_unshift($models, $selectedModel);
             $models = array_values(array_unique($models));
         }
@@ -75,7 +81,6 @@ class AdminPageConfigBuilder {
         $defaultModel = $provider->getDefaultModel($models);
         $latestModelHints = $this->buildLatestModelHints($models);
         $officialLatestAliases = $this->buildOfficialLatestAliases();
-        $modelStatuses = $provider->getModelStatuses();
         $workingModelHints = $this->buildWorkingModelHints($models, $modelStatuses);
         $connectionStatus = get_option('geweb_aisearch_connection_status', []);
         $hasValidSavedApiKey = is_array($connectionStatus) && (($connectionStatus['status'] ?? '') === 'ok');
@@ -363,5 +368,13 @@ class AdminPageConfigBuilder {
             str_contains($model, 'preview') ? 0 : 1,
             str_contains($model, 'lite') ? 0 : 1,
         ];
+    }
+
+    /**
+     * @param array<string,mixed> $modelStatuses
+     */
+    private function isPermanentlyUnavailableModel(string $model, array $modelStatuses): bool {
+        $entry = $modelStatuses[$model] ?? null;
+        return is_array($entry) && !empty($entry['permanent_unavailable']);
     }
 }
