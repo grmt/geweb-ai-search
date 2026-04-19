@@ -82,6 +82,9 @@
     -webkit-appearance: none !important;
     appearance: none !important;
 }
+.geweb-ai-page-toolbar-button--menu {
+    display: none !important;
+}
 .geweb-ai-page-toolbar-button,
 .geweb-ai-page-toolbar-button:visited,
 .geweb-ai-page-toolbar-button:active,
@@ -290,6 +293,28 @@
 .geweb-ai-search-results-panel.is-hidden {
     display: none;
 }
+.geweb-ai-inline-search-form {
+    margin-bottom: 14px;
+    padding: 10px 12px;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 10px;
+    background: rgba(248, 250, 252, 0.92);
+}
+.geweb-ai-inline-search-form .geweb-ai-search-input {
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 40px;
+    padding: 0 12px;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 8px;
+    background: #fff;
+}
+.geweb-ai-inline-search-submit {
+    flex: 0 0 auto;
+    min-height: 40px !important;
+    padding: 0 14px !important;
+    border-radius: 8px !important;
+}
 @media only screen and (max-width: 767px) {
     .geweb-aisearch-modal-window--page .geweb-ai-search-results-content {
         max-height: min(36vh, 320px);
@@ -298,6 +323,10 @@
         position: sticky;
         top: 0;
         z-index: 4;
+    }
+    .geweb-ai-inline-search-form {
+        margin-bottom: 10px;
+        padding: 8px;
     }
 }
 .geweb-ai-page .geweb-ai-workspace-search-input.geweb-ai-search-input--compact-placeholder::placeholder {

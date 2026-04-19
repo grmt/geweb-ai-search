@@ -102,6 +102,8 @@ class Gemini implements AIProviderInterface {
     private const DEFAULT_SUMMARY_TIMEOUT_SECONDS = 12;
     private const DEFAULT_UPLOAD_OPERATION_TIMEOUT_SECONDS = 300;
     private const DEFAULT_UPLOAD_OPERATION_POLL_INTERVAL_MS = 5000;
+    private const GENERATE_TIMEOUT_BACKOFF_OPTION = 'geweb_aisearch_gemini_generate_timeout_backoff';
+    private const GENERATE_TIMEOUT_BACKOFF_TTL_SECONDS = 3600;
     private const MAX_UPLOAD_FILE_BYTES = 104857600;
     private const DEFAULT_OCR_MODEL = 'gemini-2.5-flash';
     private const STALE_FAILED_MODEL_RETENTION_SECONDS = WEEK_IN_SECONDS;
@@ -1221,6 +1223,8 @@ class Gemini implements AIProviderInterface {
         }
 
         $requestModel = is_string($model) && $model !== '' ? $model : $this->model;
+        $latestQuestion = $this->extractLatestUserQuestion($messages);
+        $timeoutSeconds = $this->getSearchTimeoutSecondsForQuestion($latestQuestion);
 
         // Build request body
         $promptDescriptor = $this->getPromptDescriptor($requestModel, $promptOverride);
@@ -1236,13 +1240,17 @@ class Gemini implements AIProviderInterface {
         );
 
         try {
-            $result = $this->executeSearchRequest($requestModel, $body);
+            $result = $this->executeSearchRequest($requestModel, $body, $timeoutSeconds);
             $responseText = $this->extractSearchResponseText($result);
             $meta = $this->buildResponseMeta($result, $requestModel, $promptDescriptor);
 
+            $this->clearGenerateTimeoutBackoffForQuestion($latestQuestion);
             $this->recordModelStatus($requestModel, 'ok');
             return $this->formatSearchResponse($responseText, $meta, $requestModel);
         } catch (\Exception $e) {
+            if ($this->isTimeoutException($e)) {
+                $this->recordGenerateTimeoutBackoff($latestQuestion, $timeoutSeconds);
+            }
             $this->recordModelStatus($requestModel, 'failed', $e->getMessage());
             throw $e;
         }
@@ -1253,9 +1261,9 @@ class Gemini implements AIProviderInterface {
      * @param array<string,mixed> $body
      * @return array<string,mixed>
      */
-    private function executeSearchRequest(string $model, array $body): array {
+    private function executeSearchRequest(string $model, array $body, int $timeoutSeconds): array {
         $url = self::API_BASE . '/models/' . $model . ':generateContent';
-        return $this->makeRequest($url, $body, 'POST', $this->getHttpTimeoutSeconds());
+        return $this->makeRequest($url, $body, 'POST', $timeoutSeconds);
     }
 
     /**
@@ -1600,6 +1608,112 @@ class Gemini implements AIProviderInterface {
     private function getHttpTimeoutSeconds(): int {
         $timeout = apply_filters('geweb_aisearch_gemini_http_timeout', self::DEFAULT_HTTP_TIMEOUT_SECONDS);
         return is_numeric($timeout) ? (int) $timeout : self::DEFAULT_HTTP_TIMEOUT_SECONDS;
+    }
+
+    private function getSearchTimeoutSecondsForQuestion(string $question): int {
+        $baseTimeout = $this->getHttpTimeoutSeconds();
+        if ($question === '') {
+            return $baseTimeout;
+        }
+
+        $state = $this->getGenerateTimeoutBackoffState();
+        if (!is_array($state)) {
+            return $baseTimeout;
+        }
+
+        $storedHash = isset($state['question_hash']) ? (string) $state['question_hash'] : '';
+        $expiresAt = isset($state['expires_at']) ? (int) $state['expires_at'] : 0;
+        $nextTimeout = isset($state['next_timeout']) ? (int) $state['next_timeout'] : 0;
+        if ($storedHash === '' || $expiresAt < time() || $storedHash !== $this->buildQuestionHash($question)) {
+            return $baseTimeout;
+        }
+
+        return max($baseTimeout, $nextTimeout);
+    }
+
+    private function recordGenerateTimeoutBackoff(string $question, int $timeoutSeconds): void {
+        if ($question === '') {
+            return;
+        }
+
+        $nextTimeout = max($this->getHttpTimeoutSeconds(), $timeoutSeconds * 2);
+        $state = [
+            'question_hash' => $this->buildQuestionHash($question),
+            'next_timeout' => min(110, $nextTimeout),
+            'expires_at' => time() + self::GENERATE_TIMEOUT_BACKOFF_TTL_SECONDS,
+        ];
+        $this->updateUserScopedOption(self::GENERATE_TIMEOUT_BACKOFF_OPTION, $state);
+    }
+
+    private function clearGenerateTimeoutBackoffForQuestion(string $question): void {
+        if ($question === '') {
+            return;
+        }
+
+        $state = $this->getGenerateTimeoutBackoffState();
+        if (!is_array($state)) {
+            return;
+        }
+
+        $storedHash = isset($state['question_hash']) ? (string) $state['question_hash'] : '';
+        if ($storedHash !== $this->buildQuestionHash($question)) {
+            return;
+        }
+
+        $this->deleteUserScopedOption(self::GENERATE_TIMEOUT_BACKOFF_OPTION);
+    }
+
+    /**
+     * @return array<string,mixed>|null
+     */
+    private function getGenerateTimeoutBackoffState(): ?array {
+        $state = $this->getUserScopedOption(self::GENERATE_TIMEOUT_BACKOFF_OPTION, null);
+        if (!is_array($state)) {
+            return null;
+        }
+
+        $expiresAt = isset($state['expires_at']) ? (int) $state['expires_at'] : 0;
+        if ($expiresAt < time()) {
+            $this->deleteUserScopedOption(self::GENERATE_TIMEOUT_BACKOFF_OPTION);
+            return null;
+        }
+
+        return $state;
+    }
+
+    private function extractLatestUserQuestion(array $messages): string {
+        for ($index = count($messages) - 1; $index >= 0; $index--) {
+            $message = $messages[$index] ?? null;
+            if (!is_array($message)) {
+                continue;
+            }
+
+            $role = isset($message['role']) ? (string) $message['role'] : '';
+            if ($role !== 'user') {
+                continue;
+            }
+
+            $content = trim((string) ($message['content'] ?? ''));
+            if ($content !== '') {
+                return $content;
+            }
+        }
+
+        return '';
+    }
+
+    private function buildQuestionHash(string $question): string {
+        $normalized = strtolower(trim(preg_replace(self::REGEX_WHITESPACE, ' ', $question) ?? $question));
+        return hash('sha256', $normalized);
+    }
+
+    private function isTimeoutException(\Exception $exception): bool {
+        return $this->messageContainsAny($exception->getMessage(), [
+            'timed out',
+            'timeout',
+            'operation timed out',
+            'cURL error 28',
+        ]);
     }
 
     /**
@@ -2512,6 +2626,14 @@ class Gemini implements AIProviderInterface {
     }
 
     /**
+     * @param mixed $default
+     * @return mixed
+     */
+    private function getUserScopedOption(string $optionName, $default = false) {
+        return UserScope::getUserScopedOption($optionName, $default);
+    }
+
+    /**
      * @param mixed $value
      * @return bool
      */
@@ -2521,6 +2643,18 @@ class Gemini implements AIProviderInterface {
 
     private function deleteScopedOption(string $optionName): void {
         UserScope::deleteGroupScopedOption($optionName);
+    }
+
+    /**
+     * @param mixed $value
+     * @return bool
+     */
+    private function updateUserScopedOption(string $optionName, $value): bool {
+        return UserScope::updateUserScopedOption($optionName, $value, false);
+    }
+
+    private function deleteUserScopedOption(string $optionName): void {
+        UserScope::deleteUserScopedOption($optionName);
     }
 
     /**

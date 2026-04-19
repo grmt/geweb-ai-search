@@ -775,6 +775,11 @@
     justify-content: flex-end;
     margin-bottom: 6px;
 }
+.geweb-ai-source-details-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
 .geweb-ai-source-context-list {
     margin: 0;
     padding-left: 18px;
@@ -1058,23 +1063,46 @@
     display: none;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    min-width: 28px;
-    height: 28px;
+    width: 18px;
+    min-width: 18px;
+    height: 18px;
     padding: 0;
-    border: 1px solid rgba(148, 163, 184, 0.28);
-    border-radius: 999px;
-    background: #fff;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
     color: #475569;
     cursor: pointer;
+    box-shadow: none;
+    font-size: 18px;
+    line-height: 1;
 }
 .geweb-ai-source-list li.is-active .geweb-ai-source-details-close {
     display: inline-flex;
 }
+.geweb-ai-source-details-link {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    min-width: 18px;
+    height: 18px;
+    border: 0;
+    background: transparent;
+    color: #475569;
+    text-decoration: none;
+    box-shadow: none;
+    font-size: 16px;
+    line-height: 1;
+}
+.geweb-ai-source-list li.is-active .geweb-ai-source-details-link {
+    display: inline-flex;
+}
+.geweb-ai-source-details-link:hover,
+.geweb-ai-source-details-link:focus,
 .geweb-ai-source-details-close:hover,
 .geweb-ai-source-details-close:focus {
-    border-color: rgba(100, 116, 139, 0.45);
     color: #0f172a;
+    text-decoration: none;
 }
 .geweb-ai-empty-panel {
     margin: 0;

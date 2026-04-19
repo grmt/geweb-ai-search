@@ -126,6 +126,8 @@ class FrontendAiWorkspaceController {
             'frontend_ai_page_url' => FrontendAiContext::getCurrentFrontendAiPageUrl(),
             'frontend_ai_exit_url' => FrontendAiContext::getFrontendAiExitUrl(),
             'frontend_ai_manage_conversations_url' => current_user_can('manage_options') ? ($this->getTabUrl)('conversations') : '',
+            'frontend_ai_manage_documents_url' => current_user_can('manage_options') ? ($this->getTabUrl)('documents') : '',
+            'frontend_ai_manage_pages_url' => current_user_can('edit_pages') ? admin_url('edit.php?post_type=page') : '',
             'current_scope_key' => UserScope::getCurrentUserScopeStorageKey(),
             'is_frontend_ai_page' => FrontendAiContext::isFrontendAiPageRequest($this->shortcodePageViewActive),
             'frontend_ai_conversation_id' => FrontendAiContext::getRequestedFrontendConversationId(),
@@ -188,6 +190,9 @@ class FrontendAiWorkspaceController {
                 'mentionedInAnswer' => __('Mentioned in answer', 'geweb-ai-search'),
                 'newChat' => __('New chat', 'geweb-ai-search'),
                 'linksToPages' => __('Links to pages and documents used in the answer.', 'geweb-ai-search'),
+                'openPagesListing' => __('Open pages listing', 'geweb-ai-search'),
+                'openDocumentsListing' => __('Open documents listing', 'geweb-ai-search'),
+                'closeSourceContext' => __('Close source context', 'geweb-ai-search'),
                 'showResults' => __('Show results', 'geweb-ai-search'),
                 'hideResults' => __('Hide results', 'geweb-ai-search'),
                 'modelLabel' => __('Model', 'geweb-ai-search'),
@@ -474,6 +479,18 @@ class FrontendAiWorkspaceController {
             <div class="geweb-ai-page-toolbar-actions">
                 <button
                     type="button"
+                    class="button button-small geweb-ai-page-toolbar-button geweb-ai-page-toolbar-button--menu"
+                    id="geweb-ai-toggle-mobile-menu"
+                    data-panel-toggle="left"
+                    aria-label="<?php echo esc_attr__('Show chats panel', 'geweb-ai-search'); ?>"
+                    title="<?php echo esc_attr__('Show chats panel', 'geweb-ai-search'); ?>"
+                    aria-expanded="false"
+                >
+                    <span class="geweb-ai-page-toolbar-button-icon" aria-hidden="true">☰</span>
+                    <span class="geweb-ai-page-toolbar-button-label"><?php echo esc_html__('Chats', 'geweb-ai-search'); ?></span>
+                </button>
+                <button
+                    type="button"
                     class="button button-small geweb-ai-page-toolbar-button geweb-ai-page-toolbar-button--align"
                     id="geweb-ai-align-workspace"
                     aria-label="<?php echo esc_attr__('Align workspace to the browser window', 'geweb-ai-search'); ?>"
@@ -568,6 +585,23 @@ class FrontendAiWorkspaceController {
                 </div>
             </div>
             <div class="geweb-ai-search-results-content">
+                <form class="geweb-ai-search-form geweb-ai-inline-search-form" role="search" action="<?php echo esc_url(FrontendAiContext::getCurrentFrontendAiPageUrl()); ?>" method="get">
+                    <label class="screen-reader-text" for="geweb-ai-inline-search"><?php echo esc_html__('Search this site', 'geweb-ai-search'); ?></label>
+                    <input
+                        type="search"
+                        id="geweb-ai-inline-search"
+                        name="s"
+                        class="geweb-ai-search-input"
+                        value="<?php echo esc_attr($query); ?>"
+                        placeholder="<?php echo esc_attr__('Search this site...', 'geweb-ai-search'); ?>"
+                        autocomplete="off"
+                    >
+                    <?php $conversationId = FrontendAiContext::getRequestedFrontendConversationId(); ?>
+                    <?php if ($conversationId !== ''): ?>
+                        <input type="hidden" name="geweb_ai_conversation" value="<?php echo esc_attr($conversationId); ?>">
+                    <?php endif; ?>
+                    <button type="submit" class="button geweb-ai-inline-search-submit"><?php echo esc_html__('Search', 'geweb-ai-search'); ?></button>
+                </form>
                 <?php if ($query !== ''): ?>
                     <?php
                     $postTypes = get_option('geweb_aisearch_post_types', ['post']);

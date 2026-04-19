@@ -467,7 +467,18 @@
                 return '';
             }
 
-            return normalized.split(/\s+/).slice(0, 6).join(' ');
+            const words = normalized.split(/\s+/).filter(Boolean);
+            if (!words.length) {
+                return '';
+            }
+
+            const sentenceMatch = normalized.match(/^(.{24,220}?[.!?;:])(?:\s|$)/);
+            const sentenceCandidate = String(sentenceMatch?.[1] || '').trim();
+            if (sentenceCandidate) {
+                return sentenceCandidate;
+            }
+
+            return words.slice(0, Math.min(16, words.length)).join(' ');
         },
 
         isDocumentLikeTitle(title) {
@@ -1740,6 +1751,15 @@
         buildSourceDetails(url, contexts, previewSnippet, referenceHint, $sourceItem, footnote = 0) {
             const $details = $('<div class="geweb-ai-source-details"></div>');
             const $detailsHeader = $('<div class="geweb-ai-source-details-header"></div>');
+            const sourceInfo = $sourceItem?.data('sourceInfo') || {};
+            const sourceKind = this.getSourceKind(sourceInfo);
+            const listingUrl = sourceKind === 'document'
+                ? String(getAiSearchConfig().frontend_ai_manage_documents_url || '').trim()
+                : String(getAiSearchConfig().frontend_ai_manage_pages_url || '').trim();
+            const listingLabel = sourceKind === 'document'
+                ? t('openDocumentsListing', 'Open documents listing')
+                : t('openPagesListing', 'Open pages listing');
+            const $headerActions = $('<div class="geweb-ai-source-details-actions"></div>');
             const $closeButton = $('<button type="button" class="geweb-ai-source-details-close" aria-label="Close source context" title="Close source context"></button>');
             $closeButton.append($('<span aria-hidden="true">×</span>'));
             $closeButton.on('click', (event) => {
@@ -1747,7 +1767,18 @@
                 event.stopPropagation();
                 this.deactivateSourceReferenceItems();
             });
-            $detailsHeader.append($closeButton);
+            $closeButton.attr('aria-label', t('closeSourceContext', 'Close source context'));
+            $closeButton.attr('title', t('closeSourceContext', 'Close source context'));
+            if (listingUrl) {
+                const $listingLink = $('<a class="geweb-ai-source-details-link" target="_blank" rel="noopener noreferrer"></a>');
+                $listingLink.attr('href', listingUrl);
+                $listingLink.attr('aria-label', listingLabel);
+                $listingLink.attr('title', listingLabel);
+                $listingLink.append($('<span aria-hidden="true">≣</span>'));
+                $headerActions.append($listingLink);
+            }
+            $headerActions.append($closeButton);
+            $detailsHeader.append($headerActions);
             $details.append($detailsHeader);
 
             const $contexts = contexts.length > 1
@@ -1795,12 +1826,14 @@
             if (matchPhrase) {
                 $contextItem.attr('data-source-match-phrase', matchPhrase);
             }
+            $contextItem.attr('data-source-context-index', String(contextIndex));
 
             const $snippet = $('<div class="geweb-ai-source-snippet"></div>').html(
                 this.highlightMatchPhraseInHtml(this.renderFormattedChunkHtml(contextText), matchPhrase)
             );
             this.bindSourceMatchInteraction($snippet, targetUrl, matchPhrase, $sourceItem);
             $contextItem.append($snippet);
+            this.bindExplicitSourceContextActivation($contextItem, $sourceItem);
             return $contextItem;
         },
 
@@ -1829,10 +1862,39 @@
             if (matchPhrase) {
                 $snippet.attr('data-source-match-phrase', matchPhrase);
             }
+            $wrapper.attr('data-source-context-index', '0');
 
             this.bindSourceMatchInteraction($snippet, targetUrl, matchPhrase, $sourceItem);
             $wrapper.append($snippet);
+            this.bindExplicitSourceContextActivation($wrapper, $sourceItem);
             return $wrapper;
+        },
+
+        bindExplicitSourceContextActivation($context, $sourceItem) {
+            if (!$context?.length || !$sourceItem?.length) {
+                return;
+            }
+
+            const activateContext = (event) => {
+                if ($(event.target).closest('.geweb-ai-inline-match--interactive, a, button').length) {
+                    return;
+                }
+
+                event.preventDefault();
+                event.stopPropagation();
+                this.setScrollablePaneActive?.('sources');
+                this.activateSourceReferenceItem($sourceItem);
+                this.activateSpecificSourceContext($sourceItem, $context);
+            };
+
+            $context.on('click', activateContext);
+            $context.on('keydown', (event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') {
+                    return;
+                }
+
+                activateContext(event);
+            });
         },
 
         buildSourceContextFootnoteBadge(footnote) {
@@ -2308,6 +2370,20 @@
             $target.addClass('is-active');
         },
 
+        activateSpecificSourceContext($sourceItem, $context) {
+            if (!$sourceItem?.length || !$context?.length) {
+                return;
+            }
+
+            this.clearSourceContextHighlights();
+            $context.removeClass('is-context-preview').addClass('is-context-active');
+
+            const element = $context.get(0);
+            if (element && typeof element.scrollIntoView === 'function') {
+                element.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
+        },
+
         previewSourceReferenceItem($target) {
             if (!$target?.length || !this.$sourcesBox.length) {
                 return;
@@ -2645,6 +2721,11 @@
             const pathname = parsed.pathname.replace(/^\/+/, '');
             if (pathname) {
                 return pathname.replace(TRAILING_SLASH_REGEX, '/');
+            }
+
+            const postId = parsed.searchParams.get('p');
+            if (postId) {
+                return `?p=${postId}`;
             }
 
             const pageId = parsed.searchParams.get('page_id');

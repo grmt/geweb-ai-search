@@ -16,6 +16,32 @@ function normalizeInlineMatchText(text) {
 	return String(text || '').replaceAll(/\s+/g, ' ').trim().toLowerCase();
 }
 
+function buildInlineMatchCandidates(phrase) {
+	const words = String(phrase || '').split(/\s+/).filter(Boolean);
+	if (!words.length) {
+		return [];
+	}
+
+	const candidates = [];
+	const maxWindowSize = Math.min(words.length, 16);
+	const minWindowSize = words.length > 8 ? 4 : 1;
+
+	for (let windowSize = maxWindowSize; windowSize >= minWindowSize; windowSize -= 1) {
+		for (let start = 0; start <= words.length - windowSize; start += 1) {
+			const candidate = words.slice(start, start + windowSize).join(' ').trim();
+			if (candidate && !candidates.includes(candidate)) {
+				candidates.push(candidate);
+			}
+		}
+	}
+
+	if (!candidates.length) {
+		candidates.push(words.join(' '));
+	}
+
+	return candidates;
+}
+
 function findInlineMatchRangeInText(rawText, phrase) {
 	const sourceText = String(rawText || '');
 	const targetPhrase = String(phrase || '').trim();
@@ -127,6 +153,42 @@ function selectPageMatchRange(range) {
 	selection.addRange(range);
 }
 
+function isInlineMatchNodeVisible(node) {
+	const parent = node?.parentElement;
+	if (!parent) {
+		return false;
+	}
+
+	if (parent.closest('[hidden], [aria-hidden="true"], template')) {
+		return false;
+	}
+
+	const closedDetails = parent.closest('details:not([open])');
+	if (closedDetails) {
+		return false;
+	}
+
+	let current = parent;
+	while (current && current !== document.body) {
+		const style = globalThis.getComputedStyle ? globalThis.getComputedStyle(current) : null;
+		if (style && (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || Number(style.opacity) === 0)) {
+			return false;
+		}
+		current = current.parentElement;
+	}
+
+	return true;
+}
+
+function isInlineMatchRangeVisible(range) {
+	if (!range || typeof range.getClientRects !== 'function') {
+		return false;
+	}
+
+	const rects = Array.from(range.getClientRects());
+	return rects.some((rect) => rect.width > 0 && rect.height > 0);
+}
+
 function highlightFirstPageMatch() {
 	const currentUrl = globalThis.location?.href;
 	if (!currentUrl) {
@@ -146,16 +208,16 @@ function highlightFirstPageMatch() {
 		return;
 	}
 
-	const candidates = [];
-	const words = phrase.split(/\s+/).filter(Boolean);
-	for (let length = Math.min(6, words.length); length >= 1; length -= 1) {
-		candidates.push(words.slice(0, length).join(' '));
-	}
+	const candidates = buildInlineMatchCandidates(phrase);
 
 	const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
 		acceptNode(node) {
 			const parent = node.parentElement;
 			if (!parent || ['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEXTAREA'].includes(parent.tagName)) {
+				return NodeFilter.FILTER_REJECT;
+			}
+
+			if (!isInlineMatchNodeVisible(node)) {
 				return NodeFilter.FILTER_REJECT;
 			}
 
@@ -182,6 +244,9 @@ function highlightFirstPageMatch() {
 		const range = document.createRange();
 		range.setStart(matchedNode, matchRange.start);
 		range.setEnd(matchedNode, matchRange.start + matchRange.length);
+		if (!isInlineMatchRangeVisible(range)) {
+			continue;
+		}
 		selectPageMatchRange(range);
 		const highlight = document.createElement('mark');
 		highlight.className = 'geweb-ai-inline-match';
@@ -649,6 +714,7 @@ jQuery(document).ready(function($) {
 	            && globalThis.matchMedia(`(max-width: ${this.getMobilePaneFooterThreshold()}px)`).matches;
 	        const $footer = $(this.ai).find('.geweb-ai-mobile-pane-footer');
 	        const $tabs = $footer.find('.geweb-ai-mobile-pane-tab');
+	        const $mobileMenuButton = $(this.ai).find('#geweb-ai-toggle-mobile-menu');
 
 	        $footer.toggleClass('is-visible', isMobile && isSmallScreen);
 	        $tabs.each((_, element) => {
@@ -657,6 +723,13 @@ jQuery(document).ready(function($) {
 	            $tab.toggleClass('is-active', isActive);
 	            $tab.attr('aria-pressed', isActive ? 'true' : 'false');
 	        });
+	        if ($mobileMenuButton.length) {
+	            const leftActive = activePane === 'left';
+	            $mobileMenuButton.toggleClass('is-active', isMobile && leftActive);
+	            $mobileMenuButton.attr('aria-expanded', isMobile && leftActive ? 'true' : 'false');
+	            $mobileMenuButton.attr('aria-label', leftActive ? 'Show answer panel' : 'Show chats panel');
+	            $mobileMenuButton.attr('title', leftActive ? 'Show answer panel' : 'Show chats panel');
+	        }
 	    },
 
 	    setWorkspacePanelCollapsed(workspace, side, collapsed) {
@@ -764,9 +837,23 @@ jQuery(document).ready(function($) {
 	    },
 
 	    getPageViewViewportHeight() {
-	        const rawViewportHeight = globalThis.innerHeight || this.getPageViewMinHeight();
+	        const layoutViewportHeight = globalThis.innerHeight || this.getPageViewMinHeight();
+	        const visualViewportHeight = Number(globalThis.visualViewport?.height || 0);
+	        const rawViewportHeight = visualViewportHeight > 0
+	            ? Math.min(layoutViewportHeight, Math.round(visualViewportHeight))
+	            : layoutViewportHeight;
 	        const availableHeight = rawViewportHeight - this.getPageViewViewportTopOffset();
 	        return Math.max(this.getPageViewMinHeight(), availableHeight);
+	    },
+
+	    isPageViewportKeyboardCompacted() {
+	        const layoutViewportHeight = Number(globalThis.innerHeight || 0);
+	        const visualViewportHeight = Number(globalThis.visualViewport?.height || 0);
+	        if (layoutViewportHeight <= 0 || visualViewportHeight <= 0) {
+	            return false;
+	        }
+
+	        return (layoutViewportHeight - visualViewportHeight) >= 120;
 	    },
 
 	    syncPageViewportOffsetStyles() {
@@ -917,6 +1004,11 @@ jQuery(document).ready(function($) {
 	        }
 
 	        const viewportHeight = this.getPageViewViewportHeight();
+	        if (this.isPageViewportKeyboardCompacted()) {
+	            this.ai.style.height = `${viewportHeight}px`;
+	            return;
+	        }
+
 	        const hasStoredHeight = this.readStoredPageViewHeight() !== null;
 	        if (!hasStoredHeight) {
 	            this.ai.style.height = `${viewportHeight}px`;
@@ -972,12 +1064,37 @@ jQuery(document).ready(function($) {
 	            this.syncPageViewHeightToViewport();
 	        });
 
+	        if (globalThis.visualViewport) {
+	            const syncViewport = () => {
+	                this.syncPageViewportOffsetStyles();
+	                this.syncPageViewHeightToViewport();
+	            };
+	            globalThis.visualViewport.addEventListener('resize', syncViewport);
+	            globalThis.visualViewport.addEventListener('scroll', syncViewport);
+	        }
+
 	        globalThis.addEventListener('scroll', () => {
 	            this.syncPageViewportOffsetStyles();
 	        }, { passive: true });
 	    },
 
 	    bindPageToolbarControls() {
+	        const mobileMenuButton = document.getElementById('geweb-ai-toggle-mobile-menu');
+	        if (mobileMenuButton && mobileMenuButton.dataset.gewebAiBound !== '1') {
+	            mobileMenuButton.dataset.gewebAiBound = '1';
+	            mobileMenuButton.addEventListener('click', (event) => {
+	                event.preventDefault();
+	                const workspace = this.getWorkspaceElement();
+	                if (!this.isMobileWorkspaceNavigationActive(workspace)) {
+	                    return;
+	                }
+
+	                const nextPane = workspace?.dataset?.mobilePane === 'left' ? 'main' : 'left';
+	                this.setMobileWorkspacePane(nextPane, { focusPane: true });
+	                this.syncPanelCollapseButtons();
+	            });
+	        }
+
 	        const alignButton = document.getElementById('geweb-ai-align-workspace');
 	        if (alignButton && alignButton.dataset.gewebAiBound !== '1') {
 	            alignButton.dataset.gewebAiBound = '1';
@@ -1369,7 +1486,8 @@ jQuery(document).ready(function($) {
 	    bindFrontendHeaderSearch() {
 	        $('form').has('input[name="s"]').each((_, form) => {
 	            const $form = $(form);
-	            if ($form.closest('#geweb-ai-modal').length) {
+	            const isInlineWorkspaceSearch = $form.hasClass('geweb-ai-inline-search-form');
+	            if ($form.closest('#geweb-ai-modal').length && !isInlineWorkspaceSearch) {
 	                return;
 	            }
 
@@ -1419,6 +1537,14 @@ jQuery(document).ready(function($) {
 	                const query = String($input.val() || '').trim();
 		                navigateToHeaderSearchQuery(query);
 	            });
+
+	            if (isInlineWorkspaceSearch) {
+	                const $searchPanel = $('.geweb-ai-search-results-panel');
+	                if ($searchPanel.length) {
+	                    $searchPanel.removeClass('is-hidden is-collapsed');
+	                    this.syncPanelCollapseButtons();
+	                }
+	            }
 
 	            globalThis.setTimeout(() => {
 	                syncCompactPlaceholderState();
@@ -1474,6 +1600,8 @@ jQuery(document).ready(function($) {
 		        if (!this.$textarea.length) return;
 
 		        this.$textarea.on('input', () => this.toggleSubmitButton());
+		        this.$textarea.on('focus', () => this.handleQuestionBoxFocus());
+		        this.$textarea.on('click', () => this.handleQuestionBoxFocus());
 		        this.$submitBtn.on('click', (event) => this.handleSubmitButtonClick(event));
 		        this.$settingsToggle.on('click', () => this.toggleTemporarySettings());
 		        this.$closeSettingsBtn.on('click', () => this.toggleTemporarySettings(false));
@@ -1636,6 +1764,29 @@ jQuery(document).ready(function($) {
 	        if (this.$textarea.length) {
 	            this.$textarea.trigger('focus');
 	        }
+	    },
+
+	    handleQuestionBoxFocus() {
+	        const workspace = GewebModal.getWorkspaceElement();
+	        if (GewebModal.isMobileWorkspaceNavigationActive(workspace)) {
+	            GewebModal.setMobileWorkspacePane('main', { focusPane: false });
+	            GewebModal.syncPanelCollapseButtons();
+	        }
+
+	        const textarea = this.$textarea.get(0);
+	        if (!textarea) {
+	            return;
+	        }
+
+	        globalThis.setTimeout(() => {
+	            GewebModal.syncPageViewHeightToViewport();
+	            this.scrollElementIntoView(textarea);
+	        }, 80);
+
+	        globalThis.setTimeout(() => {
+	            GewebModal.syncPageViewHeightToViewport();
+	            this.scrollElementIntoView(textarea);
+	        }, 280);
 	    },
 
 	    populateQuestionBox(text, options = {}) {
