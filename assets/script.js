@@ -1644,11 +1644,19 @@ jQuery(document).ready(function($) {
 		    sourceReferenceCache: {},
 		    $messageInfoPopover: null,
 		    $messageInfoPopoverAnchor: null,
+		    historyNavIndex: -1,
+		    draftMessage: '',
 
 		    init() {
 		        if (!this.$textarea.length) return;
 
-		        this.$textarea.on('input', () => this.toggleSubmitButton());
+		        this.$textarea.on('input', () => {
+		            this.toggleSubmitButton();
+		            if (this.historyNavIndex !== -1) {
+		                this.historyNavIndex = -1;
+		                this.syncHistoryButtons();
+		            }
+		        });
 		        this.$textarea.on('focus', () => this.handleQuestionBoxFocus());
 		        this.$textarea.on('click', () => this.handleQuestionBoxFocus());
 		        this.$submitBtn.on('click', (event) => this.handleSubmitButtonClick(event));
@@ -1759,6 +1767,7 @@ jQuery(document).ready(function($) {
 		        this.updateTemporarySettingsAvailability(false);
 		        this.syncModelSelectorWidth();
 		        this.normalizeWorkspaceControlTitles();
+		        this.bindHistoryControls();
 		        void this.bootstrap();
 		    },
 
@@ -1895,6 +1904,143 @@ jQuery(document).ready(function($) {
 	        if (options.focus !== false) {
 	            this.focusInput();
 	        }
+	    },
+
+	    getUserQuestions() {
+	        return this.conversationHistory
+	            .filter((msg) => msg.role === 'user')
+	            .map((msg) => msg.content);
+	    },
+
+	    navigateHistory(direction) {
+	        const questions = this.getUserQuestions();
+	        if (!questions.length) return;
+
+	        if (this.historyNavIndex === -1) {
+	            if (direction > 0) return;
+	            this.draftMessage = this.$textarea.val();
+	            this.historyNavIndex = questions.length;
+	        }
+
+	        this.historyNavIndex += direction;
+
+	        if (this.historyNavIndex < 0) {
+	            this.historyNavIndex = 0;
+	        } else if (this.historyNavIndex >= questions.length) {
+	            this.historyNavIndex = -1;
+	        }
+
+	        if (this.historyNavIndex === -1) {
+	            this.populateQuestionBox(this.draftMessage, { focus: true });
+	        } else {
+	            this.populateQuestionBox(questions[this.historyNavIndex], { focus: true });
+	        }
+
+	        this.syncHistoryButtons();
+	    },
+
+	    syncHistoryButtons() {
+	        const questions = this.getUserQuestions();
+	        const hasQuestions = questions.length > 0;
+	        const canGoUp = hasQuestions && this.historyNavIndex !== 0;
+	        const canGoDown = this.historyNavIndex !== -1;
+	        const canRetry = hasQuestions && !this.requestInFlight;
+
+	        if (this.$historyUpBtn) {
+	            this.$historyUpBtn.prop('disabled', !canGoUp).css({
+	                opacity: canGoUp ? '1' : '0.4',
+	                cursor: canGoUp ? 'pointer' : 'default'
+	            });
+	        }
+	        if (this.$historyDownBtn) {
+	            this.$historyDownBtn.prop('disabled', !canGoDown).css({
+	                opacity: canGoDown ? '1' : '0.4',
+	                cursor: canGoDown ? 'pointer' : 'default'
+	            });
+	        }
+	        if (this.$retryLastBtn) {
+	            this.$retryLastBtn.prop('disabled', !canRetry).css({
+	                opacity: canRetry ? '1' : '0.4',
+	                cursor: canRetry ? 'pointer' : 'default'
+	            });
+	        }
+	    },
+
+	    async retryLastQuestion() {
+	        if (this.requestInFlight) return;
+
+	        let lastUserIndex = -1;
+	        for (let i = this.conversationHistory.length - 1; i >= 0; i--) {
+	            if (this.conversationHistory[i].role === 'user') {
+	                lastUserIndex = i;
+	                break;
+	            }
+	        }
+
+	        if (lastUserIndex >= 0) {
+	            const questionText = this.conversationHistory[lastUserIndex].content;
+	            await this.removeConversationTurn(lastUserIndex);
+	            this.populateQuestionBox(questionText, { focus: false });
+	            this.historyNavIndex = -1;
+	            this.syncHistoryButtons();
+	            void this.sendMessage();
+	        }
+	    },
+
+	    bindHistoryControls() {
+	        const $form = this.$textarea.closest('form, .question-box, .geweb-ai-question-box');
+
+	        this.$historyUpBtn = $form.find('.geweb-ai-history-up, .history-up, button[title*="Previous"], button[aria-label*="Previous"], button:contains("↑")');
+	        this.$historyDownBtn = $form.find('.geweb-ai-history-down, .history-down, button[title*="Next"], button[aria-label*="Next"], button:contains("↓")');
+
+	        if (this.$historyUpBtn.length && this.$historyDownBtn.length) {
+	            const $parent = this.$historyUpBtn.parent();
+	            $parent.css({
+	                display: 'flex',
+	                gap: '4px',
+	                alignItems: 'center'
+	            });
+
+	            this.$retryLastBtn = $parent.find('.geweb-ai-retry-last, .geweb-ai-retry-btn, button[title*="Retry"], button:contains("↻")');
+	            if (!this.$retryLastBtn.length) {
+	                this.$retryLastBtn = $(`<button type="button" class="geweb-ai-retry-last button button-link" title="${t('retryLast', 'Retry last question')}" style="padding: 0 4px; min-width: auto; text-decoration: none; color: inherit; display: flex; align-items: center; justify-content: center; font-size: 16px;" aria-label="Retry last question"><span aria-hidden="true">↻</span></button>`);
+	                this.$historyUpBtn.before(this.$retryLastBtn);
+	            }
+	        } else {
+	            const $controls = $('<div class="geweb-ai-history-controls" style="display: flex; gap: 4px; align-items: center; margin-right: 8px;"></div>');
+	            this.$retryLastBtn = $(`<button type="button" class="button button-link geweb-ai-retry-last" title="${t('retryLast', 'Retry last question')}" style="padding: 0 4px; min-width: auto; text-decoration: none; color: inherit; display: flex; align-items: center; justify-content: center; font-size: 16px;" aria-label="Retry last question"><span aria-hidden="true">↻</span></button>`);
+	            this.$historyUpBtn = $(`<button type="button" class="button button-link geweb-ai-history-up" title="${t('historyPrev', 'Previous question')}" style="padding: 0 4px; min-width: auto; text-decoration: none; color: inherit; display: flex; align-items: center; justify-content: center; font-size: 16px;" aria-label="Previous question"><span aria-hidden="true">↑</span></button>`);
+	            this.$historyDownBtn = $(`<button type="button" class="button button-link geweb-ai-history-down" title="${t('historyNext', 'Next question')}" style="padding: 0 4px; min-width: auto; text-decoration: none; color: inherit; display: flex; align-items: center; justify-content: center; font-size: 16px;" aria-label="Next question"><span aria-hidden="true">↓</span></button>`);
+
+	            $controls.append(this.$retryLastBtn, this.$historyUpBtn, this.$historyDownBtn);
+	            this.$submitBtn.before($controls);
+	            this.$submitBtn.parent().css({ display: 'flex', alignItems: 'center' });
+	        }
+
+	        this.$historyUpBtn.off('click').on('click', (e) => {
+	            e.preventDefault();
+	            this.navigateHistory(-1);
+	        });
+	        this.$historyDownBtn.off('click').on('click', (e) => {
+	            e.preventDefault();
+	            this.navigateHistory(1);
+	        });
+	        this.$retryLastBtn.off('click').on('click', (e) => {
+	            e.preventDefault();
+	            this.retryLastQuestion();
+	        });
+
+	        this.$textarea.on('keydown', (e) => {
+	            if (e.key === 'ArrowUp' && this.$textarea.val().trim() === '') {
+	                e.preventDefault();
+	                this.navigateHistory(-1);
+	            } else if (e.key === 'ArrowDown' && this.historyNavIndex !== -1) {
+	                e.preventDefault();
+	                this.navigateHistory(1);
+	            }
+	        });
+
+	        this.syncHistoryButtons();
 	    },
 
 	    getScrollablePaneTargets() {
@@ -2405,6 +2551,8 @@ jQuery(document).ready(function($) {
 	        this.syncStoredChatState();
 	        this.toggleSubmitButton();
 	        this.syncFrontendPageConversationState();
+	        this.historyNavIndex = -1;
+	        this.syncHistoryButtons();
 	    },
 
 	    renderConversationMessages() {
@@ -2724,10 +2872,19 @@ jQuery(document).ready(function($) {
 	                await new Promise((resolve) => globalThis.setTimeout(resolve, intervalMs));
 	            }
 
+				if ($loader && $loader.length) {
+	                $loader.css('opacity', '0.4');
+	            }
+
 	            try {
 	                const response = await this.requestFrontendConversation('geweb_get_ai_chat_job', {
 	                    job_id: normalizedJobId
 	                });
+
+					if ($loader && $loader.length) {
+	                	$loader.css('opacity', '1');
+	            }
+
 	                const payload = response?.data && typeof response.data === 'object' ? response.data : {};
 	                const status = String(payload.status || '').trim();
 
@@ -3110,6 +3267,8 @@ jQuery(document).ready(function($) {
 
 	        this.$textarea.val('');
 	        this.requestInFlight = true;
+	        this.historyNavIndex = -1;
+	        this.syncHistoryButtons();
 	        this.toggleSubmitButton();
 	        GewebModal.schedulePageViewViewportSync();
 
@@ -3246,6 +3405,7 @@ jQuery(document).ready(function($) {
 		            http_status: Number(xhr?.status || 0) || null
 		        }
 		    }));
+	        this.syncHistoryButtons();
 	        this.toggleSubmitButton();
 
 	        if (shouldRecover) {
@@ -3334,7 +3494,32 @@ jQuery(document).ready(function($) {
 		        const $details = this.buildResponseDetails(responseMeta);
 		        const $messageActions = $('<div class="geweb-ai-message-actions"></div>');
 
-		        if ($copyButton) {
+		        if (responseMeta.error) {
+		            const $retryButton = $('<button type="button" class="geweb-ai-retry-answer" aria-live="polite"></button>');
+		            $retryButton.attr('aria-label', t('retryRequest', 'Retry request'));
+		            $retryButton.append($('<span class="geweb-ai-message-action-icon" aria-hidden="true" style="font-size:15px; line-height:1;">↻</span>'));
+		            $retryButton.append($('<span class="geweb-ai-message-action-label"></span>').text(t('retryRequest', 'Retry')));
+		            $retryButton.on('click', async (event) => {
+		                event.preventDefault();
+		                event.stopPropagation();
+
+		                let lastUserIndex = -1;
+		                for (let i = this.conversationHistory.length - 1; i >= 0; i--) {
+		                    if (this.conversationHistory[i].role === 'user') {
+		                        lastUserIndex = i;
+		                        break;
+		                    }
+		                }
+
+		                if (lastUserIndex >= 0) {
+		                    const questionText = this.conversationHistory[lastUserIndex].content;
+		                    await this.removeConversationTurn(lastUserIndex);
+		                    this.populateQuestionBox(questionText, { focus: false });
+		                    void this.sendMessage();
+		                }
+		            });
+		            $messageActions.append($retryButton);
+		        } else if ($copyButton) {
 		            $messageActions.append($copyButton);
 		        }
 
@@ -4103,6 +4288,8 @@ jQuery(document).ready(function($) {
 	        this.renderConversationSummary();
 	        this.renderSources();
 	        this.syncStoredChatState();
+	        this.historyNavIndex = -1;
+	        this.syncHistoryButtons();
 	    },
 
 	    getStoredChatStateKey() {
@@ -4408,6 +4595,8 @@ jQuery(document).ready(function($) {
 	        this.toggleSubmitButton();
 	        this.syncFrontendPageConversationState();
 	        this.syncStoredChatState();
+	        this.historyNavIndex = -1;
+	        this.syncHistoryButtons();
 	        return true;
 	        } catch (error) {
 	            console.debug('Restoring conversation render failed.', error);
@@ -4419,6 +4608,8 @@ jQuery(document).ready(function($) {
 	            this.toggleSubmitButton();
 	            this.syncFrontendPageConversationState();
 	            this.syncStoredChatState();
+	            this.historyNavIndex = -1;
+	            this.syncHistoryButtons();
 	            return false;
 	        }
 	    },
@@ -4436,6 +4627,8 @@ jQuery(document).ready(function($) {
 	        this.toggleSubmitButton();
 	        this.syncFrontendPageConversationState();
 	        this.syncStoredChatState();
+	        this.historyNavIndex = -1;
+	        this.syncHistoryButtons();
 
 	        if (shouldFocus) {
 	            this.focusInput();
