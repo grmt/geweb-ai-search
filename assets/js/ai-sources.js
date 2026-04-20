@@ -2757,7 +2757,7 @@
                 return '';
             }
 
-            const pathname = parsed.pathname.replace(/^\/+/, '');
+            const pathname = parsed.pathname.replace(/^\/+/, '').replace(/\/$/, '');
             if (pathname) {
                 const markdownPageIdMatch = /^(\d+)\.md$/i.exec(pathname);
                 if (markdownPageIdMatch?.[1]) {
@@ -2816,7 +2816,7 @@
                 return Number(directId);
             }
 
-            const pathname = parsed.pathname.replace(/^\/+/, '');
+            const pathname = parsed.pathname.replace(/^\/+/, '').replace(/\/$/, '');
             const markdownPageIdMatch = /^(\d+)\.md$/i.exec(pathname);
             if (markdownPageIdMatch?.[1]) {
                 return Number(markdownPageIdMatch[1]);

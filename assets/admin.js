@@ -272,6 +272,23 @@ function renderMarkdownPreview(markdown) {
 						continue;
 				}
 
+				if (/^-{3,}$/.test(trimmed) && lineIndex === 0) {
+						flushList();
+						let frontmatterEnd = -1;
+						for (let i = lineIndex + 1; i < lines.length; i++) {
+								if (/^-{3,}$/.test(lines[i].trim())) {
+										frontmatterEnd = i;
+										break;
+								}
+						}
+						if (frontmatterEnd > lineIndex) {
+								const frontmatterLines = lines.slice(lineIndex + 1, frontmatterEnd);
+								parts.push('<pre style="background:#f5f5f5;padding:8px;border-left:3px solid #ccc;margin:0 0 1em 0;overflow-x:auto;">' + escapeHtml(frontmatterLines.join('\n')) + '</pre>');
+								lineIndex = frontmatterEnd + 1;
+								continue;
+						}
+				}
+
 				if (isMarkdownTableStart(lines, lineIndex)) {
 						flushList();
 						const table = buildMarkdownTableHtml(lines, lineIndex);
