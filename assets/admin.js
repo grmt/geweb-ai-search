@@ -984,7 +984,7 @@ function ensureModelTestDetailsModal() {
 												'<pre class="geweb-ai-model-test-details-prompt" style="margin:8px 0 0;padding:12px 14px;white-space:pre-wrap;word-break:break-word;font:12px/1.5 Consolas, Monaco, monospace;background:#fff;border:1px solid #e5e7eb;border-radius:10px;"></pre>' +
 										'</div>' +
 										'<div>' +
-												'<div style="font-size:12px;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:.04em;">Answer</div>' +
+                                                '<div class="geweb-ai-model-test-details-response-label" style="font-size:12px;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:.04em;">Answer</div>' +
 												'<pre class="geweb-ai-model-test-details-response" style="margin:8px 0 0;padding:12px 14px;white-space:pre-wrap;word-break:break-word;font:12px/1.5 Consolas, Monaco, monospace;background:#fff;border:1px solid #e5e7eb;border-radius:10px;"></pre>' +
 										'</div>' +
 								'</div>' +
@@ -1353,7 +1353,8 @@ jQuery(document).ready(function($) {
 						const remoteSelected = String(response.data.selected_model || selectedValue || '');
 						$select.empty();
 
-				$.each(response.data.models, function(_, model) {
+                const sourceModels = response.data.dropdown_models || response.data.models;
+                $.each(sourceModels, function(_, model) {
 						const value = String(model || '');
 						if (!value) return;
 						const statusEntry = response?.data?.model_statuses?.[value];
@@ -1479,7 +1480,8 @@ jQuery(document).ready(function($) {
 						const remoteSelected = String(response.data.selected_model || selectedValue || '');
 						$select.empty();
 
-						$.each(response.data.models, function(_, model) {
+                        const sourceModels = response.data.dropdown_models || response.data.models;
+                        $.each(sourceModels, function(_, model) {
 								const value = String(model || '');
 								if (!value) return;
 								const statusEntry = response?.data?.model_statuses?.[value];
@@ -2312,6 +2314,7 @@ $(document).on('submit', '.geweb-gemini-stores-table-form', function() {
 				const timestamp = String($button.data('timestamp') || '').trim();
 				const prompt = String($button.data('prompt') || '').trim();
 				const response = String($button.data('response') || '').trim();
+				const message = String($button.data('message') || '').trim();
 				const subtitleParts = [];
 
 				if (model) subtitleParts.push(model);
@@ -2321,7 +2324,15 @@ $(document).on('submit', '.geweb-gemini-stores-table-form', function() {
 				$modal.find('.geweb-ai-model-test-details-title').text(model ? 'Latest test: ' + model : 'Latest test');
 				$modal.find('.geweb-ai-model-test-details-subtitle').text(subtitleParts.join(' · '));
 				$modal.find('.geweb-ai-model-test-details-prompt').text(prompt ? '"' + prompt + '"' : 'No stored test question.');
-				$modal.find('.geweb-ai-model-test-details-response').text(response ? '"' + response + '"' : 'No stored test answer.');
+
+				if (status === 'failed' || status === 'timeout') {
+						$modal.find('.geweb-ai-model-test-details-response-label').text('Error Message');
+						$modal.find('.geweb-ai-model-test-details-response').text(message ? message : 'No stored error message.');
+				} else {
+						$modal.find('.geweb-ai-model-test-details-response-label').text('Answer');
+						$modal.find('.geweb-ai-model-test-details-response').text(response ? '"' + response + '"' : 'No stored test answer.');
+				}
+
 				$modal.show();
 		});
 

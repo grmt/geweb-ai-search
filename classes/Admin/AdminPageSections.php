@@ -375,7 +375,13 @@ class AdminPageSections {
                             data-sort-test="<?php echo esc_attr(is_array($entry) && !empty($entry['timestamp']) ? (string) ((int) $entry['timestamp']) : '0'); ?>"
                             data-sort-test-status="<?php echo esc_attr(strtolower($testStatus)); ?>"
                         >
-                            <td><code style="white-space:nowrap;"><?php echo esc_html($versionLabel); ?></code></td>
+                        <td>
+                            <code style="white-space:nowrap;"><?php echo esc_html($versionLabel); ?></code>
+                            <?php $localProvider = \Geweb\AISearch\ProviderFactory::make(); ?>
+                            <?php if ($localProvider instanceof \Geweb\AISearch\Gemini && $localProvider->isDeprecatedModel($versionLabel)): ?>
+                                <br><span style="color:#dba617; font-size:10px; font-weight:600; text-transform:uppercase;">Deprecated</span>
+                            <?php endif; ?>
+                        </td>
                             <td style="text-align:center;">
                                 <?php echo $latestLabel !== '' ? '<code style="white-space:nowrap;">' . esc_html($latestLabel) . '</code>' : '&nbsp;'; ?>
                             </td>
@@ -391,6 +397,7 @@ class AdminPageSections {
                                         data-timestamp="<?php echo esc_attr($testTimestamp); ?>"
                                         data-prompt="<?php echo esc_attr($testPrompt); ?>"
                                         data-response="<?php echo esc_attr($testResponse); ?>"
+                                        data-message="<?php echo esc_attr($testMessage); ?>"
                                         title="<?php echo esc_attr($testTooltip !== '' ? $testTooltip : ($testMessage !== '' ? $testMessage : 'Open latest test details')); ?>"
                                         style="padding:0; min-height:auto; color:<?php echo esc_attr($testColor); ?>; font-weight:600; cursor:help; border-bottom:1px dotted currentColor;"
                                     >
@@ -452,6 +459,10 @@ class AdminPageSections {
     private function isStaleFailedModelStatus(?array $entry): bool {
         if (!is_array($entry) || trim((string) ($entry['status'] ?? '')) !== 'failed') {
             return false;
+        }
+
+        if (!empty($entry['permanent_unavailable'])) {
+            return true;
         }
 
         $timestamp = isset($entry['timestamp']) ? (int) $entry['timestamp'] : 0;

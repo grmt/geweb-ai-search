@@ -3113,7 +3113,7 @@ jQuery(document).ready(function($) {
 	        this.toggleSubmitButton();
 	        GewebModal.schedulePageViewViewportSync();
 
-	        const $loader = $(`<p class="ai-message loading geweb-ai-thinking-indicator" aria-live="polite">${this.escapeHtml(t('thinking', 'Thinking...'))}</p>`);
+	        const $loader = $(`<p class="ai-message loading geweb-ai-thinking-indicator" aria-live="polite" style="animation:none; transition:opacity 0.3s ease-in-out;">${this.escapeHtml(t('thinking', 'Thinking...'))}</p>`);
 	        this.$answerBox.append($loader);
 	        this.scrollToBottom();
 

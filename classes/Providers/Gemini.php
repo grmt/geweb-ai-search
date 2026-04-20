@@ -2906,6 +2906,23 @@ class Gemini implements AIProviderInterface {
         return preg_match('/^gemini-[0-9][a-z0-9.\-]*-(pro|flash|flash-lite)(?:-|$)/', $normalizedModel) === 1;
     }
 
+    public function isDeprecatedModel(string $model): bool {
+        $normalized = strtolower(trim($model));
+        if ($normalized === '') {
+            return false;
+        }
+
+        if (preg_match('/^gemini-1\.[05]/', $normalized) === 1) {
+            return true;
+        }
+
+        if (preg_match('/-001$|-002$/', $normalized) === 1) {
+            return true;
+        }
+
+        return in_array($normalized, ['gemini-pro', 'gemini-flash', 'gemini-pro-vision'], true);
+    }
+
     private function isPermanentlyUnavailableModel(string $model): bool {
         $normalizedModel = strtolower(trim($model));
         if ($normalizedModel === '') {

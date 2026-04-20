@@ -111,7 +111,7 @@ class AdminPageRenderer {
                         <th><label for="geweb_ai_search_model">Select Model:</label></th>
                         <td>
                             <select name="geweb_ai_search_model" id="geweb_ai_search_model">
-                                <?php foreach ($models as $model): ?>
+                                <?php foreach ($dropdownModels as $model): ?>
                                     <?php
                                     $modelStatusEntry = $modelStatuses[$model] ?? null;
                                     $isFailedModel = is_array($modelStatusEntry) && (($modelStatusEntry['status'] ?? '') === 'failed');
@@ -328,7 +328,7 @@ class AdminPageRenderer {
                                     <label for="geweb_ai_search_prompt_model_jump"><strong>Jump to model prompt</strong></label><br>
                                     <select id="geweb_ai_search_prompt_model_jump" class="regular-text">
                                         <option value="">Select a model...</option>
-                                        <?php foreach ($models as $model): ?>
+                                        <?php foreach ($dropdownModels as $model): ?>
                                             <option value="<?php echo esc_attr((string) $model); ?>" <?php selected($model, $selectedModel); ?>>
                                                 <?php echo esc_html((string) $model); ?>
                                             </option>

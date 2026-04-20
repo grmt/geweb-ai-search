@@ -803,8 +803,19 @@ class AdminDataAjaxController {
         $selectedModel = $provider->getModel();
         $modelStatuses = $provider->getModelStatuses();
 
+        $dropdownModels = array_values(array_filter($models, function ($m) use ($provider, $selectedModel) {
+            if ($m === $selectedModel) {
+                return true;
+            }
+            if ($provider instanceof Gemini && $provider->isDeprecatedModel($m)) {
+                return false;
+            }
+            return true;
+        }));
+
         wp_send_json_success([
             'models' => array_values($models),
+            'dropdown_models' => $dropdownModels,
             'selected_model' => $selectedModel,
             'connection_status' => $connectionStatus,
             'model_statuses' => is_array($modelStatuses) ? $modelStatuses : [],

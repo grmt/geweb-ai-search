@@ -84,6 +84,17 @@ class AdminPageConfigBuilder {
         $workingModelHints = $this->buildWorkingModelHints($models, $modelStatuses);
         $connectionStatus = get_option('geweb_aisearch_connection_status', []);
         $hasValidSavedApiKey = is_array($connectionStatus) && (($connectionStatus['status'] ?? '') === 'ok');
+
+        $dropdownModels = array_values(array_filter($models, function ($m) use ($provider, $selectedModel) {
+            if ($m === $selectedModel) {
+                return true;
+            }
+            if ($provider instanceof Gemini && $provider->isDeprecatedModel($m)) {
+                return false;
+            }
+            return true;
+        }));
+
         $selectedProvider = ProviderFactory::getConfiguredProviderKey();
         $availableProviders = ProviderFactory::getAvailableProviders();
         $customPrompt = UserScope::getGroupScopedOption('geweb_aisearch_custom_prompt', '');
@@ -141,7 +152,7 @@ class AdminPageConfigBuilder {
         $documentsTabUrl = ($this->getTabUrl)('documents');
         $storesTabUrl = ($this->getTabUrl)('stores');
         $conversationsTabUrl = ($this->getTabUrl)('conversations');
-        $modelPromptRows = AdminPageSupport::buildModelPromptRows($models, $selectedModel, $modelPromptOverrides, $modelPromptOverrideNames, $modelPromptOverrideModes, $provider, $defaultPrompt);
+        $modelPromptRows = AdminPageSupport::buildModelPromptRows($dropdownModels, $selectedModel, $modelPromptOverrides, $modelPromptOverrideNames, $modelPromptOverrideModes, $provider, $defaultPrompt);
         $promptHistoryItems = AdminPageSupport::buildPromptHistoryItems($promptHistory, $defaultPrompt, 'Default prompt');
         $documentsApiStatus = AdminPageSupport::buildApiStatusDisplay($connectionStatus, '#46b450', '#646970', '#d63638');
         $pluginUpdateGuardActive = PluginUpdateGuard::isActive();
@@ -215,6 +226,7 @@ class AdminPageConfigBuilder {
             'modelPromptRows' => $modelPromptRows,
             'modelStatuses' => $modelStatuses,
             'models' => $models,
+            'dropdownModels' => $dropdownModels,
             'workingModelHints' => $workingModelHints,
             'postTypes' => $postTypes,
             'preserveDataOnUninstall' => $preserveDataOnUninstall,
