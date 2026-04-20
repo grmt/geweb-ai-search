@@ -164,6 +164,11 @@
     margin-right: 0;
     align-self: center;
 }
+.geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-panel-heading > .geweb-ai-panel-collapse,
+.geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel .geweb-ai-panel-heading > .geweb-ai-panel-collapse {
+    margin-left: 0;
+    order: -1;
+}
 .geweb-ai-sources-panel .geweb-ai-panel-heading-main {
     justify-content: flex-start;
 }
@@ -192,22 +197,8 @@
     color: #334155 !important;
     box-shadow: none !important;
     transition: color 0.15s ease, transform 0.15s ease;
-}
-.geweb-ai-panel-reopen {
-    position: absolute;
-    top: 6px;
-    right: 8px;
-    z-index: 4;
-    display: none;
-}
-.geweb-ai-panel-reopen--left,
-.geweb-ai-panel-reopen--right {
-    left: auto;
-    transform: none;
-}
-.geweb-ai-workspace.is-left-collapsed .geweb-ai-panel-reopen--left,
-.geweb-ai-workspace.is-right-collapsed .geweb-ai-panel-reopen--right {
-    display: inline-flex;
+    cursor: pointer;
+    flex-shrink: 0;
 }
 .geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar,
 .geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel {
@@ -215,7 +206,7 @@
     flex-direction: column;
     align-items: center;
     min-width: var(--geweb-ai-collapsed-pane-width);
-    padding-top: 54px;
+    padding-top: 8px;
     padding-bottom: 10px;
     overflow: hidden;
     border: 1px solid rgba(203, 213, 225, 0.78);
@@ -431,13 +422,44 @@
     margin-left: 0;
     flex: 0 0 auto;
 }
-.geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-overview-header,
-.geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel .geweb-ai-panel-heading {
-    justify-content: center;
+.geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-overview-header {
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: center !important;
+    gap: 8px !important;
 }
-.geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-overview-actions,
-.geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel .geweb-ai-panel-heading-actions {
+.geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel .geweb-ai-panel-heading {
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: center !important;
+    gap: 8px !important;
+}
+.geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel .geweb-ai-panel-heading-main {
+    display: contents;
+}
+.geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel .geweb-ai-panel-title {
+    display: none !important;
+}
+.geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-overview-actions {
     display: none;
+}
+.geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel .geweb-ai-panel-heading-actions .geweb-ai-overview-action-label {
+    display: none !important;
+}
+.geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel .geweb-ai-panel-heading-actions button,
+.geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel .geweb-ai-panel-heading-actions a {
+    display: inline-flex !important;
+    visibility: visible !important;
+}
+.geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel .geweb-ai-panel-heading-actions {
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: center !important;
+    align-items: center !important;
+    width: 100% !important;
+    order: 1 !important;
+    visibility: visible !important;
+    opacity: 1 !important;
 }
 .geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-overview-header {
     width: 100%;
@@ -446,29 +468,71 @@
 .geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-panel-heading {
     width: 100%;
     justify-content: center;
+    flex-direction: column;
+    gap: 8px;
 }
 .geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-panel-heading-main {
-    justify-content: center;
+    display: contents;
 }
-.geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-panel-title,
-.geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-panel-collapse:not(.geweb-ai-panel-reopen),
-.geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-current-conversation,
-.geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-panel-heading-actions > :not(.geweb-ai-new-conversation) {
+.geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-panel-title {
+    display: none !important;
+}
+.geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-current-conversation {
     display: none;
 }
 .geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-panel-heading-actions {
-    display: flex;
-    justify-content: center;
-    width: 100%;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: center !important;
+    align-items: center !important;
+    width: 100% !important;
+    gap: 8px !important;
+    order: 1 !important;
+    visibility: visible !important;
+    opacity: 1 !important;
 }
-.geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-new-conversation {
-    width: 38px;
+.geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-panel-heading-actions .geweb-ai-overview-action-label {
+    display: none !important;
+}
+.geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-panel-heading-actions button,
+.geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-panel-heading-actions a {
+    display: inline-flex !important;
+    visibility: visible !important;
+}
+.geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-new-conversation,
+.geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-overview-action-button,
+.geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel .geweb-ai-overview-action-button {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: auto !important;
+    min-width: auto !important;
+    max-width: none !important;
+    height: auto !important;
+    min-height: auto !important;
+    max-height: none !important;
+    padding: 0 !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    gap: 0 !important;
+    color: #334155 !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+.geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-overview-action-icon,
+.geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel .geweb-ai-overview-action-icon {
+    width: 20px !important;
+    height: 20px !important;
+    min-width: 20px !important;
+    font-size: 18px !important;
 }
 .geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-conversation-overview {
     width: 100%;
     flex: 1 1 auto;
     min-height: 0;
     padding: 10px 7px;
+    margin-top: 12px;
     border: 0;
     background: transparent;
     display: flex;
@@ -513,8 +577,9 @@
 .geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-panel-heading,
 .geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel .geweb-ai-panel-heading {
     min-height: 40px;
+    width: 100%;
+    justify-content: center;
 }
-.geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel .geweb-ai-panel-heading,
 .geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel .geweb-ai-sources-help {
     display: none;
 }
@@ -523,6 +588,7 @@
     flex: 1 1 auto;
     min-height: 0;
     padding: 10px 7px;
+    margin-top: 12px;
     border: 0;
     background: transparent;
     overflow-y: auto;

@@ -1,3 +1,8 @@
+const INLINE_MATCH_MAX_WINDOW = 16;
+const INLINE_MATCH_MIN_WINDOW_THRESHOLD = 8;
+const SNIPPET_CONTEXT_BEFORE = 90;
+const SNIPPET_CONTEXT_AFTER = 110;
+
 function getAiSearchConfig() {
 	return globalThis.geweb_aisearch ?? {};
 }
@@ -62,8 +67,8 @@ function buildInlineMatchCandidates(phrase) {
 	}
 
 	const candidates = [];
-	const maxWindowSize = Math.min(words.length, 16);
-	const minWindowSize = words.length > 8 ? 4 : 1;
+	const maxWindowSize = Math.min(words.length, INLINE_MATCH_MAX_WINDOW);
+	const minWindowSize = words.length > INLINE_MATCH_MIN_WINDOW_THRESHOLD ? 4 : 1;
 
 	for (let windowSize = maxWindowSize; windowSize >= minWindowSize; windowSize -= 1) {
 		for (let start = 0; start <= words.length - windowSize; start += 1) {
@@ -129,8 +134,8 @@ function buildPageMatchSnippet(text, matchIndex, matchLength) {
 		return '';
 	}
 
-	const start = Math.max(0, matchIndex - 90);
-	const end = Math.min(rawText.length, matchIndex + matchLength + 110);
+	const start = Math.max(0, matchIndex - SNIPPET_CONTEXT_BEFORE);
+	const end = Math.min(rawText.length, matchIndex + matchLength + SNIPPET_CONTEXT_AFTER);
 	const prefix = start > 0 ? '…' : '';
 	const suffix = end < rawText.length ? '…' : '';
 	const before = escapeInlineMatchHtml(rawText.slice(start, matchIndex));
@@ -527,11 +532,11 @@ jQuery(document).ready(function($) {
 	    },
 
 	    getWorkspaceAutoCollapseThreshold() {
-	        return 1023;
+	        return 834;
 	    },
 
 	    getMobilePaneFooterThreshold() {
-	        return 1023;
+	        return 767;
 	    },
 
 	    isMobileWorkspaceNavigationActive(workspace = this.getWorkspaceElement()) {
@@ -1348,7 +1353,7 @@ jQuery(document).ready(function($) {
 
 	    bindWorkspacePaneResizers() {
 	        const workspace = this.ai ? this.ai.querySelector('.geweb-ai-workspace') : null;
-	        if (!workspace || globalThis.innerWidth <= 1023) {
+	        if (!workspace || globalThis.innerWidth <= this.getWorkspaceAutoCollapseThreshold()) {
 	            return;
 	        }
 
@@ -1602,7 +1607,7 @@ jQuery(document).ready(function($) {
 	    },
 
 	    escapeAttr(text) {
-	        return String(text).replaceAll('"', '&quot;');
+	        return String(text).replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll("'", '&#039;');
 	    },
 
 	};
@@ -2560,7 +2565,11 @@ jQuery(document).ready(function($) {
 	            return;
 	        }
 
-	        this.$answerBox.empty();
+	        const answerBoxNode = this.$answerBox[0];
+	        const parentNode = answerBoxNode.parentNode;
+	        const nextSibling = answerBoxNode.nextSibling;
+
+	        this.$answerBox.detach().empty();
 
 	        this.conversationHistory.forEach((item, index) => {
 	            if (item.role === 'model') {
@@ -2588,6 +2597,10 @@ jQuery(document).ready(function($) {
 	                : {};
 	            this.appendMessage(item.content, 'user', { historyIndex: index, messageData: item, responseMeta: linkedResponseMeta });
 	        });
+
+	        if (parentNode) {
+	            parentNode.insertBefore(answerBoxNode, nextSibling);
+	        }
 	    },
 
 	    async removeConversationTurn(historyIndex) {
@@ -3194,7 +3207,7 @@ jQuery(document).ready(function($) {
 		            return;
 		        }
 
-		        if (globalThis.matchMedia && globalThis.matchMedia('(max-width: 1023px)').matches) {
+		        if (globalThis.matchMedia && globalThis.matchMedia(`(max-width: ${GewebModal.getWorkspaceAutoCollapseThreshold()}px)`).matches) {
 		            select.style.removeProperty('width');
 		            select.style.removeProperty('min-width');
 		            return;
@@ -3324,11 +3337,11 @@ jQuery(document).ready(function($) {
 		                            this.syncFrontendPageConversationState();
 		                            this.syncStoredChatState();
 		                        }
-		                        void this.pollAiChatJob(String(response.data.job_id || '').trim(), $loader);
+		                        this.pollAiChatJob(String(response.data.job_id || '').trim(), $loader).catch((error) => console.debug('Polling AI chat job failed.', error));
 		                        return;
 		                    }
 
-		                    void this.handleResponse(response, $loader);
+		                    this.handleResponse(response, $loader).catch((error) => console.debug('Handling AI response failed.', error));
 		                },
 		                error: (xhr) => {
 		                    if (!nonceRetried && this.isNonceFailureResponse(xhr)) {
@@ -3341,12 +3354,12 @@ jQuery(document).ready(function($) {
 		                            })
 		                            .catch((error) => {
 		                                console.debug('Could not refresh expired AI search nonce.', error);
-		                                void this.handleError($loader, xhr, requestData.conversation_id, userEntry.created_at);
+		                                this.handleError($loader, xhr, requestData.conversation_id, userEntry.created_at).catch((err) => console.debug('Handling AI error failed.', err));
 		                            });
 		                        return;
 		                    }
 
-		                    void this.handleError($loader, xhr, requestData.conversation_id, userEntry.created_at);
+		                    this.handleError($loader, xhr, requestData.conversation_id, userEntry.created_at).catch((error) => console.debug('Handling AI error failed.', error));
 		                }
 		            });
 		        };
@@ -3409,7 +3422,7 @@ jQuery(document).ready(function($) {
 	        this.toggleSubmitButton();
 
 	        if (shouldRecover) {
-	            void this.pollForRecoveredResponse(conversationId, userCreatedAt);
+	            this.pollForRecoveredResponse(conversationId, userCreatedAt).catch((error) => console.debug('Polling for recovered response failed.', error));
 	        }
 		},
 
@@ -3515,7 +3528,7 @@ jQuery(document).ready(function($) {
 		                    const questionText = this.conversationHistory[lastUserIndex].content;
 		                    await this.removeConversationTurn(lastUserIndex);
 		                    this.populateQuestionBox(questionText, { focus: false });
-		                    void this.sendMessage();
+		                    this.sendMessage().catch((error) => console.debug('Retry sendMessage failed.', error));
 		                }
 		            });
 		            $messageActions.append($retryButton);
@@ -4322,16 +4335,28 @@ jQuery(document).ready(function($) {
 	            return;
 	        }
 
+	        const state = {
+	            conversationId: this.conversationId,
+	            compactedConversation: this.compactedConversation,
+	            currentContextSummary: this.currentContextSummary,
+	            excludedSourceKeysByConversation: this.excludedSourceKeysByConversation,
+	            conversationHistory: this.conversationHistory,
+	            conversationArchive: this.conversationArchive,
+	        };
+
 	        try {
-	            globalThis.localStorage.setItem(this.getStoredChatStateKey(), JSON.stringify({
-	                conversationId: this.conversationId,
-	                compactedConversation: this.compactedConversation,
-	                currentContextSummary: this.currentContextSummary,
-	                excludedSourceKeysByConversation: this.excludedSourceKeysByConversation,
-	                conversationHistory: this.conversationHistory,
-	                conversationArchive: this.conversationArchive,
-	            }));
+	            globalThis.localStorage.setItem(this.getStoredChatStateKey(), JSON.stringify(state));
 	        } catch (error) {
+	            const isQuotaError = error instanceof DOMException
+	                && (error.name === 'QuotaExceededError' || error.name === 'NS_ERROR_DOM_QUOTA_REACHED');
+	            if (isQuotaError) {
+	                try {
+	                    globalThis.localStorage.setItem(this.getStoredChatStateKey(), JSON.stringify({ ...state, conversationArchive: [] }));
+	                } catch (retryError) {
+	                    console.debug('Saving stored chat state failed even after trimming archive.', retryError);
+	                }
+	                return;
+	            }
 	            console.debug('Saving stored chat state failed.', error);
 	        }
 	    },

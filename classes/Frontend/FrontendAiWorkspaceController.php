@@ -323,9 +323,6 @@ class FrontendAiWorkspaceController {
             <?php endif; ?>
             <div class="geweb-ai-workspace" data-mobile-pane="main">
                 <aside class="geweb-ai-sidebar" data-mobile-pane="left" tabindex="-1" aria-label="<?php echo esc_attr__('Chat panel', 'geweb-ai-search'); ?>">
-                    <button type="button" class="button button-small geweb-ai-panel-collapse geweb-ai-panel-reopen geweb-ai-panel-reopen--left" data-panel-toggle="left" aria-expanded="true" aria-label="<?php echo esc_attr__('Expand chats panel', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Expand chats panel', 'geweb-ai-search'); ?>">
-                        <span class="geweb-ai-panel-collapse-icon" aria-hidden="true">▶</span>
-                    </button>
                     <div class="geweb-ai-overview-header">
                         <div class="geweb-ai-panel-heading">
                             <div class="geweb-ai-panel-heading-main">
@@ -441,9 +438,6 @@ class FrontendAiWorkspaceController {
                 </div>
                 <div class="geweb-ai-pane-resizer geweb-ai-pane-resizer--right" data-resize-target="right" aria-orientation="vertical" aria-label="<?php echo esc_attr__('Resize sources panel', 'geweb-ai-search'); ?>"></div>
                 <aside class="geweb-ai-sources-panel" data-mobile-pane="right" tabindex="-1" aria-label="<?php echo esc_attr__('Source references panel', 'geweb-ai-search'); ?>">
-                    <button type="button" class="button button-small geweb-ai-panel-collapse geweb-ai-panel-reopen geweb-ai-panel-reopen--right" data-panel-toggle="right" aria-expanded="true" aria-label="<?php echo esc_attr__('Expand sources panel', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Expand sources panel', 'geweb-ai-search'); ?>">
-                        <span class="geweb-ai-panel-collapse-icon" aria-hidden="true">◀</span>
-                    </button>
                     <div class="geweb-ai-panel-heading">
                         <div class="geweb-ai-panel-heading-main">
                             <div class="geweb-ai-panel-title"><?php echo esc_html__('Source references', 'geweb-ai-search'); ?></div>
