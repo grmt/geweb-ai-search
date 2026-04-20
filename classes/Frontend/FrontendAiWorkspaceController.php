@@ -154,6 +154,7 @@ class FrontendAiWorkspaceController {
                 'contextSummaryCollapsed' => __('Compacted context summary used. Click to expand.', 'geweb-ai-search'),
                 'noChatsYet' => __('No chats yet.', 'geweb-ai-search'),
                 'copyAnswer' => __('Copy answer', 'geweb-ai-search'),
+                'retryAnswer' => __('Retry with longer timeout', 'geweb-ai-search'),
                 'copyConversation' => __('Copy chat', 'geweb-ai-search'),
                 'temporaryPrompt' => __('Temporary chat prompt', 'geweb-ai-search'),
                 'temporaryPromptActive' => __('Temporary prompt', 'geweb-ai-search'),
@@ -174,6 +175,8 @@ class FrontendAiWorkspaceController {
                 'composerTemporaryOverride' => __('Defaults overridden', 'geweb-ai-search'),
                 'composerPromptLabel' => __('Prompt', 'geweb-ai-search'),
                 'composerModelLabel' => __('Model', 'geweb-ai-search'),
+                'composerPreviousQuestion' => __('Previous question', 'geweb-ai-search'),
+                'composerNextQuestion' => __('Next question', 'geweb-ai-search'),
                 'copied' => __('Copied', 'geweb-ai-search'),
                 'copyFailed' => __('Could not copy', 'geweb-ai-search'),
                 'excludeSourceTemporarily' => __('Temporarily exclude', 'geweb-ai-search'),
@@ -199,8 +202,8 @@ class FrontendAiWorkspaceController {
                 'modelLabel' => __('Model', 'geweb-ai-search'),
                 'manageConversations' => __('Manage chats', 'geweb-ai-search'),
                 'searchResultsIntro' => __('Use your normal site search above to update these WordPress results without leaving the AI workspace.', 'geweb-ai-search'),
-                'mobileChatsTab' => __('Chats', 'geweb-ai-search'),
-                'mobileChatTab' => __('Chat', 'geweb-ai-search'),
+                'mobileChatsTab' => __('History', 'geweb-ai-search'),
+                'mobileChatTab' => __('AI chat', 'geweb-ai-search'),
                 'mobileSourcesTab' => __('Sources', 'geweb-ai-search'),
             ],
         ]));
@@ -382,6 +385,14 @@ class FrontendAiWorkspaceController {
                                     <span id="geweb-ai-current-prompt-display" class="geweb-ai-question-summary-value geweb-ai-question-summary-value--prompt" title="<?php echo esc_attr($currentPromptInstruction); ?>"><?php echo esc_html($currentPromptName); ?></span>
                                 </button>
                             </div>
+                            <div class="geweb-ai-question-toolbar-actions">
+                                <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-secondary-button--icon-only geweb-ai-question-history-button" id="geweb-ai-question-history-prev" aria-label="<?php echo esc_attr__('Previous question', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Previous question', 'geweb-ai-search'); ?>" disabled>
+                                    <span aria-hidden="true">↑</span>
+                                </button>
+                                <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-secondary-button--icon-only geweb-ai-question-history-button" id="geweb-ai-question-history-next" aria-label="<?php echo esc_attr__('Next question', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Next question', 'geweb-ai-search'); ?>" disabled>
+                                    <span aria-hidden="true">↓</span>
+                                </button>
+                            </div>
                         </div>
                         <div class="geweb-ai-temporary-settings-panel" id="geweb-ai-temporary-settings-panel" hidden>
                             <div class="geweb-ai-temporary-settings-header">
@@ -457,11 +468,11 @@ class FrontendAiWorkspaceController {
                 <nav class="geweb-ai-mobile-pane-footer" aria-label="<?php echo esc_attr__('Workspace panes', 'geweb-ai-search'); ?>">
                     <button type="button" class="button geweb-ai-mobile-pane-tab" data-mobile-pane-target="left" aria-pressed="false">
                         <span class="geweb-ai-mobile-pane-tab-icon" aria-hidden="true">☰</span>
-                        <span class="geweb-ai-mobile-pane-tab-label"><?php echo esc_html__('Chats', 'geweb-ai-search'); ?></span>
+                        <span class="geweb-ai-mobile-pane-tab-label"><?php echo esc_html__('History', 'geweb-ai-search'); ?></span>
                     </button>
                     <button type="button" class="button geweb-ai-mobile-pane-tab" data-mobile-pane-target="main" aria-pressed="true">
                         <span class="geweb-ai-mobile-pane-tab-icon" aria-hidden="true">✎</span>
-                        <span class="geweb-ai-mobile-pane-tab-label"><?php echo esc_html__('Chat', 'geweb-ai-search'); ?></span>
+                        <span class="geweb-ai-mobile-pane-tab-label"><?php echo esc_html__('AI chat', 'geweb-ai-search'); ?></span>
                     </button>
                     <button type="button" class="button geweb-ai-mobile-pane-tab" data-mobile-pane-target="right" aria-pressed="false">
                         <span class="geweb-ai-mobile-pane-tab-icon" aria-hidden="true">#</span>

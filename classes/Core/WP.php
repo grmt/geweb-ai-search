@@ -12,6 +12,8 @@ class WP {
     private const OPTION_REWRITE_VERSION = 'geweb_aisearch_rewrite_version';
     private const FRONTEND_AI_REWRITE_SLUG = 'ai-search-workspace';
     private const FRONTEND_AI_REWRITE_VERSION = '2';
+    private const AI_CHAT_JOB_TRANSIENT_PREFIX = 'geweb_ai_chat_job_';
+    private const AI_CHAT_JOB_TTL = DAY_IN_SECONDS;
     private const MESSAGE_INSUFFICIENT_PERMISSIONS = 'Insufficient permissions';
     private const TRIMMED_CONTEXT_RECENT_MESSAGE_LIMIT = 5;
     private const TRIMMED_CONTEXT_SUMMARY_POINT_LIMIT = 5;
@@ -48,6 +50,8 @@ class WP {
 
         add_action('wp_ajax_geweb_ai_chat', [$this, 'ajaxAiChat']);
         add_action('wp_ajax_nopriv_geweb_ai_chat', [$this, 'ajaxAiChat']);
+        add_action('wp_ajax_geweb_get_ai_chat_job', [$this, 'ajaxGetAiChatJob']);
+        add_action('wp_ajax_nopriv_geweb_get_ai_chat_job', [$this, 'ajaxGetAiChatJob']);
         add_action('wp_ajax_geweb_get_frontend_conversations', [$conversationAjaxController, 'ajaxGetFrontendConversations']);
         add_action('wp_ajax_nopriv_geweb_get_frontend_conversations', [$conversationAjaxController, 'ajaxGetFrontendConversations']);
         add_action('wp_ajax_geweb_get_frontend_conversation', [$conversationAjaxController, 'ajaxGetFrontendConversation']);
@@ -374,17 +378,106 @@ class WP {
         try {
             $provider = ProviderFactory::make();
             $selectedModel = $this->resolveRequestedModel($provider, $requestedModel);
-            $requestId = 'chat-' . wp_generate_password(10, false, false);
-
             $latestUserMessage = $this->conversationManager->extractLatestUserMessage($messages);
+            $fullMessages = $this->conversationManager->buildFullConversationMessages($conversationId, $messages, $latestUserMessage);
+            $initialConversation = $this->conversationManager->saveFrontendConversation(
+                $conversationId,
+                $fullMessages,
+                '',
+                false,
+                ''
+            );
+            $resolvedConversationId = (string) ($initialConversation['id'] ?? $conversationId);
+            $jobId = 'chatjob-' . wp_generate_password(12, false, false);
+
+            $this->writeAiChatJob([
+                'id' => $jobId,
+                'status' => 'queued',
+                'conversation_id' => $resolvedConversationId,
+                'messages' => $fullMessages,
+                'requested_model' => $selectedModel,
+                'temporary_prompt' => $temporaryPrompt,
+                'excluded_sources' => $this->extractExcludedSourcesFromRequest(),
+                'created_at' => time(),
+                'updated_at' => time(),
+                'result' => null,
+                'error_message' => '',
+            ]);
+
+            $this->sendAsyncJsonAndContinue([
+                'success' => true,
+                'data' => [
+                    'queued' => true,
+                    'job_id' => $jobId,
+                    'conversation_id' => $resolvedConversationId,
+                ],
+            ]);
+
+            $this->processAiChatJob($jobId);
+            exit;
+        } catch (\Exception $e) {
+            wp_send_json_error(['message' => $e->getMessage()]);
+        }
+    }
+
+    public function ajaxGetAiChatJob(): void {
+        check_ajax_referer('geweb_ai_search_search', 'nonce');
+
+        $jobId = isset($_POST['job_id']) ? sanitize_text_field(wp_unslash($_POST['job_id'])) : '';
+        if ($jobId === '') {
+            wp_send_json_error(['message' => 'Missing job ID.'], 400);
+        }
+
+        $job = $this->readAiChatJob($jobId);
+        if ($job === null) {
+            wp_send_json_error(['message' => 'Chat job not found.'], 404);
+        }
+
+        $status = (string) ($job['status'] ?? 'queued');
+        $payload = [
+            'job_id' => $jobId,
+            'status' => $status,
+            'conversation_id' => (string) ($job['conversation_id'] ?? ''),
+        ];
+
+        if ($status === 'completed' && isset($job['result']) && is_array($job['result'])) {
+            $payload['result'] = $job['result'];
+        }
+
+        if ($status === 'error') {
+            $payload['message'] = (string) ($job['error_message'] ?? 'The AI request did not complete.');
+        }
+
+        wp_send_json_success($payload);
+    }
+
+    private function processAiChatJob(string $jobId): void {
+        $job = $this->readAiChatJob($jobId);
+        if ($job === null) {
+            return;
+        }
+
+        $job['status'] = 'running';
+        $job['updated_at'] = time();
+        $this->writeAiChatJob($job);
+
+        try {
+            $conversationId = (string) ($job['conversation_id'] ?? '');
+            $fullMessages = isset($job['messages']) && is_array($job['messages']) ? $job['messages'] : [];
+            $selectedModel = (string) ($job['requested_model'] ?? '');
+            $temporaryPrompt = (string) ($job['temporary_prompt'] ?? '');
+            $excludedSources = isset($job['excluded_sources']) && is_array($job['excluded_sources']) ? $job['excluded_sources'] : [];
+
+            $provider = ProviderFactory::make();
+            $requestId = 'chat-' . wp_generate_password(10, false, false);
             if (method_exists($provider, 'setRuntimeLogContext')) {
                 $provider->setRuntimeLogContext([
                     'request_id' => $requestId,
                     'conversation_id' => $conversationId !== '' ? $conversationId : 'pending',
-                    'ajax_action' => 'geweb_ai_chat',
+                    'ajax_action' => 'geweb_ai_chat_async',
                 ]);
             }
-            $fullMessages = $this->conversationManager->buildFullConversationMessages($conversationId, $messages, $latestUserMessage);
+
             $context = $this->conversationManager->compactConversationForRequest($fullMessages);
             $context = $this->refineTrimmedContext($context, $fullMessages, $provider, $selectedModel, $conversationId);
             $this->conversationManager->saveFrontendConversation(
@@ -395,7 +488,6 @@ class WP {
                 (string) ($context['summary'] ?? '')
             );
 
-            $excludedSources = $this->extractExcludedSourcesFromRequest();
             $result = $provider->search(
                 $context['messages'],
                 $selectedModel,
@@ -404,14 +496,22 @@ class WP {
             );
             $result = $this->attachRequestDebugMeta($result, $context, $selectedModel, $temporaryPrompt, $excludedSources);
             $this->appendAiResponseToConversation($fullMessages, $result);
-
             $this->conversationManager->recordConversationUsage($conversationId, $fullMessages, $context['summary'], $result, $provider);
 
             $result['context_compacted'] = !empty($context['compacted']);
             $result['context_summary'] = (string) ($context['summary'] ?? '');
-            wp_send_json_success($result);
+
+            $job['status'] = 'completed';
+            $job['updated_at'] = time();
+            $job['result'] = $result;
+            $job['error_message'] = '';
+            $this->writeAiChatJob($job);
         } catch (\Exception $e) {
-            wp_send_json_error(['message' => $e->getMessage()]);
+            $job['status'] = 'error';
+            $job['updated_at'] = time();
+            $job['error_message'] = $e->getMessage();
+            $job['result'] = null;
+            $this->writeAiChatJob($job);
         }
     }
 
@@ -717,6 +817,52 @@ class WP {
             'meta' => isset($result['meta']) && is_array($result['meta']) ? $result['meta'] : [],
             'created_at' => time(),
         ];
+    }
+
+    private function getAiChatJobTransientKey(string $jobId): string {
+        return self::AI_CHAT_JOB_TRANSIENT_PREFIX . preg_replace('/[^a-zA-Z0-9_-]/', '', $jobId);
+    }
+
+    private function readAiChatJob(string $jobId): ?array {
+        $job = get_transient($this->getAiChatJobTransientKey($jobId));
+        return is_array($job) ? $job : null;
+    }
+
+    private function writeAiChatJob(array $job): void {
+        $jobId = isset($job['id']) ? (string) $job['id'] : '';
+        if ($jobId === '') {
+            return;
+        }
+
+        set_transient($this->getAiChatJobTransientKey($jobId), $job, self::AI_CHAT_JOB_TTL);
+    }
+
+    private function sendAsyncJsonAndContinue(array $payload): void {
+        if (!headers_sent()) {
+            status_header(202);
+            header('Content-Type: application/json; charset=' . get_option('blog_charset'));
+            header('Cache-Control: no-cache, must-revalidate, max-age=0');
+        }
+
+        ignore_user_abort(true);
+
+        $json = wp_json_encode($payload);
+        if (is_string($json)) {
+            echo $json;
+        } else {
+            echo '{"success":false,"data":{"message":"Could not encode async response."}}';
+        }
+
+        if (function_exists('fastcgi_finish_request')) {
+            fastcgi_finish_request();
+            return;
+        }
+
+        while (ob_get_level() > 0) {
+            ob_end_flush();
+        }
+
+        flush();
     }
 
     /**

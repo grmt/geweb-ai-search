@@ -4,13 +4,13 @@ This file provides essential context, architecture overview, and development gui
 
 ## Project Overview
 
-**Geweb AI Search** is a WordPress plugin that provides an AI-powered search experience using Google Gemini. It offers smart answers, source links, and instant autocomplete—all within a unified modal interface.
+**Geweb AI Search** is a WordPress plugin that provides an AI-powered search experience using Google Gemini. It offers smart answers, source links, conversation history, persistent Markdown caching, OCR for image attachments, and instant autocomplete—all within a unified modal interface.
 
 ## Tech Stack
 
-- **Language**: PHP (7.4+ recommended), JavaScript (Vanilla JS), CSS.
+- **Language**: PHP 7.2+ required (libsodium used for encryption), 7.4+ recommended, JavaScript (Vanilla JS), CSS.
 - **Platform**: WordPress.
-- **External Dependencies**: Managed via Composer (e.g., `league/html-to-markdown`).
+- **External Dependencies**: Managed via Composer (e.g., `league/html-to-markdown`). API key encryption relies on the `libsodium` extension bundled in PHP 7.2+.
 
 ## Architecture & File Structure
 
@@ -24,7 +24,7 @@ This file provides essential context, architecture overview, and development gui
   - `Documents/`: Document management and file processing.
   - `Frontend/`: Frontend display, modals, and user interactions.
   - `Indexing/`: Post/content indexing and attachment processing.
-  - `Providers/`: AI Provider interfaces and implementations (e.g., Gemini).
+  - `Providers/`: AI Provider interfaces and implementations (e.g., Google Gemini). Handles model selection, File Search Store sync, API requests, and caching.
 - `assets/`: Contains JS, CSS, and image files for both admin and frontend.
 - `libs/`: External libraries and dependencies (e.g., `md` for Markdown processing).
 
@@ -43,6 +43,7 @@ This file provides essential context, architecture overview, and development gui
    - Protect all files from direct access (`defined('ABSPATH') || exit;`).
    - Use WordPress Nonces for all AJAX and form submissions.
    - Perform capability checks (e.g., `current_user_can('manage_options')`) before executing admin-level logic.
+   - All API keys must be encrypted using libsodium (e.g., via the `Encryption` class) before database storage.
 
 4. **Extensibility**:
    - Use WordPress actions and filters (`do_action()`, `apply_filters()`) to make the plugin extensible where appropriate.
@@ -52,6 +53,11 @@ This file provides essential context, architecture overview, and development gui
 
 6. **Documentation**:
    - Provide clear PHPDoc blocks for classes, methods, and properties to explain their purpose and parameters.
+
+7. **Gemini API Integration Rules**:
+   - **Model Fallbacks:** Support multiple models gracefully. Handle the difference between Gemini 3.x models (which support structured JSON responses) and Gemini 2.x models (which return plain text).
+   - **Resilience:** Include retry logic for transient API/upload failures, timeout backoffs for generations, and caching (using Transients/Options) to avoid redundant requests for model status or store overviews.
+   - **Logging:** Log all API interactions clearly using `error_log` prefixed with `geweb-ai-search:`, ensuring runtime context like HTTP codes, elapsed milliseconds, and request IDs are captured for debugging.
 
 ## Handling Modals & UI
 

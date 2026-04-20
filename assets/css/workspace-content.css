@@ -127,6 +127,24 @@
     background: transparent;
     position: relative;
 }
+.geweb-ai-thinking-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: #475569;
+    font-size: 13px;
+    line-height: 1.4;
+    animation: geweb-ai-thinking-pulse 1.1s ease-in-out infinite;
+}
+.geweb-ai-thinking-indicator::after {
+    content: '';
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: currentColor;
+    opacity: 0.72;
+    animation: geweb-ai-thinking-dot 1.1s ease-in-out infinite;
+}
 .geweb-ai-message-actions {
     position: absolute;
     top: 0;
@@ -639,6 +657,9 @@
     line-height: 1.5;
     color: #92400e;
 }
+.geweb-ai-error-card-body--preserve {
+    white-space: pre-wrap;
+}
 .geweb-ai-error-card-tips {
     margin: 8px 0 0;
     padding-left: 18px;
@@ -648,6 +669,16 @@
 }
 .geweb-ai-error-card-tips li + li {
     margin-top: 2px;
+}
+.geweb-ai-error-card--recovery {
+    margin-top: 8px;
+    border-color: rgba(59, 130, 246, 0.22);
+    background: rgba(239, 246, 255, 0.92);
+    color: #1e3a8a;
+}
+.geweb-ai-error-card--recovery .geweb-ai-error-card-title,
+.geweb-ai-error-card--recovery .geweb-ai-error-card-body {
+    color: #1d4ed8;
 }
 .ai-message ul,
 .ai-message ol {
@@ -665,6 +696,24 @@
 .ai-message i,
 .ai-message em {
     font-style: italic;
+}
+@keyframes geweb-ai-thinking-pulse {
+    0%, 100% {
+        opacity: 0.45;
+    }
+    50% {
+        opacity: 1;
+    }
+}
+@keyframes geweb-ai-thinking-dot {
+    0%, 100% {
+        transform: scale(0.85);
+        opacity: 0.35;
+    }
+    50% {
+        transform: scale(1.15);
+        opacity: 1;
+    }
 }
 .geweb-aisearch-modal-window .question-box {
     display: flex;
@@ -696,6 +745,7 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    flex: 0 1 auto;
     min-width: 0;
     max-width: 100%;
     min-height: 0;
@@ -738,6 +788,8 @@
     letter-spacing: 0.01em;
 }
 .geweb-aisearch-modal-window .geweb-ai-question-summary-value {
+    display: block;
+    flex: 0 1 auto;
     color: #111827;
     font-size: 12px;
     line-height: 1.25;
@@ -745,6 +797,8 @@
     min-width: 0;
 }
 .geweb-aisearch-modal-window .geweb-ai-question-summary-value--prompt {
+    display: inline-block;
+    flex: 1 1 auto;
     max-width: min(34ch, 100%);
     overflow: hidden;
     white-space: nowrap;
@@ -1105,13 +1159,37 @@
         flex-direction: column;
         gap: 6px;
     }
+    .geweb-aisearch-modal-window--page {
+        padding-left: 0;
+        padding-right: 0;
+    }
+    .geweb-aisearch-modal-window--page .geweb-ai-main-panel {
+        gap: 8px;
+    }
+    .geweb-aisearch-modal-window--page .geweb-ai-sidebar,
+    .geweb-aisearch-modal-window--page .geweb-ai-main-panel,
+    .geweb-aisearch-modal-window--page .geweb-ai-sources-panel {
+        padding-left: 8px;
+        padding-right: 8px;
+    }
+    .geweb-aisearch-modal-window--page .answer-box,
+    .geweb-aisearch-modal-window--page .question-box {
+        padding: 10px;
+        border-radius: 10px;
+    }
     .geweb-aisearch-modal-window--page .geweb-ai-message-actions {
-        position: static;
-        align-self: flex-end;
-        margin-top: 0;
-        margin-bottom: 2px;
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: auto;
+        align-self: auto;
+        justify-content: flex-start;
+        margin: 0;
+        padding-left: 0;
+        padding-right: 6px;
     }
     .geweb-aisearch-modal-window--page .geweb-ai-message-content {
+        padding-left: 68px;
         padding-right: 0;
     }
     .geweb-aisearch-modal-window--page .geweb-ai-response-details {
@@ -1240,14 +1318,15 @@
         display: none;
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 0;
-        padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
-        margin-top: 6px;
+        width: 100%;
+        padding: 4px 0 calc(4px + env(safe-area-inset-bottom, 0px));
+        margin-top: 0;
         border-top: 1px solid rgba(148, 163, 184, 0.24);
+        border-radius: 0;
         background: rgba(255, 255, 255, 0.96);
         -webkit-backdrop-filter: blur(12px);
         backdrop-filter: blur(12px);
-        border-radius: 10px;
-        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+        box-shadow: none;
     }
     .geweb-ai-mobile-pane-footer.is-visible {
         display: grid;

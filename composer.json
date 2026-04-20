@@ -1,6 +1,10 @@
 {
+    "$schema": "https://getcomposer.org/schema.json",
     "scripts": {
         "validate-gemini-fallback-models": "php scripts/validate_gemini_fallback_models.php"
+    },
+    "require": {
+        "league/html-to-markdown": "^5.0"
     },
     "require-dev": {
         "php-stubs/wordpress-stubs": "^6.9"

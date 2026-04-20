@@ -1092,17 +1092,14 @@
             const grounding = this.getGroundingMetadata(meta);
             const supports = Array.isArray(grounding?.groundingSupports) ? grounding.groundingSupports : [];
             if (!supports.length) {
-                return this.appendFallbackFootnoteGroup(html, this.getFallbackFootnoteNumbers(sourceFootnoteMap, sources));
+                return html;
             }
 
             const container = document.createElement('div');
             container.innerHTML = html;
-            const blocks = Array.from(container.querySelectorAll('p, li')).filter((node) => String(node.textContent || '').trim() !== '');
-            if (!blocks.length) {
-                const allFootnotes = getGroundingSupportFootnotes(supports, sourceFootnoteMap);
-                this.appendFallbackFootnoteMarker(container, allFootnotes);
-                return container.innerHTML;
-            }
+            const blocks = Array.from(container.querySelectorAll('p, li, blockquote, h1, h2, h3, h4, h5, h6, td, th'))
+                .filter((node) => String(node.textContent || '').trim() !== '');
+            const targetBlocks = blocks.length ? blocks : [container];
 
             const blockFootnotes = new Map();
             supports.forEach((support) => {
@@ -1114,7 +1111,7 @@
                     return;
                 }
 
-                const matchedBlock = this.findBestGroundingBlockMatch(blocks, segmentText);
+                const matchedBlock = this.findBestGroundingBlockMatch(targetBlocks, segmentText);
                 if (!matchedBlock) {
                     return;
                 }
@@ -1131,11 +1128,6 @@
                 }
                 this.insertFootnotesIntoBlock(block, placements);
             });
-
-            if (!blockFootnotes.size) {
-                const allFootnotes = getGroundingSupportFootnotes(supports, sourceFootnoteMap);
-                this.appendFallbackFootnoteMarker(container, allFootnotes);
-            }
 
             return container.innerHTML;
         },

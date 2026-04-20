@@ -115,11 +115,15 @@ class AdminPageRenderer {
                                     <?php
                                     $modelStatusEntry = $modelStatuses[$model] ?? null;
                                     $isFailedModel = is_array($modelStatusEntry) && (($modelStatusEntry['status'] ?? '') === 'failed');
+                                    $isTimeoutModel = is_array($modelStatusEntry) && (($modelStatusEntry['status'] ?? '') === 'timeout');
                                     ?>
                                     <option
                                         value="<?php echo esc_attr((string) $model); ?>"
-                                        data-model-status="<?php echo esc_attr($isFailedModel ? 'failed' : 'ok'); ?>"
-                                        style="<?php echo $isFailedModel ? 'color:#b32d2e;' : ''; ?>"
+                                        data-model-status="<?php echo esc_attr($isFailedModel ? 'failed' : ($isTimeoutModel ? 'timeout' : 'ok')); ?>"
+                                        style="<?php echo $isFailedModel ? 'color:#b32d2e;' : ($isTimeoutModel ? 'color:#dba617;' : ''); ?>"
+                                        <?php if ($isFailedModel || $isTimeoutModel): ?>
+                                            title="<?php echo esc_attr((string) ($modelStatusEntry['message'] ?? '')); ?>"
+                                        <?php endif; ?>
                                         <?php selected($selectedModel, $model); ?>
                                     >
                                         <?php echo esc_html((string) $model); ?>
@@ -152,6 +156,21 @@ class AdminPageRenderer {
                             ?>
                         </td>
                     </tr>
+
+                <tr>
+                    <th><label for="geweb_aisearch_timeout_flash">API Timeouts:</label></th>
+                    <td>
+                        <p style="margin-top:0;">
+                            <label for="geweb_aisearch_timeout_flash"><strong>Standard/Flash Model Timeout (seconds)</strong></label><br>
+                            <input type="number" id="geweb_aisearch_timeout_flash" name="<?php echo esc_attr(\Geweb\AISearch\Gemini::OPTION_TIMEOUT_FLASH); ?>" min="15" max="300" step="1" value="<?php echo esc_attr((string) get_option(\Geweb\AISearch\Gemini::OPTION_TIMEOUT_FLASH, '')); ?>" placeholder="<?php echo esc_attr((string) \Geweb\AISearch\Gemini::DEFAULT_HTTP_TIMEOUT_SECONDS); ?>" class="small-text">
+                        </p>
+                        <p style="margin-top:12px;">
+                            <label for="geweb_aisearch_timeout_pro"><strong>Pro Model Timeout (seconds)</strong></label><br>
+                            <input type="number" id="geweb_aisearch_timeout_pro" name="<?php echo esc_attr(\Geweb\AISearch\Gemini::OPTION_TIMEOUT_PRO); ?>" min="15" max="300" step="1" value="<?php echo esc_attr((string) get_option(\Geweb\AISearch\Gemini::OPTION_TIMEOUT_PRO, '')); ?>" placeholder="<?php echo esc_attr((string) \Geweb\AISearch\Gemini::DEFAULT_PRO_HTTP_TIMEOUT_SECONDS); ?>" class="small-text">
+                        </p>
+                        <p class="description">Maximum time WordPress will wait for a response from the Gemini API. Complex queries or large document contexts take longer to process. Leave empty to use the defaults.</p>
+                    </td>
+                </tr>
 
                     <tr>
                         <th><label for="geweb_ai_search_frontend_ai_interface">AI Search Interface:</label></th>

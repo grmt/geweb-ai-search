@@ -34,6 +34,8 @@ class Gemini implements AIProviderInterface {
     private const OPTION_MODEL_PROMPTS = 'geweb_aisearch_model_prompts';
     private const OPTION_MODEL_PROMPT_NAMES = 'geweb_aisearch_model_prompt_names';
     private const OPTION_MODEL_PROMPT_MODES = 'geweb_aisearch_model_prompt_modes';
+    public const OPTION_TIMEOUT_FLASH = 'geweb_aisearch_timeout_flash';
+    public const OPTION_TIMEOUT_PRO = 'geweb_aisearch_timeout_pro';
     private const OPTION_CONNECTION_STATUS = 'geweb_aisearch_connection_status';
     private const OPTION_STORES_CACHE = 'geweb_aisearch_gemini_stores_cache';
     private const OPTION_STORES_CACHE_TIME = 'geweb_aisearch_gemini_stores_cache_time';
@@ -98,7 +100,8 @@ class Gemini implements AIProviderInterface {
             'output' => 10.00,
         ],
     ];
-    private const DEFAULT_HTTP_TIMEOUT_SECONDS = 45;
+    public const DEFAULT_HTTP_TIMEOUT_SECONDS = 60;
+    public const DEFAULT_PRO_HTTP_TIMEOUT_SECONDS = 90;
     private const DEFAULT_SUMMARY_TIMEOUT_SECONDS = 12;
     private const DEFAULT_UPLOAD_OPERATION_TIMEOUT_SECONDS = 300;
     private const DEFAULT_UPLOAD_OPERATION_POLL_INTERVAL_MS = 5000;
@@ -723,6 +726,7 @@ class Gemini implements AIProviderInterface {
                 'headers' => [
                     'Content-Type'            => "multipart/related; boundary={$boundary}",
                     'Content-Length'          => (string) $payloadBytes,
+                    'x-goog-api-key'          => $this->apiKey,
                     'X-Goog-Upload-Protocol'  => 'multipart',
                 ],
                 'body' => $body,
@@ -951,12 +955,13 @@ class Gemini implements AIProviderInterface {
             throw new ConfigurationException('Configuration error');
         }
 
-        $url = self::API_BASE . '/' . $documentName . '?key=' . $this->apiKey . '&force=1';
+        $url = self::API_BASE . '/' . $documentName . '?force=1';
 
         $response = wp_remote_request($url, [
             'method'  => 'DELETE',
             'timeout' => 30,
             'headers' => [
+                'x-goog-api-key' => $this->apiKey,
                 'Content-Type' => 'application/json',
             ],
         ]);
@@ -991,11 +996,12 @@ class Gemini implements AIProviderInterface {
             throw new ConfigurationException('Configuration error');
         }
 
-        $url = self::API_BASE . '/' . ltrim($storeName, '/') . '?key=' . $this->apiKey . '&force=1';
+        $url = self::API_BASE . '/' . ltrim($storeName, '/') . '?force=1';
         $response = wp_remote_request($url, [
             'method' => 'DELETE',
             'timeout' => 30,
             'headers' => [
+                'x-goog-api-key' => $this->apiKey,
                 'Content-Type' => 'application/json',
             ],
         ]);
@@ -1278,7 +1284,7 @@ class Gemini implements AIProviderInterface {
             count($excludedSources),
             $requestModel
         ));
-        $timeoutSeconds = $this->getSearchTimeoutSecondsForQuestion($latestQuestion);
+        $timeoutSeconds = $this->getSearchTimeoutSecondsForQuestion($latestQuestion, $requestModel);
 
         // Build request body
         $promptDescriptor = $this->getPromptDescriptor($requestModel, $promptOverride);
@@ -1302,10 +1308,12 @@ class Gemini implements AIProviderInterface {
             $this->recordModelStatus($requestModel, 'ok');
             return $this->formatSearchResponse($responseText, $meta, $requestModel);
         } catch (\Exception $e) {
-            if ($this->isTimeoutException($e)) {
-                $this->recordGenerateTimeoutBackoff($latestQuestion, $timeoutSeconds);
+            $isTimeout = $this->isTimeoutException($e);
+
+            if ($isTimeout) {
+                $this->recordGenerateTimeoutBackoff($latestQuestion, $timeoutSeconds, $requestModel);
             }
-            $this->recordModelStatus($requestModel, 'failed', $e->getMessage());
+            $this->recordModelStatus($requestModel, $isTimeout ? 'timeout' : 'failed', $e->getMessage());
             throw $e;
         }
     }
@@ -1547,13 +1555,12 @@ class Gemini implements AIProviderInterface {
             throw new ConfigurationException('Configuration error');
         }
 
-        $originalUrl = $url;
-        $url = $this->appendApiKeyToUrl($url);
         $timeoutSeconds = max(5, min(110, $timeoutSeconds));
         $args = [
             'method'  => $method,
             'timeout' => $timeoutSeconds,
             'headers' => [
+                'x-goog-api-key' => $this->apiKey,
                 'Content-Type'  => 'application/json',
                 'Accept'        => 'application/json',
             ],
@@ -1563,101 +1570,131 @@ class Gemini implements AIProviderInterface {
             $args['body'] = wp_json_encode($body);
         }
 
-        $startedAt = microtime(true);
         $bodyBytes = isset($args['body']) ? strlen((string) $args['body']) : 0;
-        $this->logInfo(sprintf(
-            'Gemini request starting method=%s timeout_seconds=%d body_bytes=%d endpoint="%s"%s',
-            $method,
-            $timeoutSeconds,
-            $bodyBytes,
-            $this->redactApiKeyFromUrl($originalUrl),
-            $this->formatRuntimeLogContextSuffix()
-        ));
+        $attempt = 0;
+        $maxAttempts = 2;
 
-        $response = wp_remote_request($url, $args);
-        $elapsedMs = (int) round((microtime(true) - $startedAt) * 1000);
-
-        if (is_wp_error($response)) {
-            $this->logError(sprintf(
-                'Gemini request transport failure method=%s elapsed_ms=%d endpoint="%s" message="%s"%s',
+        do {
+            $attempt++;
+            $startedAt = microtime(true);
+            $this->logInfo(sprintf(
+                'Gemini request starting method=%s attempt=%d/%d timeout_seconds=%d body_bytes=%d endpoint="%s"%s',
                 $method,
-                $elapsedMs,
-                $this->redactApiKeyFromUrl($originalUrl),
-                $response->get_error_message(),
+                $attempt,
+                $maxAttempts,
+                $timeoutSeconds,
+                $bodyBytes,
+                $url,
                 $this->formatRuntimeLogContextSuffix()
             ));
-            throw new \Exception(esc_html(sprintf(
-                'API request failed after %d ms: %s',
-                $elapsedMs,
-                $response->get_error_message()
-            )));
-        }
 
-        $httpCode = wp_remote_retrieve_response_code($response);
-        $responseBody = wp_remote_retrieve_body($response);
-        $responseBytes = strlen($responseBody);
-        $this->logInfo(sprintf(
-            'Gemini request response method=%s http_code=%d elapsed_ms=%d response_bytes=%d endpoint="%s"%s',
-            $method,
-            $httpCode,
-            $elapsedMs,
-            $responseBytes,
-            $this->redactApiKeyFromUrl($originalUrl),
-            $this->formatRuntimeLogContextSuffix()
-        ));
+            $response = wp_remote_request($url, $args);
+            $elapsedMs = (int) round((microtime(true) - $startedAt) * 1000);
 
-        if ($httpCode < 200 || $httpCode >= 300) {
-            $responseSnippet = trim(substr(preg_replace('/\s+/', ' ', $responseBody), 0, 400));
-            $requestModel = $this->extractRequestedModelFromUrl($originalUrl);
-            if ($requestModel !== '' && $this->shouldMarkModelPermanentlyUnavailable($requestModel, $httpCode, $responseBody)) {
-                $this->recordModelStatus($requestModel, 'failed', $responseBody, [
-                    'permanent_unavailable' => true,
-                ]);
-                $this->clearModelsCache();
-                if ((string) get_option(self::OPTION_MODEL, '') === $requestModel) {
-                    update_option(self::OPTION_MODEL, self::DEFAULT_MODEL);
-                    update_option(self::OPTION_MODEL_SELECTION_MODE, self::MODEL_SELECTION_MODE_DEFAULT);
+            if (is_wp_error($response)) {
+                $errorMessage = $response->get_error_message();
+                $this->logError(sprintf(
+                    'Gemini request transport failure method=%s attempt=%d/%d elapsed_ms=%d endpoint="%s" message="%s"%s',
+                    $method,
+                    $attempt,
+                    $maxAttempts,
+                    $elapsedMs,
+                    $url,
+                    $errorMessage,
+                    $this->formatRuntimeLogContextSuffix()
+                ));
+
+                if ($attempt < $maxAttempts && $this->isTimeoutException(new \Exception($errorMessage))) {
+                    sleep(1);
+                    continue;
                 }
+
+                throw new \Exception(esc_html(sprintf(
+                    'API request failed after %d ms: %s',
+                    $elapsedMs,
+                    $errorMessage
+                )));
             }
-            $this->logError(sprintf(
-                'Gemini request API failure method=%s http_code=%d elapsed_ms=%d endpoint="%s" response_snippet="%s"%s',
+
+            $httpCode = wp_remote_retrieve_response_code($response);
+            $responseBody = wp_remote_retrieve_body($response);
+            $responseBytes = strlen($responseBody);
+            $this->logInfo(sprintf(
+                'Gemini request response method=%s attempt=%d/%d http_code=%d elapsed_ms=%d response_bytes=%d endpoint="%s"%s',
                 $method,
+                $attempt,
+                $maxAttempts,
                 $httpCode,
                 $elapsedMs,
-                $this->redactApiKeyFromUrl($originalUrl),
-                $responseSnippet,
+                $responseBytes,
+                $url,
                 $this->formatRuntimeLogContextSuffix()
             ));
-            throw new \Exception(esc_html(sprintf(
-                'API request failed after %d ms with HTTP code %d: %s',
-                $elapsedMs,
-                $httpCode,
-                $responseBody
-            )));
-        }
 
-        $result = json_decode($responseBody, true);
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            $this->logError(sprintf(
-                'Gemini request JSON decode failure method=%s elapsed_ms=%d endpoint="%s" json_error="%s"%s',
-                $method,
-                $elapsedMs,
-                $this->redactApiKeyFromUrl($originalUrl),
-                json_last_error_msg(),
-                $this->formatRuntimeLogContextSuffix()
-            ));
-            throw new \Exception(esc_html(sprintf(
-                'Failed to decode JSON response after %d ms: %s',
-                $elapsedMs,
-                json_last_error_msg()
-            )));
-        }
+            if ($httpCode < 200 || $httpCode >= 300) {
+                $responseSnippet = trim(substr(preg_replace('/\s+/', ' ', $responseBody), 0, 400));
 
-        return $result;
-    }
+                if ($attempt < $maxAttempts && ($httpCode === 503 || $httpCode === 429)) {
+                    $this->logInfo(sprintf(
+                        'retrying Gemini request after transient API failure method=%s attempt=%d/%d http_code=%d',
+                        $method,
+                        $attempt,
+                        $maxAttempts,
+                        $httpCode
+                    ));
+                    sleep(2);
+                    continue;
+                }
 
-    private function redactApiKeyFromUrl(string $url): string {
-        return preg_replace('/([?&]key=)[^&]+/i', '$1[redacted]', $url) ?? $url;
+                $requestModel = $this->extractRequestedModelFromUrl($url);
+                if ($requestModel !== '' && $this->shouldMarkModelPermanentlyUnavailable($requestModel, $httpCode, $responseBody)) {
+                    $this->recordModelStatus($requestModel, 'failed', $responseBody, [
+                        'permanent_unavailable' => true,
+                    ]);
+                    $this->clearModelsCache();
+                    if ((string) get_option(self::OPTION_MODEL, '') === $requestModel) {
+                        update_option(self::OPTION_MODEL, self::DEFAULT_MODEL);
+                        update_option(self::OPTION_MODEL_SELECTION_MODE, self::MODEL_SELECTION_MODE_DEFAULT);
+                    }
+                }
+                $this->logError(sprintf(
+                    'Gemini request API failure method=%s http_code=%d elapsed_ms=%d endpoint="%s" response_snippet="%s"%s',
+                    $method,
+                    $httpCode,
+                    $elapsedMs,
+                    $url,
+                    $responseSnippet,
+                    $this->formatRuntimeLogContextSuffix()
+                ));
+                throw new \Exception(esc_html(sprintf(
+                    'API request failed after %d ms with HTTP code %d: %s',
+                    $elapsedMs,
+                    $httpCode,
+                    $responseBody
+                )));
+            }
+
+            $result = json_decode($responseBody, true);
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                $this->logError(sprintf(
+                    'Gemini request JSON decode failure method=%s elapsed_ms=%d endpoint="%s" json_error="%s"%s',
+                    $method,
+                    $elapsedMs,
+                    $url,
+                    json_last_error_msg(),
+                    $this->formatRuntimeLogContextSuffix()
+                ));
+                throw new \Exception(esc_html(sprintf(
+                    'Failed to decode JSON response after %d ms: %s',
+                    $elapsedMs,
+                    json_last_error_msg()
+                )));
+            }
+
+            return $result;
+        } while ($attempt < $maxAttempts);
+
+        return []; // Fallback, never reached
     }
 
     private function formatRuntimeLogContextSuffix(): string {
@@ -1703,13 +1740,20 @@ class Gemini implements AIProviderInterface {
     /**
      * @return int
      */
-    private function getHttpTimeoutSeconds(): int {
-        $timeout = apply_filters('geweb_aisearch_gemini_http_timeout', self::DEFAULT_HTTP_TIMEOUT_SECONDS);
-        return is_numeric($timeout) ? (int) $timeout : self::DEFAULT_HTTP_TIMEOUT_SECONDS;
+    private function getHttpTimeoutSeconds(string $model = ''): int {
+        $isPro = strpos(strtolower($model), 'pro') !== false;
+        $default = $isPro ? self::DEFAULT_PRO_HTTP_TIMEOUT_SECONDS : self::DEFAULT_HTTP_TIMEOUT_SECONDS;
+        $optionKey = $isPro ? self::OPTION_TIMEOUT_PRO : self::OPTION_TIMEOUT_FLASH;
+
+        $configuredTimeout = get_option($optionKey);
+        $baseTimeout = (is_numeric($configuredTimeout) && (int) $configuredTimeout > 0) ? (int) $configuredTimeout : $default;
+
+        $timeout = apply_filters('geweb_aisearch_gemini_http_timeout', $baseTimeout, $model);
+        return is_numeric($timeout) && (int) $timeout > 0 ? (int) $timeout : $default;
     }
 
-    private function getSearchTimeoutSecondsForQuestion(string $question): int {
-        $baseTimeout = $this->getHttpTimeoutSeconds();
+    private function getSearchTimeoutSecondsForQuestion(string $question, string $model): int {
+        $baseTimeout = $this->getHttpTimeoutSeconds($model);
         if ($question === '') {
             return $baseTimeout;
         }
@@ -1729,15 +1773,15 @@ class Gemini implements AIProviderInterface {
         return max($baseTimeout, $nextTimeout);
     }
 
-    private function recordGenerateTimeoutBackoff(string $question, int $timeoutSeconds): void {
+    private function recordGenerateTimeoutBackoff(string $question, int $timeoutSeconds, string $model): void {
         if ($question === '') {
             return;
         }
 
-        $nextTimeout = max($this->getHttpTimeoutSeconds(), $timeoutSeconds * 2);
+        $nextTimeout = max($this->getHttpTimeoutSeconds($model), $timeoutSeconds * 2);
         $state = [
             'question_hash' => $this->buildQuestionHash($question),
-            'next_timeout' => min(110, $nextTimeout),
+            'next_timeout' => min(180, $nextTimeout),
             'expires_at' => time() + self::GENERATE_TIMEOUT_BACKOFF_TTL_SECONDS,
         ];
         $this->updateUserScopedOption(self::GENERATE_TIMEOUT_BACKOFF_OPTION, $state);
@@ -1837,17 +1881,6 @@ class Gemini implements AIProviderInterface {
     private function getUploadOperationPollIntervalMs(): int {
         $interval = apply_filters('geweb_aisearch_gemini_upload_operation_poll_interval_ms', self::DEFAULT_UPLOAD_OPERATION_POLL_INTERVAL_MS);
         return is_numeric($interval) ? (int) $interval : self::DEFAULT_UPLOAD_OPERATION_POLL_INTERVAL_MS;
-    }
-
-    /**
-     * Append the API key to a Gemini API URL.
-     *
-     * @param string $url
-     * @return string
-     */
-    private function appendApiKeyToUrl(string $url): string {
-        $separator = strpos($url, '?') === false ? '?' : '&';
-        return $url . $separator . 'key=' . rawurlencode($this->apiKey);
     }
 
     /**
@@ -2456,7 +2489,7 @@ class Gemini implements AIProviderInterface {
             && (($connectionStatus['status'] ?? '') === 'ok')
             && ($now - (int) ($connectionStatus['timestamp'] ?? 0)) < self::STALE_FAILED_MODEL_RETENTION_SECONDS;
 
-        return array_values(array_filter($models, function ($model) use ($statuses, $now): bool {
+        return array_values(array_filter($models, function ($model) use ($statuses, $now, $hasRecentSuccessfulConnection): bool {
             if (!is_string($model) || trim($model) === '') {
                 return false;
             }
@@ -2588,7 +2621,8 @@ class Gemini implements AIProviderInterface {
                 'timestamp' => current_time('timestamp'),
             ];
         } catch (\Exception $e) {
-            $this->recordModelStatus($requestModel, 'failed', $e->getMessage(), [
+            $isTimeout = $this->isTimeoutException($e);
+            $this->recordModelStatus($requestModel, $isTimeout ? 'timeout' : 'failed', $e->getMessage(), [
                 'test_prompt' => isset($testPrompt) ? $testPrompt : 'Reply with OK.',
                 'test_response' => '',
                 'resolved_model' => '',
@@ -2600,7 +2634,7 @@ class Gemini implements AIProviderInterface {
             ]);
 
             return [
-                'status' => 'failed',
+                'status' => $isTimeout ? 'timeout' : 'failed',
                 'message' => $this->sanitizeConnectionErrorMessage($e->getMessage()),
                 'test_prompt' => isset($testPrompt) ? $testPrompt : 'Reply with OK.',
                 'test_response' => '',

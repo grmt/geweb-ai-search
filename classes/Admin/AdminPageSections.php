@@ -92,6 +92,8 @@ class AdminPageSections {
         $statusColorSuccess = isset($args['statusColorSuccess']) ? (string) $args['statusColorSuccess'] : '#46b450';
         $selectedModelStatus = is_array($modelStatuses[$selectedModel] ?? null) ? (string) ($modelStatuses[$selectedModel]['status'] ?? '') : '';
         $defaultModelStatus = is_array($modelStatuses[$defaultModel] ?? null) ? (string) ($modelStatuses[$defaultModel]['status'] ?? '') : '';
+        $selectedModelMessage = is_array($modelStatuses[$selectedModel] ?? null) ? (string) ($modelStatuses[$selectedModel]['message'] ?? '') : '';
+        $defaultModelMessage = is_array($modelStatuses[$defaultModel] ?? null) ? (string) ($modelStatuses[$defaultModel]['message'] ?? '') : '';
         $aliasTargets = [
             'gemini-flash-latest' => !empty($modelStatuses['gemini-flash-latest']['resolved_model'])
                 ? (string) $modelStatuses['gemini-flash-latest']['resolved_model']
@@ -286,13 +288,17 @@ class AdminPageSections {
                 Current model:
                 <code><?php echo esc_html($selectedModel); ?></code>
                 <?php if ($selectedModelStatus === 'failed'): ?>
-                    <span style="color:#b32d2e;">failed recently</span>
+                    <span style="color:#b32d2e; cursor:help; border-bottom:1px dotted currentColor;" title="<?php echo esc_attr($selectedModelMessage); ?>">failed recently</span>
+                <?php elseif ($selectedModelStatus === 'timeout'): ?>
+                    <span style="color:#dba617; cursor:help; border-bottom:1px dotted currentColor;" title="<?php echo esc_attr($selectedModelMessage); ?>">timed out recently</span>
                 <?php endif; ?>
                 <br>
                 Default model:
                 <code><?php echo esc_html($defaultModel); ?></code>
                 <?php if ($defaultModelStatus === 'failed'): ?>
-                    <span style="color:#b32d2e;">failed recently</span>
+                    <span style="color:#b32d2e; cursor:help; border-bottom:1px dotted currentColor;" title="<?php echo esc_attr($defaultModelMessage); ?>">failed recently</span>
+                <?php elseif ($defaultModelStatus === 'timeout'): ?>
+                    <span style="color:#dba617; cursor:help; border-bottom:1px dotted currentColor;" title="<?php echo esc_attr($defaultModelMessage); ?>">timed out recently</span>
                 <?php endif; ?>
             </p>
             <table class="widefat striped geweb-model-diagnostics-table" style="max-width:900px; margin-top:8px;">
@@ -348,7 +354,7 @@ class AdminPageSections {
                         $testPrompt = is_array($entry) ? trim((string) ($entry['test_prompt'] ?? '')) : '';
                         $testResponse = is_array($entry) ? trim((string) ($entry['test_response'] ?? '')) : '';
                         $hasTestDetails = $testPrompt !== '' || $testResponse !== '';
-                        $testColor = $testStatus === 'failed' ? $statusColorError : $statusColorSuccess;
+                        $testColor = in_array($testStatus, ['failed', 'timeout'], true) ? $statusColorError : $statusColorSuccess;
                         $tooltipParts = [];
                         if ($testPrompt !== '') {
                             $tooltipParts[] = 'Q: "' . $testPrompt . '"';
@@ -386,7 +392,7 @@ class AdminPageSections {
                                         data-prompt="<?php echo esc_attr($testPrompt); ?>"
                                         data-response="<?php echo esc_attr($testResponse); ?>"
                                         title="<?php echo esc_attr($testTooltip !== '' ? $testTooltip : ($testMessage !== '' ? $testMessage : 'Open latest test details')); ?>"
-                                        style="padding:0; min-height:auto; color:<?php echo esc_attr($testColor); ?>; font-weight:600;"
+                                        style="padding:0; min-height:auto; color:<?php echo esc_attr($testColor); ?>; font-weight:600; cursor:help; border-bottom:1px dotted currentColor;"
                                     >
                                         <small><?php echo esc_html($testTimestamp !== '' ? $testTimestamp : (strtoupper($testStatus) === 'OK' ? 'OK' : ucfirst($testStatus))); ?></small>
                                     </button>
@@ -498,8 +504,12 @@ class AdminPageSections {
             return 2;
         }
 
-        if ($status !== '' && $status !== 'failed') {
+        if ($status !== '' && $status !== 'failed' && $status !== 'timeout') {
             return 1;
+        }
+
+        if ($status === 'timeout') {
+            return 0; // Better than failed (-1), worse than OK (2)
         }
 
         return $status === 'failed' ? -1 : 0;

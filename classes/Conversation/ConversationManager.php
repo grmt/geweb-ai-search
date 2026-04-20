@@ -388,11 +388,30 @@ class ConversationManager {
 
         return [
             'role' => $isModelMessage ? 'model' : 'user',
-            'content' => $isModelMessage ? wp_kses_post($content) : sanitize_textarea_field($content),
+            'content' => $isModelMessage ? $this->sanitizeStoredModelContent($content) : sanitize_textarea_field($content),
             'sources' => $sources,
             'meta' => $isModelMessage ? $meta : [],
             'created_at' => $this->normalizeMessageCreatedAt($message),
         ];
+    }
+
+    private function sanitizeStoredModelContent(string $content): string {
+        $allowedHtml = wp_kses_allowed_html('post');
+        $allowedHtml['div'] = array_merge($allowedHtml['div'] ?? [], [
+            'class' => true,
+        ]);
+        $allowedHtml['ul'] = array_merge($allowedHtml['ul'] ?? [], [
+            'class' => true,
+        ]);
+        $allowedHtml['span'] = array_merge($allowedHtml['span'] ?? [], [
+            'class' => true,
+        ]);
+        $allowedHtml['sup'] = array_merge($allowedHtml['sup'] ?? [], [
+            'class' => true,
+            'data-footnote' => true,
+        ]);
+
+        return wp_kses($content, $allowedHtml);
     }
 
     /**

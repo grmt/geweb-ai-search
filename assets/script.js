@@ -952,6 +952,27 @@ jQuery(document).ready(function($) {
 	        });
 	    },
 
+	    schedulePageViewViewportSync(options = {}) {
+	        if (!this.isPageView() || !this.ai) {
+	            return;
+	        }
+
+	        const delays = Array.isArray(options.delays) && options.delays.length
+	            ? options.delays
+	            : [0, 120, 320];
+	        const shouldAlignBottom = options.alignBottom !== false;
+
+	        delays.forEach((delay) => {
+	            globalThis.setTimeout(() => {
+	                this.syncPageViewportOffsetStyles();
+	                this.syncPageViewHeightToViewport();
+	                if (shouldAlignBottom) {
+	                    this.alignPageViewBottomToViewport();
+	                }
+	            }, Math.max(0, Number(delay) || 0));
+	        });
+	    },
+
 	    applyPageViewHeight(rawHeight, options = {}) {
 	        const height = this.clampPageViewHeight(rawHeight);
 	        if (!height || !this.ai) {
@@ -1025,19 +1046,14 @@ jQuery(document).ready(function($) {
 	            return;
 	        }
 
-	        const hasStoredHeight = this.readStoredPageViewHeight() !== null;
-	        if (!hasStoredHeight) {
+	        const storedHeight = this.readStoredPageViewHeight();
+	        if (storedHeight === null) {
 	            this.ai.style.height = `${viewportHeight}px`;
 	            return;
 	        }
 
-	        const currentHeight = this.ai.getBoundingClientRect().height;
-	        const hasExplicitHeight = Boolean(this.ai.style.height);
-	        if (!hasExplicitHeight) {
-	            return;
-	        }
-
-	        this.applyPageViewHeight(currentHeight, { persist: hasStoredHeight || hasExplicitHeight });
+	        const targetHeight = Math.max(storedHeight, viewportHeight);
+	        this.applyPageViewHeight(targetHeight, { persist: true });
 	    },
 
 	    initPageHeightPersistence() {
@@ -1063,13 +1079,21 @@ jQuery(document).ready(function($) {
 	            const observer = new globalThis.ResizeObserver((entries) => {
 	                const nextHeight = entries[0]?.contentRect?.height;
 	                const viewportHeight = this.getPageViewViewportHeight();
-	                const shouldPersist = Boolean(this.ai?.style?.height) || (Number.isFinite(nextHeight) && nextHeight < viewportHeight - 4);
+	                if (this.isPageViewportKeyboardCompacted()) {
+	                    return;
+	                }
+
+	                const measuredHeight = Number.isFinite(nextHeight)
+	                    ? nextHeight
+	                    : this.ai?.getBoundingClientRect?.().height;
+	                const shouldPersist = Boolean(this.ai?.style?.height)
+	                    || (Number.isFinite(measuredHeight) && measuredHeight < viewportHeight - 4);
 
 	                if (!shouldPersist) {
 	                    return;
 	                }
 
-	                this.persistPageViewHeight(nextHeight);
+	                this.persistPageViewHeight(Math.max(viewportHeight, Number(measuredHeight) || 0));
 	            });
 
 	            observer.observe(this.ai);
@@ -2639,7 +2663,197 @@ jQuery(document).ready(function($) {
 	            ].join('');
 	        }
 
-	        return this.escapeHtml(normalized);
+	        return [
+	            '<div class="geweb-ai-error-card geweb-ai-error-card--generic">',
+	            `<div class="geweb-ai-error-card-title">${this.escapeHtml(t('requestFailedTitle', 'The AI request did not complete'))}</div>`,
+	            `<div class="geweb-ai-error-card-body geweb-ai-error-card-body--preserve">${this.escapeHtml(normalized)}</div>`,
+	            '</div>',
+	        ].join('');
+	    },
+
+	    buildTransportRecoveryMessage(message) {
+	        const errorHtml = this.normalizeAiErrorMessage(message, t('connectionError', 'Connection error. Please try again.'));
+	        return [
+	            errorHtml,
+	            '<div class="geweb-ai-error-card geweb-ai-error-card--recovery">',
+	            `<div class="geweb-ai-error-card-title">${this.escapeHtml(t('requestRecoveryTitle', 'Still checking for a finished answer'))}</div>`,
+	            `<div class="geweb-ai-error-card-body">${this.escapeHtml(t('requestRecoveryBody', 'The connection ended before the browser received the final answer. The server may still finish this request, so the workspace will keep checking for a completed response.'))}</div>`,
+	            '</div>',
+	        ].join('');
+	    },
+
+	    buildAiHistoryEntry({ content = '', sources = [], meta = {}, createdAt = null } = {}) {
+	        return {
+	            role: 'model',
+	            content: String(content || ''),
+	            sources: Array.isArray(sources) ? sources : [],
+	            meta: meta && typeof meta === 'object' ? meta : {},
+	            created_at: this.normalizeEpochSeconds(createdAt || Math.floor(Date.now() / 1000))
+	        };
+	    },
+
+	    async appendAiHistoryEntry(entry) {
+	        if (!entry || typeof entry !== 'object' || String(entry.content || '').trim() === '') {
+	            return;
+	        }
+
+	        this.conversationHistory.push(entry);
+	        this.appendMessage({
+	            answer: entry.content,
+	            sources: Array.isArray(entry.sources) ? entry.sources : [],
+	            meta: entry.meta && typeof entry.meta === 'object' ? entry.meta : {}
+	        }, 'ai', { messageData: entry });
+	        this.renderSources();
+	        await this.persistConversation();
+	        await this.loadConversationArchive();
+	        this.renderConversationOverview();
+	        this.renderConversationSummary();
+	    },
+
+	    async pollAiChatJob(jobId, $loader, options = {}) {
+	        const normalizedJobId = String(jobId || '').trim();
+	        if (!normalizedJobId) {
+	            return false;
+	        }
+
+	        const maxAttempts = Math.max(1, Number(options.maxAttempts) || 120);
+	        const intervalMs = Math.max(500, Number(options.intervalMs) || 2000);
+
+	        for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+	            if (attempt > 0) {
+	                await new Promise((resolve) => globalThis.setTimeout(resolve, intervalMs));
+	            }
+
+	            try {
+	                const response = await this.requestFrontendConversation('geweb_get_ai_chat_job', {
+	                    job_id: normalizedJobId
+	                });
+	                const payload = response?.data && typeof response.data === 'object' ? response.data : {};
+	                const status = String(payload.status || '').trim();
+
+	                if (status === 'completed' && payload.result && typeof payload.result === 'object') {
+	                    await this.handleResponse({
+	                        success: true,
+	                        data: payload.result
+	                    }, $loader);
+	                    return true;
+	                }
+
+	                if (status === 'error') {
+	                    await this.handleResponse({
+	                        success: false,
+	                        data: {
+	                            message: String(payload.message || '').trim()
+	                        }
+	                    }, $loader);
+	                    return false;
+	                }
+	            } catch (error) {
+	                console.debug('Polling AI chat job failed.', error);
+	            }
+	        }
+
+	        await this.handleResponse({
+	            success: false,
+	            data: {
+	                message: t('requestTimedOut', 'The AI request timed out. Please try again.')
+	            }
+	        }, $loader);
+	        return false;
+	    },
+
+	    shouldAttemptResponseRecovery(xhr) {
+	        const status = Number(xhr?.status || 0);
+	        const statusText = String(xhr?.statusText || '').toLowerCase();
+	        return statusText === 'timeout'
+	            || status === 502
+	            || status === 504
+	            || status === 524
+	            || status === 598
+	            || status === 599;
+	    },
+
+	    hasPendingRecoveryErrorAfter(createdAt) {
+	        const targetCreatedAt = this.normalizeEpochSeconds(createdAt);
+	        return this.conversationHistory.some((item) => {
+	            if (item?.role !== 'model') {
+	                return false;
+	            }
+
+	            const itemCreatedAt = this.normalizeEpochSeconds(item.created_at ?? item.createdAt);
+	            const itemMeta = item.meta && typeof item.meta === 'object' ? item.meta : {};
+	            return !!itemMeta.pending_recovery && (!targetCreatedAt || (itemCreatedAt && itemCreatedAt >= targetCreatedAt));
+	        });
+	    },
+
+	    async pollForRecoveredResponse(conversationId, userCreatedAt, options = {}) {
+	        const normalizedConversationId = String(conversationId || '').trim();
+	        const targetCreatedAt = this.normalizeEpochSeconds(userCreatedAt);
+	        if (!normalizedConversationId || !targetCreatedAt) {
+	            return false;
+	        }
+
+	        const maxAttempts = Math.max(1, Number(options.maxAttempts) || 18);
+	        const intervalMs = Math.max(1000, Number(options.intervalMs) || 5000);
+
+	        for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+	            await new Promise((resolve) => globalThis.setTimeout(resolve, attempt === 0 ? 1500 : intervalMs));
+
+	            try {
+	                const response = await this.requestFrontendConversation('geweb_get_frontend_conversation', {
+	                    conversation_id: normalizedConversationId
+	                });
+	                if (!(response?.success && response?.data?.conversation)) {
+	                    continue;
+	                }
+
+	                const entry = this.normalizeStoredConversation(response.data.conversation);
+	                this.conversationArchive = this.conversationArchive.filter((item) => item.id !== entry.id);
+	                this.conversationArchive.unshift(entry);
+
+	                const recoveredMessage = [...entry.messages].reverse().find((item) => {
+	                    if (item?.role !== 'model') {
+	                        return false;
+	                    }
+
+	                    const itemCreatedAt = this.normalizeEpochSeconds(item.created_at ?? item.createdAt);
+	                    const itemMeta = item.meta && typeof item.meta === 'object' ? item.meta : {};
+	                    return !!itemCreatedAt && itemCreatedAt >= targetCreatedAt && !itemMeta.error;
+	                });
+
+	                if (!recoveredMessage) {
+	                    continue;
+	                }
+
+	                if (this.conversationId === normalizedConversationId) {
+	                    this.conversationHistory = entry.messages.map((item) => ({
+	                        role: item.role,
+	                        content: item.content,
+	                        sources: Array.isArray(item.sources) ? item.sources : [],
+	                        meta: item.meta && typeof item.meta === 'object' ? item.meta : {},
+	                        created_at: this.normalizeEpochSeconds(item.created_at ?? item.createdAt)
+	                    }));
+	                    this.compactedConversation = !!entry.compacted;
+	                    this.currentContextSummary = String(entry.contextSummary || '').trim();
+	                    this.requestInFlight = false;
+	                    this.renderConversationMessages();
+	                    this.renderConversationOverview();
+	                    this.renderConversationSummary();
+	                    this.renderSources();
+	                    this.toggleSubmitButton();
+	                    this.syncFrontendPageConversationState();
+	                    this.syncStoredChatState();
+	                } else {
+	                    this.syncStoredChatState();
+	                }
+
+	                return true;
+	            } catch (error) {
+	                console.debug('Recovered response poll failed.', error);
+	            }
+	        }
+
+	        return false;
 	    },
 
 	    isNonceFailureResponse(xhr) {
@@ -2897,8 +3111,9 @@ jQuery(document).ready(function($) {
 	        this.$textarea.val('');
 	        this.requestInFlight = true;
 	        this.toggleSubmitButton();
+	        GewebModal.schedulePageViewViewportSync();
 
-	        const $loader = $(`<p class="ai-message loading">${this.escapeHtml(t('thinking', 'Thinking...'))}</p>`);
+	        const $loader = $(`<p class="ai-message loading geweb-ai-thinking-indicator" aria-live="polite">${this.escapeHtml(t('thinking', 'Thinking...'))}</p>`);
 	        this.$answerBox.append($loader);
 	        this.scrollToBottom();
 
@@ -2908,15 +3123,24 @@ jQuery(document).ready(function($) {
 		            console.debug('Could not initialize nonce before sending chat message.', error);
 		            $loader.remove();
 	            this.requestInFlight = false;
-	            this.appendMessage({ answer: t('couldNotStart', 'Could not start the AI search. Please try again.'), sources: [] }, 'ai');
+	            await this.appendAiHistoryEntry(this.buildAiHistoryEntry({
+	                content: this.normalizeAiErrorMessage(
+	                    t('couldNotStart', 'Could not start the AI search. Please try again.'),
+	                    t('couldNotStart', 'Could not start the AI search. Please try again.')
+	                ),
+	                meta: {
+	                    error: true,
+	                    error_type: 'nonce_init'
+	                }
+	            }));
 	            this.toggleSubmitButton();
 		            return;
 		        }
 
-		        const requestData = {
-		            action: 'geweb_ai_chat',
-		            nonce: geweb_aisearch.search_nonce,
-		            conversation_id: this.ensureConversationId(),
+	        const requestData = {
+	            action: 'geweb_ai_chat',
+	            nonce: geweb_aisearch.search_nonce,
+	            conversation_id: this.ensureConversationId(),
 		            model: this.getSelectedModel(),
 		            temporary_prompt: this.getTemporaryPrompt(),
 		            excluded_sources: JSON.stringify(this.getExcludedSourcesForRequest()),
@@ -2931,9 +3155,22 @@ jQuery(document).ready(function($) {
 		            $.ajax({
 		                url: geweb_aisearch.ajax_url,
 		                type: 'POST',
-		                timeout: 120000,
+		                timeout: 20000,
 		                data: requestData,
-		                success: (response) => this.handleResponse(response, $loader),
+		                success: (response) => {
+		                    if (response?.success && response?.data?.queued) {
+		                        const resolvedConversationId = String(response.data.conversation_id || requestData.conversation_id || '').trim();
+		                        if (resolvedConversationId) {
+		                            this.conversationId = resolvedConversationId;
+		                            this.syncFrontendPageConversationState();
+		                            this.syncStoredChatState();
+		                        }
+		                        void this.pollAiChatJob(String(response.data.job_id || '').trim(), $loader);
+		                        return;
+		                    }
+
+		                    void this.handleResponse(response, $loader);
+		                },
 		                error: (xhr) => {
 		                    if (!nonceRetried && this.isNonceFailureResponse(xhr)) {
 		                        nonceRetried = true;
@@ -2945,12 +3182,12 @@ jQuery(document).ready(function($) {
 		                            })
 		                            .catch((error) => {
 		                                console.debug('Could not refresh expired AI search nonce.', error);
-		                                this.handleError($loader, xhr);
+		                                void this.handleError($loader, xhr, requestData.conversation_id, userEntry.created_at);
 		                            });
 		                        return;
 		                    }
 
-		                    this.handleError($loader, xhr);
+		                    void this.handleError($loader, xhr, requestData.conversation_id, userEntry.created_at);
 		                }
 		            });
 		        };
@@ -2965,14 +3202,11 @@ jQuery(document).ready(function($) {
 		    if (response?.success && response?.data) {
 		        this.compactedConversation = !!response.data.context_compacted;
 		        this.currentContextSummary = String(response.data.context_summary || '').trim();
-		        const aiEntry = {
-		            role: 'model',
+		        const aiEntry = this.buildAiHistoryEntry({
 		            content: response.data.answer,
 		            sources: Array.isArray(response.data.sources) ? response.data.sources : [],
-		            meta: response.data?.meta && typeof response.data.meta === 'object' ? response.data.meta : {},
-		            created_at: this.normalizeEpochSeconds(Math.floor(Date.now() / 1000))
-		        };
-		        this.conversationHistory.push(aiEntry);
+		            meta: response.data?.meta && typeof response.data.meta === 'object' ? response.data.meta : {}
+		        });
 		        const responseRequestContext = response.data?.meta?.request && typeof response.data.meta.request === 'object'
 		            ? response.data.meta.request
 		            : {};
@@ -2980,33 +3214,43 @@ jQuery(document).ready(function($) {
 		        if (responseSummary) {
 		            this.appendContextSummaryNote(responseSummary);
 		        }
-		        this.appendMessage(response.data, 'ai', { messageData: aiEntry });
-		        this.renderSources();
-		        await this.persistConversation();
-		        await this.loadConversationArchive();
-		        this.renderConversationOverview();
-		        this.renderConversationSummary();
+		        await this.appendAiHistoryEntry(aiEntry);
 			    } else {
 		        const backendMessage = response?.data?.message ? String(response.data.message) : '';
-		        this.appendMessage({
-		            answer: this.normalizeAiErrorMessage(backendMessage, t('answerError', 'Error: Unable to get response')),
-		            sources: []
-		        }, 'ai');
+		        await this.appendAiHistoryEntry(this.buildAiHistoryEntry({
+		            content: this.normalizeAiErrorMessage(backendMessage, t('answerError', 'Error: Unable to get response')),
+		            meta: {
+		                error: true,
+		                error_type: 'backend',
+		                raw_message: backendMessage
+		            }
+		        }));
 			    }
 			        this.toggleSubmitButton();
 				},
 
-		handleError($loader, xhr) {
+		async handleError($loader, xhr, conversationId = '', userCreatedAt = null) {
 		    $loader.remove();
 		    this.requestInFlight = false;
-		    this.appendMessage({
-		        answer: this.normalizeAiErrorMessage(
-		            this.getAjaxErrorMessage(xhr, t('connectionError', 'Connection error. Please try again.')),
-		            t('connectionError', 'Connection error. Please try again.')
-		        ),
-		        sources: []
-		    }, 'ai');
+		    const ajaxErrorMessage = this.getAjaxErrorMessage(xhr, t('connectionError', 'Connection error. Please try again.'));
+		    const shouldRecover = this.shouldAttemptResponseRecovery(xhr) && String(conversationId || '').trim() !== '';
+		    await this.appendAiHistoryEntry(this.buildAiHistoryEntry({
+		        content: shouldRecover
+		            ? this.buildTransportRecoveryMessage(ajaxErrorMessage)
+		            : this.normalizeAiErrorMessage(ajaxErrorMessage, t('connectionError', 'Connection error. Please try again.')),
+		        meta: {
+		            error: true,
+		            error_type: shouldRecover ? 'transport_recoverable' : 'transport',
+		            pending_recovery: shouldRecover,
+		            raw_message: ajaxErrorMessage,
+		            http_status: Number(xhr?.status || 0) || null
+		        }
+		    }));
 	        this.toggleSubmitButton();
+
+	        if (shouldRecover) {
+	            void this.pollForRecoveredResponse(conversationId, userCreatedAt);
+	        }
 		},
 
 		appendMessage(text, type, options = {}) {
@@ -3081,11 +3325,9 @@ jQuery(document).ready(function($) {
 		        const answerWithFootnotes = this.decorateAnswerWithGroundingFootnotes(String(text.answer || ''), responseMeta, sourceFootnoteMap, text.sources || []);
 		        const sanitizedAnswer = this.sanitizeAnswer(answerWithFootnotes);
 		        const $content = $('<div class="geweb-ai-message-content"></div>').html(sanitizedAnswer);
-		        if (!$content.find('.geweb-ai-footnote-ref').length) {
-		            const fallbackFootnotes = this.getFallbackFootnoteNumbers(sourceFootnoteMap, text.sources || []);
-		            if (fallbackFootnotes.length) {
-		                $content.append($(this.appendFallbackFootnoteGroup('', fallbackFootnotes)));
-		            }
+		        const fallbackFootnotes = this.getFallbackFootnoteNumbers(sourceFootnoteMap, text.sources || []);
+		        if (fallbackFootnotes.length) {
+		            $content.append($(this.appendFallbackFootnoteGroup('', fallbackFootnotes)));
 		        }
 		        const plainText = this.extractPlainTextFromHtml(sanitizedAnswer);
 		        const $copyButton = this.buildCopyButton(plainText);
@@ -3811,29 +4053,36 @@ jQuery(document).ready(function($) {
 					html = html.replaceAll(urlRegex, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
 
 					// Allow safe tags only
-	        const allowed = new Set(['p', 'br', 'b', 'strong', 'i', 'em', 'ul', 'ol', 'li', 'a', 'h1', 'h2', 'h3', 'span', 'sup']);
+	        const allowed = new Set(['p', 'br', 'b', 'strong', 'i', 'em', 'ul', 'ol', 'li', 'a', 'h1', 'h2', 'h3', 'span', 'sup', 'div']);
 					const div = document.createElement('div');
 					div.innerHTML = html;
 
 					div.querySelectorAll('*').forEach(el => {
+							const tagName = el.tagName.toLowerCase();
 							if (!allowed.has(el.tagName.toLowerCase())) {
 									el.replaceWith(document.createTextNode(el.textContent));
 									return;
 							}
 							Array.from(el.attributes).forEach(attr => {
-									if (el.tagName.toLowerCase() === 'a' && attr.name === 'href') {
+									if (tagName === 'a' && attr.name === 'href') {
 											if (!/^https?:\/\//i.test(attr.value)) {
 													el.removeAttribute('href');
 											}
-									} else if (el.tagName.toLowerCase() === 'sup' && ['class', 'data-footnote'].includes(attr.name)) {
+									} else if (tagName === 'sup' && ['class', 'data-footnote'].includes(attr.name)) {
 											return;
-									} else if (el.tagName.toLowerCase() === 'span' && attr.name === 'class' && String(attr.value || '').includes('geweb-ai-footnote-group')) {
+									} else if (tagName === 'span' && attr.name === 'class' && String(attr.value || '').includes('geweb-ai-footnote-group')) {
+											return;
+									} else if (
+										['div', 'ul'].includes(tagName)
+										&& attr.name === 'class'
+										&& String(attr.value || '').split(/\s+/).every((className) => /^geweb-ai-error-card(?:[A-Za-z0-9_-]*)$/.test(className) || className === '')
+									) {
 											return;
 									} else if (!['target', 'rel'].includes(attr.name)) {
 											el.removeAttribute(attr.name);
 									}
 							});
-							if (el.tagName.toLowerCase() === 'a') {
+							if (tagName === 'a') {
 									el.setAttribute('target', '_blank');
 									el.setAttribute('rel', 'noopener noreferrer');
 							}
