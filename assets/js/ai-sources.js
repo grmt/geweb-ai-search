@@ -24,24 +24,6 @@
         entries.push({ label, value: text });
     }
 
-    function getGroundingSupportFootnotes(supports, sourceFootnoteMap) {
-        return supports.reduce((accumulator, support) => {
-            const indices = Array.isArray(support?.groundingChunkIndices)
-                ? support.groundingChunkIndices.filter((value) => Number.isInteger(value) && value >= 0)
-                : [];
-
-            indices.forEach((index) => {
-                const localFootnote = index + 1;
-                const footnote = Number(sourceFootnoteMap?.[localFootnote]) || localFootnote;
-                if (!accumulator.includes(footnote)) {
-                    accumulator.push(footnote);
-                }
-            });
-
-            return accumulator;
-        }, []).sort((a, b) => a - b);
-    }
-
     function appendGroundingPlacementEntries(existing, indices, insertionOffset, sourceFootnoteMap) {
         indices.forEach((index) => {
             const localFootnote = index + 1;
@@ -108,10 +90,17 @@
     }
 
     globalThis.GewebAISearchSourceMethods = {
+        sourceReferenceCache: {},
+
         getSourceDestination(url, matchPhrase) {
-            const normalizedUrl = this.normalizeManagedSourceUrl(url);
+            let normalizedUrl = this.normalizeManagedSourceUrl(url);
             if (!normalizedUrl) {
                 return null;
+            }
+
+            const resolvedReference = this.sourceReferenceCache?.[normalizedUrl];
+            if (resolvedReference?.url) {
+                normalizedUrl = resolvedReference.url;
             }
 
             const phrase = String(matchPhrase || '').trim();
@@ -1083,7 +1072,7 @@
                 .trim();
         },
 
-        decorateAnswerWithGroundingFootnotes(answerHtml, meta, sourceFootnoteMap, sources) {
+        decorateAnswerWithGroundingFootnotes(answerHtml, meta, sourceFootnoteMap) {
             const html = String(answerHtml || '');
             if (!html) {
                 return '';
@@ -1600,8 +1589,26 @@
                 ? this.isSourceTemporarilyExcluded(source)
                 : false;
 
+            const normalizedUrl = this.normalizeManagedSourceUrl(url);
+            const resolvedRef = normalizedUrl ? this.sourceReferenceCache?.[normalizedUrl] : null;
+            const pageId = resolvedRef ? this.extractManagedSourcePostId(resolvedRef.url) : this.extractManagedSourcePostId(url);
+            let titleWithPageId = sourceLabel;
+
+            if (sourceKind === 'document') {
+                const parsed = safeParseUrl(url);
+                if (parsed) {
+                    const pathname = parsed.pathname;
+                    const documentName = pathname.split('/').filter(Boolean).pop() || '';
+                    if (documentName) {
+                        titleWithPageId = `${documentName} (page ${pageId})`;
+                    }
+                }
+            } else if (pageId > 0) {
+                titleWithPageId = `${sourceLabel} (page ${pageId})`;
+            }
+
             $toggle.attr('aria-label', `Show context for ${sourceLabel}`);
-            $toggle.attr('title', sourceLabel);
+            $toggle.attr('title', titleWithPageId);
             $toggle.append($('<span class="geweb-ai-source-link-icon" aria-hidden="true"></span>').text(sourceIcon));
             $toggle.append($('<span class="geweb-ai-source-link-label"></span>').text(title));
             if (referenceHint) {
@@ -1685,55 +1692,55 @@
             }
         },
 
-	        bindSourceToggleInteractions($toggle, $item, url, matchPhrase, $itemHeader = null, $number = null) {
-	            const activateSource = (event) => {
-	                event.preventDefault();
-	                event.stopPropagation();
-	                this.setScrollablePaneActive?.('sources');
-	                this.ensureSourcesPanelVisible();
-	                this.activateSourceReferenceItem($item);
-	            };
+        bindSourceToggleInteractions($toggle, $item, url, matchPhrase, $itemHeader = null, $number = null) {
+            const activateSource = (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                this.setScrollablePaneActive?.('sources');
+                this.ensureSourcesPanelVisible();
+                this.activateSourceReferenceItem($item);
+            };
 
-	            const handleSourceToggle = (event) => {
-	                if ($item.hasClass('is-active') && url) {
-	                    event.preventDefault();
+            const handleSourceToggle = (event) => {
+                if ($item.hasClass('is-active') && url) {
+                    event.preventDefault();
                     event.stopPropagation();
                     this.openSourceDestination(url, matchPhrase);
                     return;
                 }
 
-	                activateSource(event);
-	            };
-	            $toggle.on('click', handleSourceToggle);
-	            $toggle.on('keydown', (event) => {
-	                if (event.key !== 'Enter' && event.key !== ' ') {
-	                    return;
-	                }
+                activateSource(event);
+            };
+            $toggle.on('click', handleSourceToggle);
+            $toggle.on('keydown', (event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') {
+                    return;
+                }
 
-	                handleSourceToggle(event);
-	            });
-	            if ($number?.length) {
-	                $number.attr('role', 'button');
-	                $number.attr('tabindex', '0');
-	                $number.on('click', handleSourceToggle);
-	                $number.on('keydown', (event) => {
-	                    if (event.key !== 'Enter' && event.key !== ' ') {
-	                        return;
-	                    }
+                handleSourceToggle(event);
+            });
+            if ($number?.length) {
+                $number.attr('role', 'button');
+                $number.attr('tabindex', '0');
+                $number.on('click', handleSourceToggle);
+                $number.on('keydown', (event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') {
+                        return;
+                    }
 
-	                    handleSourceToggle(event);
-	                });
-	            }
-	            if ($itemHeader?.length) {
-	                $itemHeader.on('click', (event) => {
-	                    if ($(event.target).closest('.geweb-ai-source-filter-toggle, .geweb-ai-source-toggle, .geweb-ai-source-item-number').length) {
-	                        return;
-	                    }
+                    handleSourceToggle(event);
+                });
+            }
+            if ($itemHeader?.length) {
+                $itemHeader.on('click', (event) => {
+                    if ($(event.target).closest('.geweb-ai-source-filter-toggle, .geweb-ai-source-toggle, .geweb-ai-source-item-number').length) {
+                        return;
+                    }
 
-	                    handleSourceToggle(event);
-	                });
-	            }
-	        },
+                    handleSourceToggle(event);
+                });
+            }
+        },
 
         buildSourceDetails(url, contexts, previewSnippet, referenceHint, $sourceItem, footnote = 0) {
             const $details = $('<div class="geweb-ai-source-details"></div>');
@@ -1772,7 +1779,7 @@
 
             if ($contexts) {
                 $details.append($contexts);
-            };
+            }
 
             return $details;
         },
@@ -1988,6 +1995,7 @@
 
             $list.find('li[data-source-url]').each((_, item) => {
                 this.hydrateResolvedSourceReferenceItem($(item));
+                this.updateSourceItemTitle($(item));
             });
         },
 
@@ -2079,16 +2087,36 @@
                     let updated = false;
                     const nextContexts = sourceInfo.contexts.map((context, contextIndex) => {
                         const key = `${sourceIndex}:${contextIndex}`;
-                        const reconstructedText = String(reconstructed[key] || '').trim();
+                        const reconstructedData = reconstructed[key];
+                        if (!reconstructedData) {
+                            return context;
+                        }
+
+                        let reconstructedText = '';
+                        let resolvedUrl = '';
+
+                        if (typeof reconstructedData === 'object' && reconstructedData !== null) {
+                            reconstructedText = String(reconstructedData.markdown || '').trim();
+                            resolvedUrl = String(reconstructedData.url || '').trim();
+                        } else {
+                            reconstructedText = String(reconstructedData || '').trim();
+                        }
+
                         if (!reconstructedText) {
                             return context;
                         }
 
                         updated = true;
-                        return {
+                        const nextContext = {
                             ...context,
                             text: reconstructedText,
                         };
+
+                        if (resolvedUrl) {
+                            nextContext.url = resolvedUrl;
+                        }
+
+                        return nextContext;
                     });
 
                     if (!updated) {
@@ -2115,6 +2143,51 @@
                 });
             } catch (error) {
                 console.debug('Source context reconstruction failed.', error);
+            }
+        },
+
+        updateSourceItemTitle($item) {
+            if (!$item?.length) {
+                return;
+            }
+
+            const sourceUrl = String($item.attr('data-source-url') || '').trim();
+            const sourceKind = String($item.attr('data-source-kind') || '').trim();
+            const $toggle = $item.find('.geweb-ai-source-toggle').first();
+            if (!$toggle.length || !sourceUrl) {
+                return;
+            }
+
+            const normalizedUrl = this.normalizeManagedSourceUrl(sourceUrl);
+            const resolvedRef = normalizedUrl ? this.sourceReferenceCache?.[normalizedUrl] : null;
+            if (!resolvedRef?.url) {
+                return;
+            }
+
+            const pageId = this.extractManagedSourcePostId(resolvedRef.url);
+            if (pageId <= 0) {
+                return;
+            }
+
+            let newTitle = '';
+            if (sourceKind === 'document') {
+                const parsed = safeParseUrl(resolvedRef.url);
+                if (parsed) {
+                    const pathname = parsed.pathname;
+                    const documentName = pathname.split('/').filter(Boolean).pop() || '';
+                    if (documentName) {
+                        newTitle = `${documentName} (page ${pageId})`;
+                    }
+                }
+            } else {
+                const currentLabel = String($toggle.attr('title') || '').trim();
+                if (currentLabel) {
+                    newTitle = `${currentLabel} (page ${pageId})`;
+                }
+            }
+
+            if (newTitle) {
+                $toggle.attr('title', newTitle);
             }
         },
 
@@ -2325,10 +2398,10 @@
             return match?.[1] || '';
         },
 
-	        highlightSourceReference(footnote, options = {}) {
-	            if (!this.$sourcesBox.length) {
-	                return;
-	            }
+        highlightSourceReference(footnote, options = {}) {
+            if (!this.$sourcesBox.length) {
+                return;
+            }
 
             const $items = this.$sourcesBox.find('[data-source-footnote]');
             const $target = $items.filter(`[data-source-footnote="${footnote}"]`).first();
@@ -2343,15 +2416,15 @@
                 return;
             }
 
-	            this.setScrollablePaneActive?.('sources');
-	            this.ensureSourcesPanelVisible();
-	            this.activateSourceReferenceItem($target);
-	            this.highlightBestSourceContext($target, 'active');
+            this.setScrollablePaneActive?.('sources');
+            this.ensureSourcesPanelVisible();
+            this.activateSourceReferenceItem($target);
+            this.highlightBestSourceContext($target, 'active');
 
-	            const element = $target.get(0);
-	            if (element && typeof element.scrollIntoView === 'function') {
-	                element.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-	            }
+            const element = $target.get(0);
+            if (element && typeof element.scrollIntoView === 'function') {
+                element.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
         },
 
         ensureSourcesPanelVisible() {
