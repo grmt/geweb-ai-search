@@ -55,7 +55,8 @@ class MarkdownContextReconstructor {
             return '';
         }
 
-        return $this->reconstructFromMarkdown($markdown, $snippet);
+        $reconstructed = $this->reconstructFromMarkdown($markdown, $snippet);
+        return $reconstructed !== '' ? $this->resolveInternalLinks($reconstructed) : '';
     }
 
     private function reconstructFromMarkdown(string $markdown, string $snippet): string {
@@ -246,5 +247,23 @@ class MarkdownContextReconstructor {
             ' ',
             ' ',
         ], $text));
+    }
+
+    private function resolveInternalLinks(string $markdown): string {
+        return (string) preg_replace_callback(
+            '/\[([^\]]+)\]\(([^)]+)\)/',
+            function ($matches) {
+                $text = $matches[1];
+                $url = trim((string) $matches[2]);
+
+                $resolved = $this->resolver->resolve($url);
+                if (!empty($resolved['url'])) {
+                    return '[' . $text . '](' . $resolved['url'] . ')';
+                }
+
+                return $matches[0];
+            },
+            $markdown
+        );
     }
 }
