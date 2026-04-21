@@ -14,7 +14,7 @@ class MarkdownContextReconstructor {
 
     /**
      * @param array<int,array<string,mixed>> $items
-     * @return array<string,string>
+     * @return array<string,array<string,string>>
      */
     public function reconstructBatch(array $items): array {
         $results = [];
@@ -34,7 +34,11 @@ class MarkdownContextReconstructor {
 
             $reconstructed = $this->reconstructForUrl($url, $snippet, $sourceUrl);
             if ($reconstructed !== '') {
-                $results[$key] = $reconstructed;
+                $resolvedUrl = $this->resolveUrl($url, $sourceUrl);
+                $results[$key] = [
+                    'markdown' => $reconstructed,
+                    'url' => $resolvedUrl ?: $url,
+                ];
             }
         }
 
@@ -247,6 +251,22 @@ class MarkdownContextReconstructor {
             ' ',
             ' ',
         ], $text));
+    }
+
+    private function resolveUrl(string $url, string $sourceUrl = ''): string {
+        $resolved = $this->resolver->resolve($url);
+        if (!empty($resolved['url'])) {
+            return $resolved['url'];
+        }
+
+        if ($sourceUrl !== '') {
+            $resolved = $this->resolver->resolve($sourceUrl);
+            if (!empty($resolved['url'])) {
+                return $resolved['url'];
+            }
+        }
+
+        return '';
     }
 
     private function resolveInternalLinks(string $markdown): string {
