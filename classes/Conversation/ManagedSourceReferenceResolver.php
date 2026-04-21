@@ -88,6 +88,10 @@ class ManagedSourceReferenceResolver {
             $candidate = home_url($url);
         }
 
+        if ($candidate === false && !preg_match('/^https?:\/\//i', $url)) {
+            $candidate = home_url('/' . $url);
+        }
+
         if ($candidate !== false) {
             $candidateParts = wp_parse_url($candidate);
             if (

@@ -250,7 +250,9 @@ class MarkdownContextReconstructor {
     }
 
     private function resolveInternalLinks(string $markdown): string {
-        return (string) preg_replace_callback(
+        $result = $markdown;
+
+        $result = (string) preg_replace_callback(
             '/\[([^\]]+)\]\(([^)]+)\)/',
             function ($matches) {
                 $text = $matches[1];
@@ -263,7 +265,23 @@ class MarkdownContextReconstructor {
 
                 return $matches[0];
             },
-            $markdown
+            $result
         );
+
+        $result = (string) preg_replace_callback(
+            '/\b(\d+)\.md\b/',
+            function ($matches) {
+                $url = $matches[0];
+                $resolved = $this->resolver->resolve($url);
+                if (!empty($resolved['url'])) {
+                    return $resolved['url'];
+                }
+
+                return $matches[0];
+            },
+            $result
+        );
+
+        return $result;
     }
 }
