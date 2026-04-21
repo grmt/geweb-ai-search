@@ -119,6 +119,13 @@ class ManagedSourceReferenceResolver {
             }
         }
 
+        $path = isset($parts['path']) ? trim((string) $parts['path'], '/') : '';
+        if ($path !== '') {
+            if (preg_match('/^(\d+)\.md$/i', $path, $matches)) {
+                return (int) $matches[1];
+            }
+        }
+
         $postId = url_to_postid($url);
         return $postId > 0 ? $postId : 0;
     }
