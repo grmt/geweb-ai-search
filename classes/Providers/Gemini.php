@@ -36,6 +36,8 @@ class Gemini implements AIProviderInterface {
     private const OPTION_MODEL_PROMPT_MODES = 'geweb_aisearch_model_prompt_modes';
     public const OPTION_TIMEOUT_FLASH = 'geweb_aisearch_timeout_flash';
     public const OPTION_TIMEOUT_PRO = 'geweb_aisearch_timeout_pro';
+    public const OPTION_SYSTEM_RETRIES = 'geweb_aisearch_gemini_system_retries';
+    public const OPTION_HUMAN_RETRIES = 'geweb_aisearch_gemini_human_retries';
     private const OPTION_CONNECTION_STATUS = 'geweb_aisearch_connection_status';
     private const OPTION_STORES_CACHE = 'geweb_aisearch_gemini_stores_cache';
     private const OPTION_STORES_CACHE_TIME = 'geweb_aisearch_gemini_stores_cache_time';
@@ -100,11 +102,14 @@ class Gemini implements AIProviderInterface {
             'output' => 10.00,
         ],
     ];
-    public const DEFAULT_HTTP_TIMEOUT_SECONDS = 60;
+    public const DEFAULT_HTTP_TIMEOUT_SECONDS = 90;
     public const DEFAULT_PRO_HTTP_TIMEOUT_SECONDS = 90;
+    public const DEFAULT_SYSTEM_RETRIES = 2;
+    public const DEFAULT_HUMAN_RETRIES = 2;
     private const DEFAULT_SUMMARY_TIMEOUT_SECONDS = 12;
     private const DEFAULT_UPLOAD_OPERATION_TIMEOUT_SECONDS = 300;
     private const DEFAULT_UPLOAD_OPERATION_POLL_INTERVAL_MS = 5000;
+    private const MAX_GENERATE_TIMEOUT_SECONDS = 300;
     private const GENERATE_TIMEOUT_BACKOFF_OPTION = 'geweb_aisearch_gemini_generate_timeout_backoff';
     private const GENERATE_TIMEOUT_BACKOFF_TTL_SECONDS = 3600;
     private const MAX_UPLOAD_FILE_BYTES = 104857600;
@@ -127,6 +132,11 @@ class Gemini implements AIProviderInterface {
      * @var array<string,string|int>
      */
     private array $runtimeLogContext = [];
+
+    /**
+     * @var callable|null
+     */
+    private $streamProgressCallback = null;
 
     /**
      * Constructor
@@ -180,6 +190,13 @@ class Gemini implements AIProviderInterface {
         }
 
         $this->runtimeLogContext = $normalized;
+    }
+
+    /**
+     * @param callable|null $callback Receives array{stage:string,label:string,thoughts:array<int,string>,answer_preview:string}
+     */
+    public function setStreamProgressCallback($callback): void {
+        $this->streamProgressCallback = is_callable($callback) ? $callback : null;
     }
 
     /**
@@ -1270,25 +1287,37 @@ class Gemini implements AIProviderInterface {
         if ($requestId === '') {
             $requestId = 'gem-' . wp_generate_password(10, false, false);
         }
+
+        $promptDescriptor = $this->getPromptDescriptor($requestModel, $promptOverride);
+        $effectivePrompt = trim((string) ($promptDescriptor['instruction'] ?? ''));
+        $retryPlan = $this->buildGenerateRetryPlan($latestQuestion, $requestModel, $effectivePrompt);
+
         $this->runtimeLogContext['request_id'] = $requestId;
         $this->runtimeLogContext['model'] = $requestModel;
         if ($questionHash !== '') {
             $this->runtimeLogContext['question_hash'] = $questionHash;
         }
+        if ($retryPlan['prompt_hash'] !== '') {
+            $this->runtimeLogContext['prompt_hash'] = $retryPlan['prompt_hash'];
+        }
+        if ($retryPlan['request_fingerprint'] !== '') {
+            $this->runtimeLogContext['request_fingerprint'] = $retryPlan['request_fingerprint'];
+        }
         $this->logInfo(sprintf(
-            'Gemini search dispatch request_id=%s question_hash=%s conversation_id=%s message_count=%d excluded_sources=%d model="%s"',
+            'Gemini search dispatch request_id=%s question_hash=%s conversation_id=%s message_count=%d excluded_sources=%d model="%s" system_retries=%d human_retries=%d overall_attempt_start=%d overall_attempt_max=%d',
             $requestId,
             $questionHash !== '' ? $questionHash : 'none',
             isset($this->runtimeLogContext['conversation_id']) ? (string) $this->runtimeLogContext['conversation_id'] : 'none',
             count($messages),
             count($excludedSources),
-            $requestModel
+            $requestModel,
+            $retryPlan['system_retries'],
+            $retryPlan['human_retries'],
+            $retryPlan['overall_attempt_start'],
+            $retryPlan['overall_attempt_max']
         ));
-        $timeoutSeconds = $this->getSearchTimeoutSecondsForQuestion($latestQuestion, $requestModel);
 
         // Build request body
-        $promptDescriptor = $this->getPromptDescriptor($requestModel, $promptOverride);
-        $effectivePrompt = trim((string) ($promptDescriptor['instruction'] ?? ''));
         if ($effectivePrompt !== '' && PromptSupport::containsDisallowedUrl($effectivePrompt)) {
             throw new \Exception('Prompt cannot contain URLs. Remove links and try again.');
         }
@@ -1300,18 +1329,32 @@ class Gemini implements AIProviderInterface {
         );
 
         try {
-            $result = $this->executeSearchRequest($requestModel, $body, $timeoutSeconds);
+            $result = $this->executeSearchRequest(
+                $requestModel,
+                $body,
+                $retryPlan['timeout_seconds'],
+                $retryPlan['system_retries'],
+                $retryPlan['completed_attempts'],
+                $retryPlan['overall_attempt_max']
+            );
             $responseText = $this->extractSearchResponseText($result);
             $meta = $this->buildResponseMeta($result, $requestModel, $promptDescriptor);
 
-            $this->clearGenerateTimeoutBackoffForQuestion($latestQuestion);
+            $this->clearGenerateTimeoutBackoffForRequest($latestQuestion, $requestModel, $effectivePrompt);
             $this->recordModelStatus($requestModel, 'ok');
             return $this->formatSearchResponse($responseText, $meta, $requestModel);
         } catch (\Exception $e) {
             $isTimeout = $this->isTimeoutException($e);
 
             if ($isTimeout) {
-                $this->recordGenerateTimeoutBackoff($latestQuestion, $timeoutSeconds, $requestModel);
+                $this->recordGenerateTimeoutBackoff(
+                    $latestQuestion,
+                    $requestModel,
+                    $effectivePrompt,
+                    $retryPlan['completed_attempts'] + $retryPlan['system_retries']
+                );
+            } else {
+                $this->clearGenerateTimeoutBackoffForRequest($latestQuestion, $requestModel, $effectivePrompt);
             }
             $this->recordModelStatus($requestModel, $isTimeout ? 'timeout' : 'failed', $e->getMessage());
             throw $e;
@@ -1323,9 +1366,27 @@ class Gemini implements AIProviderInterface {
      * @param array<string,mixed> $body
      * @return array<string,mixed>
      */
-    private function executeSearchRequest(string $model, array $body, int $timeoutSeconds): array {
+    private function executeSearchRequest(string $model, array $body, int $timeoutSeconds, int $maxAttempts = self::DEFAULT_SYSTEM_RETRIES, int $overallAttemptBase = 0, int $overallAttemptMax = self::DEFAULT_SYSTEM_RETRIES): array {
+        if ($this->supportsThoughtSummaries($model) && function_exists('curl_init')) {
+            $url = self::API_BASE . '/models/' . $model . ':streamGenerateContent?alt=sse';
+            try {
+                return $this->makeStreamingRequest($url, $body, $timeoutSeconds, $maxAttempts, $overallAttemptBase, $overallAttemptMax);
+            } catch (\Exception $e) {
+                if ($this->isTimeoutException($e)) {
+                    throw $e;
+                }
+
+                $this->logWarning(sprintf(
+                    'Gemini streaming request failed, falling back to generateContent model="%s" message="%s"%s',
+                    $model,
+                    $e->getMessage(),
+                    $this->formatRuntimeLogContextSuffix()
+                ));
+            }
+        }
+
         $url = self::API_BASE . '/models/' . $model . ':generateContent';
-        return $this->makeRequest($url, $body, 'POST', $timeoutSeconds);
+        return $this->makeRequest($url, $body, 'POST', $timeoutSeconds, $maxAttempts, $overallAttemptBase, $overallAttemptMax);
     }
 
     /**
@@ -1367,7 +1428,7 @@ class Gemini implements AIProviderInterface {
                 : [];
 
             foreach ($parts as $part) {
-                if (!is_array($part) || !isset($part['text'])) {
+                if (!is_array($part) || !isset($part['text']) || !empty($part['thought'])) {
                     continue;
                 }
 
@@ -1550,15 +1611,17 @@ class Gemini implements AIProviderInterface {
      * @return array Decoded JSON response
      * @throws \Exception On request error
      */
-    private function makeRequest(string $url, ?array $body = null, string $method = 'POST', int $timeoutSeconds = self::DEFAULT_HTTP_TIMEOUT_SECONDS): array {
+    private function makeRequest(string $url, ?array $body = null, string $method = 'POST', int $timeoutSeconds = self::DEFAULT_HTTP_TIMEOUT_SECONDS, int $maxAttempts = self::DEFAULT_SYSTEM_RETRIES, int $overallAttemptBase = 0, int $overallAttemptMax = self::DEFAULT_SYSTEM_RETRIES): array {
         if (empty($this->apiKey)) {
             throw new ConfigurationException('Configuration error');
         }
 
-        $timeoutSeconds = max(5, min(110, $timeoutSeconds));
+        $timeoutSeconds = max(5, $timeoutSeconds);
+        $attemptTimeoutStepSeconds = max(1, (int) floor($timeoutSeconds / max(1, $overallAttemptBase + 1)));
+        $attemptTimeoutSeconds = $timeoutSeconds;
         $args = [
             'method'  => $method,
-            'timeout' => $timeoutSeconds,
+            'timeout' => $attemptTimeoutSeconds,
             'headers' => [
                 'x-goog-api-key' => $this->apiKey,
                 'Content-Type'  => 'application/json',
@@ -1572,17 +1635,22 @@ class Gemini implements AIProviderInterface {
 
         $bodyBytes = isset($args['body']) ? strlen((string) $args['body']) : 0;
         $attempt = 0;
-        $maxAttempts = 2;
+        $maxAttempts = max(1, min(4, $maxAttempts));
+        $overallAttemptMax = max($maxAttempts, $overallAttemptMax);
 
         do {
             $attempt++;
+            $args['timeout'] = $attemptTimeoutSeconds;
             $startedAt = microtime(true);
+            $overallAttempt = $overallAttemptBase + $attempt;
             $this->logInfo(sprintf(
-                'Gemini request starting method=%s attempt=%d/%d timeout_seconds=%d body_bytes=%d endpoint="%s"%s',
+                'Gemini request starting method=%s attempt=%d/%d overall_attempt=%d/%d timeout_seconds=%d body_bytes=%d endpoint="%s"%s',
                 $method,
                 $attempt,
                 $maxAttempts,
-                $timeoutSeconds,
+                $overallAttempt,
+                $overallAttemptMax,
+                $attemptTimeoutSeconds,
                 $bodyBytes,
                 $url,
                 $this->formatRuntimeLogContextSuffix()
@@ -1605,6 +1673,7 @@ class Gemini implements AIProviderInterface {
                 ));
 
                 if ($attempt < $maxAttempts && $this->isTimeoutException(new \Exception($errorMessage))) {
+                    $attemptTimeoutSeconds += $attemptTimeoutStepSeconds;
                     sleep(1);
                     continue;
                 }
@@ -1697,6 +1766,366 @@ class Gemini implements AIProviderInterface {
         return []; // Fallback, never reached
     }
 
+    /**
+     * Stream a Gemini SSE response with cURL and merge chunks into one result payload.
+     *
+     * @param array<string,mixed> $body
+     * @return array<string,mixed>
+     * @throws \Exception
+     */
+    private function makeStreamingRequest(string $url, array $body, int $timeoutSeconds, int $maxAttempts = self::DEFAULT_SYSTEM_RETRIES, int $overallAttemptBase = 0, int $overallAttemptMax = self::DEFAULT_SYSTEM_RETRIES): array {
+        if (empty($this->apiKey)) {
+            throw new ConfigurationException('Configuration error');
+        }
+
+        if (!function_exists('curl_init')) {
+            throw new \Exception('cURL extension is required for Gemini streaming requests.');
+        }
+
+        $timeoutSeconds = max(5, $timeoutSeconds);
+        $attemptTimeoutStepSeconds = max(1, (int) floor($timeoutSeconds / max(1, $overallAttemptBase + 1)));
+        $attemptTimeoutSeconds = $timeoutSeconds;
+        $encodedBody = wp_json_encode($body);
+        if (!is_string($encodedBody) || $encodedBody === '') {
+            throw new \Exception('Could not encode Gemini streaming request body.');
+        }
+
+        $bodyBytes = strlen($encodedBody);
+        $attempt = 0;
+        $maxAttempts = max(1, min(4, $maxAttempts));
+        $overallAttemptMax = max($maxAttempts, $overallAttemptMax);
+
+        do {
+            $attempt++;
+            $overallAttempt = $overallAttemptBase + $attempt;
+            $startedAt = microtime(true);
+            $this->logInfo(sprintf(
+                'Gemini streaming request starting method=%s attempt=%d/%d overall_attempt=%d/%d timeout_seconds=%d body_bytes=%d endpoint="%s"%s',
+                'POST',
+                $attempt,
+                $maxAttempts,
+                $overallAttempt,
+                $overallAttemptMax,
+                $attemptTimeoutSeconds,
+                $bodyBytes,
+                $url,
+                $this->formatRuntimeLogContextSuffix()
+            ));
+
+            $aggregate = [];
+            $rawBuffer = '';
+            $lineBuffer = '';
+            $eventDataLines = [];
+            $streamThoughts = [];
+            $streamAnswer = '';
+            $streamErrorMessage = '';
+            $curl = curl_init($url);
+            if ($curl === false) {
+                throw new \Exception('Could not initialize cURL for Gemini streaming request.');
+            }
+
+            curl_setopt_array($curl, [
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => $encodedBody,
+                CURLOPT_HTTPHEADER => [
+                    'x-goog-api-key: ' . $this->apiKey,
+                    'Content-Type: application/json',
+                    'Accept: text/event-stream',
+                ],
+                CURLOPT_RETURNTRANSFER => false,
+                CURLOPT_HEADER => false,
+                CURLOPT_FOLLOWLOCATION => false,
+                CURLOPT_TIMEOUT => $attemptTimeoutSeconds,
+                CURLOPT_CONNECTTIMEOUT => min(30, $attemptTimeoutSeconds),
+                CURLOPT_WRITEFUNCTION => function ($handle, string $chunk) use (&$aggregate, &$rawBuffer, &$lineBuffer, &$eventDataLines, &$streamThoughts, &$streamAnswer, &$streamErrorMessage) {
+                    $rawBuffer .= $chunk;
+                    $lineBuffer .= $chunk;
+
+                    while (($lineBreakPos = strpos($lineBuffer, "\n")) !== false) {
+                        $line = substr($lineBuffer, 0, $lineBreakPos);
+                        $lineBuffer = substr($lineBuffer, $lineBreakPos + 1);
+                        $line = rtrim($line, "\r");
+
+                        if ($line === '') {
+                            if (!$this->flushStreamingEventDataLines($eventDataLines, $aggregate, $streamThoughts, $streamAnswer, $streamErrorMessage)) {
+                                return 0;
+                            }
+                            continue;
+                        }
+
+                        if (strpos($line, 'data:') === 0) {
+                            $eventDataLines[] = ltrim(substr($line, 5));
+                        }
+                    }
+
+                    return strlen($chunk);
+                },
+            ]);
+
+            $execResult = curl_exec($curl);
+            $httpCode = (int) curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
+            $curlError = curl_error($curl);
+            curl_close($curl);
+
+            if ($lineBuffer !== '' || !empty($eventDataLines)) {
+                $lineBuffer = '';
+                if (!$this->flushStreamingEventDataLines($eventDataLines, $aggregate, $streamThoughts, $streamAnswer, $streamErrorMessage)) {
+                    $execResult = false;
+                }
+            }
+
+            $elapsedMs = (int) round((microtime(true) - $startedAt) * 1000);
+            if ($streamErrorMessage !== '') {
+                $this->logError(sprintf(
+                    'Gemini streaming request parse failure method=%s attempt=%d/%d elapsed_ms=%d endpoint="%s" message="%s"%s',
+                    'POST',
+                    $attempt,
+                    $maxAttempts,
+                    $elapsedMs,
+                    $url,
+                    $streamErrorMessage,
+                    $this->formatRuntimeLogContextSuffix()
+                ));
+                throw new \Exception($streamErrorMessage);
+            }
+
+            if ($execResult === false) {
+                $errorMessage = $curlError !== '' ? $curlError : 'Unknown cURL streaming error';
+                $this->logError(sprintf(
+                    'Gemini streaming request transport failure method=%s attempt=%d/%d elapsed_ms=%d endpoint="%s" message="%s"%s',
+                    'POST',
+                    $attempt,
+                    $maxAttempts,
+                    $elapsedMs,
+                    $url,
+                    $errorMessage,
+                    $this->formatRuntimeLogContextSuffix()
+                ));
+
+                if ($attempt < $maxAttempts && $this->isTimeoutException(new \Exception($errorMessage))) {
+                    $attemptTimeoutSeconds += $attemptTimeoutStepSeconds;
+                    sleep(1);
+                    continue;
+                }
+
+                throw new \Exception(esc_html(sprintf(
+                    'API streaming request failed after %d ms: %s',
+                    $elapsedMs,
+                    $errorMessage
+                )));
+            }
+
+            $responseBytes = strlen($rawBuffer);
+            $this->logInfo(sprintf(
+                'Gemini streaming request response method=%s attempt=%d/%d http_code=%d elapsed_ms=%d response_bytes=%d endpoint="%s"%s',
+                'POST',
+                $attempt,
+                $maxAttempts,
+                $httpCode,
+                $elapsedMs,
+                $responseBytes,
+                $url,
+                $this->formatRuntimeLogContextSuffix()
+            ));
+
+            if ($httpCode < 200 || $httpCode >= 300) {
+                $responseSnippet = trim(substr(preg_replace('/\s+/', ' ', $rawBuffer), 0, 400));
+                if ($attempt < $maxAttempts && ($httpCode === 503 || $httpCode === 429)) {
+                    $this->logInfo(sprintf(
+                        'retrying Gemini streaming request after transient API failure method=%s attempt=%d/%d http_code=%d',
+                        'POST',
+                        $attempt,
+                        $maxAttempts,
+                        $httpCode
+                    ));
+                    sleep(2);
+                    continue;
+                }
+
+                throw new \Exception(esc_html(sprintf(
+                    'API streaming request failed after %d ms with HTTP code %d: %s',
+                    $elapsedMs,
+                    $httpCode,
+                    $responseSnippet
+                )));
+            }
+
+            if (empty($aggregate)) {
+                throw new \Exception('Gemini streaming request returned no usable chunks.');
+            }
+
+            return $aggregate;
+        } while ($attempt < $maxAttempts);
+
+        return [];
+    }
+
+    /**
+     * @param array<int,string> $eventDataLines
+     * @param array<string,mixed> $aggregate
+     */
+    private function flushStreamingEventDataLines(array &$eventDataLines, array &$aggregate, array &$streamThoughts, string &$streamAnswer, string &$streamErrorMessage): bool {
+        if (empty($eventDataLines)) {
+            return true;
+        }
+
+        $payload = trim(implode("\n", $eventDataLines));
+        $eventDataLines = [];
+        if ($payload === '' || $payload === '[DONE]') {
+            return true;
+        }
+
+        $decoded = json_decode($payload, true);
+        if (json_last_error() !== JSON_ERROR_NONE || !is_array($decoded)) {
+            $streamErrorMessage = 'Could not decode Gemini streaming event: ' . json_last_error_msg();
+            return false;
+        }
+
+        $this->mergeStreamingChunkIntoResult($aggregate, $decoded);
+        $this->collectStreamingProgressFromChunk($decoded, $streamThoughts, $streamAnswer);
+        return true;
+    }
+
+    /**
+     * @param array<string,mixed> $aggregate
+     * @param array<string,mixed> $chunk
+     */
+    private function mergeStreamingChunkIntoResult(array &$aggregate, array $chunk): void {
+        foreach ($chunk as $key => $value) {
+            if ($key === 'candidates' && is_array($value)) {
+                if (!isset($aggregate['candidates']) || !is_array($aggregate['candidates'])) {
+                    $aggregate['candidates'] = [];
+                }
+
+                foreach ($value as $candidateIndex => $candidateChunk) {
+                    if (!is_array($candidateChunk)) {
+                        continue;
+                    }
+                    if (!isset($aggregate['candidates'][$candidateIndex]) || !is_array($aggregate['candidates'][$candidateIndex])) {
+                        $aggregate['candidates'][$candidateIndex] = [];
+                    }
+
+                    $this->mergeStreamingCandidate($aggregate['candidates'][$candidateIndex], $candidateChunk);
+                }
+                continue;
+            }
+
+            $aggregate[$key] = $value;
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $aggregateCandidate
+     * @param array<string,mixed> $candidateChunk
+     */
+    private function mergeStreamingCandidate(array &$aggregateCandidate, array $candidateChunk): void {
+        foreach ($candidateChunk as $key => $value) {
+            if ($key === 'content' && is_array($value)) {
+                if (!isset($aggregateCandidate['content']) || !is_array($aggregateCandidate['content'])) {
+                    $aggregateCandidate['content'] = [];
+                }
+
+                if (isset($value['role'])) {
+                    $aggregateCandidate['content']['role'] = $value['role'];
+                }
+
+                if (isset($value['parts']) && is_array($value['parts'])) {
+                    if (!isset($aggregateCandidate['content']['parts']) || !is_array($aggregateCandidate['content']['parts'])) {
+                        $aggregateCandidate['content']['parts'] = [];
+                    }
+
+                    foreach ($value['parts'] as $part) {
+                        if (is_array($part)) {
+                            $aggregateCandidate['content']['parts'][] = $part;
+                        }
+                    }
+                }
+                continue;
+            }
+
+            $aggregateCandidate[$key] = $value;
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $chunk
+     */
+    private function collectStreamingProgressFromChunk(array $chunk, array &$streamThoughts, string &$streamAnswer): void {
+        $candidates = isset($chunk['candidates']) && is_array($chunk['candidates'])
+            ? $chunk['candidates']
+            : [];
+        if (empty($candidates)) {
+            return;
+        }
+
+        $candidate = is_array($candidates[0] ?? null) ? $candidates[0] : [];
+        $parts = isset($candidate['content']['parts']) && is_array($candidate['content']['parts'])
+            ? $candidate['content']['parts']
+            : [];
+
+        foreach ($parts as $part) {
+            if (!is_array($part) || !isset($part['text'])) {
+                continue;
+            }
+
+            $text = (string) $part['text'];
+            if ($text === '') {
+                continue;
+            }
+
+            if (!empty($part['thought'])) {
+                $this->mergeThoughtTextIntoSegments($streamThoughts, $text);
+            } else {
+                $streamAnswer .= $text;
+            }
+        }
+
+        if ($this->streamProgressCallback !== null) {
+            call_user_func($this->streamProgressCallback, [
+                'stage' => $streamAnswer !== '' ? 'answer' : 'thoughts',
+                'label' => $streamAnswer !== ''
+                    ? 'Drafting answer'
+                    : 'Receiving thought process',
+                'thoughts' => $streamThoughts,
+                'answer_preview' => $streamAnswer,
+            ]);
+        }
+    }
+
+    /**
+     * @param array<int,string> $segments
+     */
+    private function mergeThoughtTextIntoSegments(array &$segments, string $text): void {
+        $normalizedText = trim(str_replace(["\r\n", "\r"], "\n", $text));
+        if ($normalizedText === '') {
+            return;
+        }
+
+        if (empty($segments)) {
+            $segments[] = $normalizedText;
+            return;
+        }
+
+        $startsNewSegment = preg_match('/^[A-Z][^\n]{0,100}\n\n[\s\S]+$/u', $normalizedText) === 1;
+        $lastIndex = count($segments) - 1;
+        if ($startsNewSegment) {
+            $segments[] = $normalizedText;
+            return;
+        }
+
+        $separator = '';
+        $lastSegment = (string) $segments[$lastIndex];
+        if (
+            $lastSegment !== ''
+            && !preg_match('/[\s(\[{\/-]$/u', $lastSegment)
+            && !preg_match('/^[\s,.;:!?)]/u', $normalizedText)
+        ) {
+            $separator = ' ';
+        }
+
+        $segments[$lastIndex] = $lastSegment . $separator . $normalizedText;
+    }
+
     private function formatRuntimeLogContextSuffix(): string {
         if (empty($this->runtimeLogContext)) {
             return '';
@@ -1752,42 +2181,77 @@ class Gemini implements AIProviderInterface {
         return is_numeric($timeout) && (int) $timeout > 0 ? (int) $timeout : $default;
     }
 
-    private function getSearchTimeoutSecondsForQuestion(string $question, string $model): int {
-        $baseTimeout = $this->getHttpTimeoutSeconds($model);
-        if ($question === '') {
-            return $baseTimeout;
-        }
-
-        $state = $this->getGenerateTimeoutBackoffState();
-        if (!is_array($state)) {
-            return $baseTimeout;
-        }
-
-        $storedHash = isset($state['question_hash']) ? (string) $state['question_hash'] : '';
-        $expiresAt = isset($state['expires_at']) ? (int) $state['expires_at'] : 0;
-        $nextTimeout = isset($state['next_timeout']) ? (int) $state['next_timeout'] : 0;
-        if ($storedHash === '' || $expiresAt < time() || $storedHash !== $this->buildQuestionHash($question)) {
-            return $baseTimeout;
-        }
-
-        return max($baseTimeout, $nextTimeout);
+    private function getSystemRetryCount(): int {
+        $configured = get_option(self::OPTION_SYSTEM_RETRIES);
+        return (is_numeric($configured) && (int) $configured > 0)
+            ? max(1, min(4, (int) $configured))
+            : self::DEFAULT_SYSTEM_RETRIES;
     }
 
-    private function recordGenerateTimeoutBackoff(string $question, int $timeoutSeconds, string $model): void {
+    private function getHumanRetryCount(): int {
+        $configured = get_option(self::OPTION_HUMAN_RETRIES);
+        return (is_numeric($configured) && (int) $configured >= 0)
+            ? max(0, min(4, (int) $configured))
+            : self::DEFAULT_HUMAN_RETRIES;
+    }
+
+    /**
+     * @return array{timeout_seconds:int,completed_attempts:int,overall_attempt_start:int,overall_attempt_max:int,system_retries:int,human_retries:int,request_fingerprint:string,prompt_hash:string}
+     */
+    private function buildGenerateRetryPlan(string $question, string $model, string $promptInstruction): array {
+        $baseTimeout = $this->getHttpTimeoutSeconds($model);
+        $systemRetries = $this->getSystemRetryCount();
+        $humanRetries = $this->getHumanRetryCount();
+        $overallAttemptMax = $systemRetries * (1 + $humanRetries);
+        $promptHash = $promptInstruction !== '' ? hash('sha256', trim($promptInstruction)) : '';
+        $requestFingerprint = $this->buildGenerateRequestFingerprint($question, $model, $promptInstruction);
+        $completedAttempts = 0;
+
+        if ($requestFingerprint !== '') {
+            $state = $this->getGenerateTimeoutBackoffState();
+            if (is_array($state)) {
+                $storedFingerprint = isset($state['request_fingerprint']) ? (string) $state['request_fingerprint'] : '';
+                $storedCompletedAttempts = isset($state['completed_attempts']) ? (int) $state['completed_attempts'] : 0;
+                if ($storedFingerprint === $requestFingerprint) {
+                    $completedAttempts = max(0, min($overallAttemptMax, $storedCompletedAttempts));
+                }
+            }
+        }
+
+        if ($question !== '' && $completedAttempts >= $overallAttemptMax) {
+            throw new \Exception('This request has already timed out the maximum number of times for the same question, model, and prompt. I do not expect a result without changing the model or the prompt.');
+        }
+
+        $overallAttemptStart = $completedAttempts + 1;
+        return [
+            'timeout_seconds' => $baseTimeout * max(1, $overallAttemptStart),
+            'completed_attempts' => $completedAttempts,
+            'overall_attempt_start' => $overallAttemptStart,
+            'overall_attempt_max' => $overallAttemptMax,
+            'system_retries' => $systemRetries,
+            'human_retries' => $humanRetries,
+            'request_fingerprint' => $requestFingerprint,
+            'prompt_hash' => $promptHash,
+        ];
+    }
+
+    private function recordGenerateTimeoutBackoff(string $question, string $model, string $promptInstruction, int $completedAttempts): void {
         if ($question === '') {
             return;
         }
 
-        $nextTimeout = max($this->getHttpTimeoutSeconds($model), $timeoutSeconds * 2);
         $state = [
             'question_hash' => $this->buildQuestionHash($question),
-            'next_timeout' => min(180, $nextTimeout),
+            'prompt_hash' => $promptInstruction !== '' ? hash('sha256', trim($promptInstruction)) : '',
+            'model' => $model,
+            'request_fingerprint' => $this->buildGenerateRequestFingerprint($question, $model, $promptInstruction),
+            'completed_attempts' => max(0, $completedAttempts),
             'expires_at' => time() + self::GENERATE_TIMEOUT_BACKOFF_TTL_SECONDS,
         ];
         $this->updateUserScopedOption(self::GENERATE_TIMEOUT_BACKOFF_OPTION, $state);
     }
 
-    private function clearGenerateTimeoutBackoffForQuestion(string $question): void {
+    private function clearGenerateTimeoutBackoffForRequest(string $question, string $model, string $promptInstruction): void {
         if ($question === '') {
             return;
         }
@@ -1797,8 +2261,8 @@ class Gemini implements AIProviderInterface {
             return;
         }
 
-        $storedHash = isset($state['question_hash']) ? (string) $state['question_hash'] : '';
-        if ($storedHash !== $this->buildQuestionHash($question)) {
+        $storedFingerprint = isset($state['request_fingerprint']) ? (string) $state['request_fingerprint'] : '';
+        if ($storedFingerprint !== $this->buildGenerateRequestFingerprint($question, $model, $promptInstruction)) {
             return;
         }
 
@@ -1848,6 +2312,19 @@ class Gemini implements AIProviderInterface {
         $normalizedQuestion = preg_replace('/\s+/', ' ', $question);
         $normalized = strtolower(trim($normalizedQuestion ?? $question));
         return hash('sha256', $normalized);
+    }
+
+    private function buildGenerateRequestFingerprint(string $question, string $model, string $promptInstruction): string {
+        $normalizedQuestion = trim((string) $question);
+        if ($normalizedQuestion === '') {
+            return '';
+        }
+
+        return hash('sha256', wp_json_encode([
+            'question_hash' => $this->buildQuestionHash($normalizedQuestion),
+            'model' => trim($model),
+            'prompt_hash' => $promptInstruction !== '' ? hash('sha256', trim($promptInstruction)) : '',
+        ]));
     }
 
     private function isTimeoutException(\Exception $exception): bool {
@@ -1906,6 +2383,16 @@ class Gemini implements AIProviderInterface {
 
         if (!$this->isGemini2Model($model)) {
             $body['generationConfig'] = $this->getStructuredGenerationConfig();
+        }
+
+        if ($this->supportsThoughtSummaries($model)) {
+            if (!isset($body['generationConfig']) || !is_array($body['generationConfig'])) {
+                $body['generationConfig'] = [];
+            }
+
+            $body['generationConfig']['thinkingConfig'] = [
+                'includeThoughts' => true,
+            ];
         }
 
         return $body;
@@ -2039,6 +2526,11 @@ class Gemini implements AIProviderInterface {
             $meta['usage'] = $usage;
         }
 
+        $thoughtSummaries = $this->extractThoughtSummaries($result);
+        if (!empty($thoughtSummaries)) {
+            $meta['thoughts'] = $thoughtSummaries;
+        }
+
         if (!empty($candidate)) {
             $candidateMeta = $this->buildCandidateMeta($candidate);
             if (count($candidateMeta) > 1) {
@@ -2056,6 +2548,47 @@ class Gemini implements AIProviderInterface {
         }
 
         return $meta;
+    }
+
+    /**
+     * @param array<string,mixed> $result
+     * @return array<int,string>
+     */
+    private function extractThoughtSummaries(array $result): array {
+        $candidates = isset($result['candidates']) && is_array($result['candidates'])
+            ? $result['candidates']
+            : [];
+
+        if (empty($candidates)) {
+            return [];
+        }
+
+        $thoughts = [];
+
+        foreach ($candidates as $candidate) {
+            if (!is_array($candidate)) {
+                continue;
+            }
+
+            $parts = isset($candidate['content']['parts']) && is_array($candidate['content']['parts'])
+                ? $candidate['content']['parts']
+                : [];
+
+            foreach ($parts as $part) {
+                if (!is_array($part) || empty($part['thought']) || !isset($part['text'])) {
+                    continue;
+                }
+
+                $text = trim((string) $part['text']);
+                if ($text !== '') {
+                    $this->mergeThoughtTextIntoSegments($thoughts, $text);
+                }
+            }
+        }
+
+        return array_values(array_filter($thoughts, static function ($thought): bool {
+            return trim((string) $thought) !== '';
+        }));
     }
 
     /**
@@ -2985,5 +3518,14 @@ class Gemini implements AIProviderInterface {
      */
     private function isGemini2Model(string $model): bool {
         return strpos($model, 'gemini-2') === 0;
+    }
+
+    /**
+     * Gemini 3 models can return thought summaries through thinkingConfig.
+     */
+    private function supportsThoughtSummaries(string $model): bool {
+        $normalizedModel = strtolower(trim($model));
+        return strpos($normalizedModel, 'gemini-3') === 0
+            || strpos($normalizedModel, 'gemini-2.5') === 0;
     }
 }

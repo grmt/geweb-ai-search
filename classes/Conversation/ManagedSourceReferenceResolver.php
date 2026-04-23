@@ -4,6 +4,8 @@ namespace Geweb\AISearch;
 defined('ABSPATH') || exit;
 
 class ManagedSourceReferenceResolver {
+    private const META_MARKDOWN_BYTES = 'geweb_aisearch_markdown_bytes';
+
     /**
      * @param string $url
      * @return array<string,string>
@@ -17,13 +19,13 @@ class ManagedSourceReferenceResolver {
         $canonicalUrl = $normalizedUrl;
         $label = $this->formatManagedSourcePath($normalizedUrl);
         $title = '';
+        $sizeBytes = 0;
 
         $postId = $this->extractPostIdFromManagedUrl($normalizedUrl);
         if ($postId > 0) {
             $permalink = get_permalink($postId);
             if (is_string($permalink) && $permalink !== '') {
                 $canonicalUrl = $permalink;
-                $label = $this->formatManagedSourcePath($permalink);
             }
 
             $postTitle = get_the_title($postId);
@@ -31,10 +33,14 @@ class ManagedSourceReferenceResolver {
                 $title = trim($postTitle);
             }
 
+            // Always try to get a better label from post data
+            // This handles cases where URL only has query params like "page 272"
             $postLabel = $this->buildManagedSourceLabelFromPost($postId, $canonicalUrl, $title);
             if ($postLabel !== '') {
                 $label = $postLabel;
             }
+
+            $sizeBytes = $this->resolveManagedSourceSizeBytes($postId);
         }
 
         if ($label === '') {
@@ -45,6 +51,9 @@ class ManagedSourceReferenceResolver {
             'url' => $canonicalUrl,
             'label' => $label,
             'title' => $title,
+            'post_id' => $postId > 0 ? (string) $postId : '',
+            'size_bytes' => $sizeBytes > 0 ? (string) $sizeBytes : '',
+            'size_label' => $sizeBytes > 0 ? size_format($sizeBytes, 1) : '',
         ];
     }
 
@@ -59,9 +68,39 @@ class ManagedSourceReferenceResolver {
 
     private function buildManagedSourceLabelFromPost(int $postId, string $url, string $title): string {
         $label = $this->formatManagedSourcePath($url);
+
+        // If we got "page X" or "post X" format, try to get something better from the permalink
+        if (preg_match('/^(page|post)\s+\d+$/', $label)) {
+            $post = get_post($postId);
+            if ($post instanceof \WP_Post) {
+                // Try to extract path from the post's permalink
+                $permalink = get_permalink($post);
+                if (is_string($permalink) && $permalink !== '') {
+                    $pathLabel = $this->formatManagedSourcePath($permalink);
+                    if ($pathLabel !== '' && !preg_match('/^(page|post)\s+\d+$/', $pathLabel)) {
+                        return $pathLabel;
+                    }
+                }
+                // Fall back to post_name if permalink doesn't have a better path
+                $postName = trim((string) $post->post_name);
+                if ($postName !== '') {
+                    return trailingslashit($postName);
+                }
+            }
+        }
+
         if ($label === '') {
             $post = get_post($postId);
             if ($post instanceof \WP_Post) {
+                // Try to extract from permalink first
+                $permalink = get_permalink($post);
+                if (is_string($permalink) && $permalink !== '') {
+                    $pathLabel = $this->formatManagedSourcePath($permalink);
+                    if ($pathLabel !== '') {
+                        return $pathLabel;
+                    }
+                }
+                // Fall back to post_name
                 $label = trim((string) $post->post_name);
             }
         }
@@ -142,7 +181,7 @@ class ManagedSourceReferenceResolver {
         }
 
         $path = isset($parts['path']) ? trim((string) $parts['path'], '/') : '';
-        if ($path !== '') {
+        if ($path !== '' && $path !== 'index.php' && $path !== '/') {
             $formattedPath = trailingslashit($path);
         }
 
@@ -151,6 +190,7 @@ class ManagedSourceReferenceResolver {
             parse_str((string) $parts['query'], $query);
         }
 
+        // Prefer path if available, only fall back to query params if no path exists
         if ($formattedPath === '') {
             if (!empty($query['page_id'])) {
                 $formattedPath = 'page ' . (int) $query['page_id'];
@@ -160,5 +200,30 @@ class ManagedSourceReferenceResolver {
         }
 
         return $formattedPath;
+    }
+
+    private function resolveManagedSourceSizeBytes(int $postId): int {
+        $post = get_post($postId);
+        if (!$post instanceof \WP_Post) {
+            return 0;
+        }
+
+        if ($post->post_type === 'attachment') {
+            $attachedFile = get_attached_file($postId);
+            if (is_string($attachedFile) && $attachedFile !== '' && file_exists($attachedFile)) {
+                $attachedSize = (int) (@filesize($attachedFile) ?: 0);
+                if ($attachedSize > 0) {
+                    return $attachedSize;
+                }
+            }
+        }
+
+        $markdownBytes = (int) get_post_meta($postId, self::META_MARKDOWN_BYTES, true);
+        if ($markdownBytes > 0) {
+            return $markdownBytes;
+        }
+
+        $content = (string) $post->post_content;
+        return $content !== '' ? strlen($content) : 0;
     }
 }

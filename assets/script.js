@@ -210,10 +210,89 @@ function isInlineMatchRangeVisible(range) {
 	return rects.some((rect) => rect.width > 0 && rect.height > 0);
 }
 
+function getInlineMatchScrollableAncestors(element) {
+	const ancestors = [];
+	let current = element?.parentElement || null;
+
+	while (current && current !== document.body) {
+		const style = globalThis.getComputedStyle ? globalThis.getComputedStyle(current) : null;
+		const overflowY = `${style?.overflowY || ''} ${style?.overflow || ''}`.toLowerCase();
+		if (/(auto|scroll|overlay)/.test(overflowY) && current.scrollHeight > current.clientHeight + 4) {
+			ancestors.push(current);
+		}
+		current = current.parentElement;
+	}
+
+	return ancestors;
+}
+
+function centerInlineMatchInAncestor(element, ancestor, behavior = 'smooth') {
+	if (!element || !ancestor || typeof ancestor.scrollTo !== 'function') {
+		return;
+	}
+
+	const ancestorRect = ancestor.getBoundingClientRect();
+	const elementRect = element.getBoundingClientRect();
+	const nextTop = ancestor.scrollTop + (elementRect.top - ancestorRect.top) - ((ancestor.clientHeight - elementRect.height) / 2);
+	if (Math.abs(nextTop - ancestor.scrollTop) < 2) {
+		return;
+	}
+
+	ancestor.scrollTo({
+		top: Math.max(0, nextTop),
+		behavior,
+	});
+}
+
+function scrollInlineMatchIntoView(element) {
+	if (!element) {
+		return;
+	}
+
+	const scrollingElement = document.scrollingElement || document.documentElement || document.body;
+	const attempts = [0, 180, 700];
+
+	attempts.forEach((delay, index) => {
+		globalThis.setTimeout(() => {
+			const behavior = index === 0 ? 'auto' : 'smooth';
+			element.style.scrollMarginTop = '112px';
+			element.style.scrollMarginBottom = '48px';
+
+			if (typeof element.scrollIntoView === 'function') {
+				element.scrollIntoView({ behavior, block: 'center', inline: 'nearest' });
+			}
+
+			getInlineMatchScrollableAncestors(element).forEach((ancestor) => {
+				centerInlineMatchInAncestor(element, ancestor, behavior);
+			});
+
+			const rect = element.getBoundingClientRect();
+			const viewportHeight = globalThis.innerHeight || document.documentElement.clientHeight || 0;
+			if (
+				scrollingElement &&
+				typeof scrollingElement.scrollTo === 'function' &&
+				viewportHeight > 0 &&
+				(rect.top < 96 || rect.bottom > viewportHeight - 32)
+			) {
+				const absoluteTop = rect.top + (globalThis.scrollY || scrollingElement.scrollTop || 0);
+				const nextTop = absoluteTop - Math.max(96, Math.round((viewportHeight - rect.height) / 2));
+				scrollingElement.scrollTo({
+					top: Math.max(0, nextTop),
+					behavior,
+				});
+			}
+		}, delay);
+	});
+}
+
 function highlightFirstPageMatch() {
 	const currentUrl = globalThis.location?.href;
 	if (!currentUrl) {
-		return;
+		return false;
+	}
+
+	if (document.querySelector('mark.geweb-ai-inline-match')) {
+		return true;
 	}
 
 	let phrase = '';
@@ -222,11 +301,11 @@ function highlightFirstPageMatch() {
 		phrase = String(url.searchParams.get('geweb_ai_match') || '').trim();
 	} catch (error) {
 		console.debug('Reading geweb_ai_match failed.', error);
-		return;
+		return false;
 	}
 
 	if (!phrase) {
-		return;
+		return false;
 	}
 
 	const candidates = buildInlineMatchCandidates(phrase);
@@ -248,7 +327,7 @@ function highlightFirstPageMatch() {
 
 	let matchedNode = null;
 	let matchedPhrase = '';
-	/* eslint-disable no-cond-assign */
+
 	while ((matchedNode = walker.nextNode())) {
 		const rawText = String(matchedNode.textContent || '');
 		const normalizedText = normalizeInlineMatchText(rawText);
@@ -273,23 +352,43 @@ function highlightFirstPageMatch() {
 		highlight.className = 'geweb-ai-inline-match';
 		range.surroundContents(highlight);
 		showPageMatchPreview(buildPageMatchSnippet(rawText, matchRange.start, matchRange.length));
-		if (typeof highlight.scrollIntoView === 'function') {
-			globalThis.setTimeout(() => {
-				highlight.scrollIntoView({ behavior: 'smooth', block: 'center' });
-			}, 120);
-		}
-		return;
+		scrollInlineMatchIntoView(highlight);
+		return true;
 	}
-	/* eslint-enable no-cond-assign */
+
+	return false;
 }
 
-jQuery(document).ready(function($) {
+function scheduleHighlightFirstPageMatch() {
+	if (globalThis.__gewebAiPageMatchScheduled) {
+		return;
+	}
+
+	globalThis.__gewebAiPageMatchScheduled = true;
+	const attemptDelays = [0, 200, 800, 1800, 3200];
+	attemptDelays.forEach((delay) => {
+		globalThis.setTimeout(() => {
+			if (highlightFirstPageMatch()) {
+				globalThis.__gewebAiPageMatchScheduled = false;
+			}
+		}, delay);
+	});
+
+	globalThis.addEventListener('load', () => {
+		globalThis.setTimeout(() => {
+			highlightFirstPageMatch();
+			globalThis.__gewebAiPageMatchScheduled = false;
+		}, 250);
+	}, { once: true });
+}
+
+jQuery(document).ready(($) => {
 	let nonceRequest = null;
 
 	function fetchSearchNonce() {
 		return $.post(getAiSearchConfig().ajax_url, {
 			action: 'geweb_get_nonce'
-		}).then(function(response) {
+		}).then((response) => {
 			if (response?.success && response?.data?.nonce) {
 				geweb_aisearch.search_nonce = response.data.nonce;
 				return geweb_aisearch.search_nonce;
@@ -305,7 +404,7 @@ jQuery(document).ready(function($) {
 		}
 
 		if (!nonceRequest) {
-			nonceRequest = Promise.resolve(fetchSearchNonce()).finally(function() {
+			nonceRequest = Promise.resolve(fetchSearchNonce()).finally(() => {
 				nonceRequest = null;
 			});
 		}
@@ -317,7 +416,7 @@ jQuery(document).ready(function($) {
 		geweb_aisearch.search_nonce = '';
 	}
 
-	ensureSearchNonce().catch(function() {
+	ensureSearchNonce().catch(() => {
 		return null;
 	});
 
@@ -325,7 +424,9 @@ jQuery(document).ready(function($) {
 	    ai: document.getElementById('geweb-ai-modal'),
 
 	    init() {
-	        if (!this.ai) return;
+	        if (!this.ai) {
+return;
+}
 	        this.injectAIButtons();
 	        this.bindClose();
 	        this.openPageViewIfNeeded();
@@ -452,7 +553,7 @@ jQuery(document).ready(function($) {
 	        GewebAIChat.focusInput();
 
 	        if (GewebAIChat.shouldAutoSubmitQuery(trimmedQuery)) {
-	            globalThis.setTimeout(function() {
+	            globalThis.setTimeout(() => {
 	                GewebAIChat.sendMessage(trimmedQuery);
 	            }, 0);
 	        }
@@ -483,29 +584,29 @@ jQuery(document).ready(function($) {
 	        }
 	    },
 
-        bindClose() {
-            const unlockScroll = () => {
-                if (!this.ai.open && !this.isPageView()) {
-                    document.body.classList.remove('no-scroll');
-                }
-            };
+		bindClose() {
+			const unlockScroll = () => {
+				if (!this.ai.open && !this.isPageView()) {
+					document.body.classList.remove('no-scroll');
+				}
+			};
 
-            $('.close', this.ai).on('click', () => {
-                if (this.isPageView()) {
-                    globalThis.location.href = geweb_aisearch.frontend_ai_exit_url || globalThis.location?.origin;
-                    return;
-                }
-                this.ai.close();
-                unlockScroll();
-            });
+			$('.close', this.ai).on('click', () => {
+				if (this.isPageView()) {
+					globalThis.location.href = geweb_aisearch.frontend_ai_exit_url || globalThis.location?.origin;
+					return;
+				}
+				this.ai.close();
+				unlockScroll();
+			});
 
-            $(this.ai).on('click', (e) => {
-                if (!this.isPageView() && e.target === this.ai) {
-                    this.ai.close();
-                    unlockScroll();
-                }
-            });
-        },
+			$(this.ai).on('click', (e) => {
+				if (!this.isPageView() && e.target === this.ai) {
+					this.ai.close();
+					unlockScroll();
+				}
+			});
+		},
 
 	    openPageViewIfNeeded() {
 	        if (!this.isPageView()) {
@@ -1146,32 +1247,32 @@ jQuery(document).ready(function($) {
 	            alignButton.addEventListener('click', (event) => {
 	                event.preventDefault();
 	                this.resetPageViewToViewport();
-            });
-        }
+			});
+		}
 
-        const searchToggleButton = document.getElementById('geweb-ai-toggle-search-panel');
-        if (searchToggleButton && searchToggleButton.dataset.gewebAiBound !== '1') {
-            searchToggleButton.dataset.gewebAiBound = '1';
-            searchToggleButton.addEventListener('click', (event) => {
-                event.preventDefault();
-                this.toggleSearchPanelVisibility();
-            });
-        }
+		const searchToggleButton = document.getElementById('geweb-ai-toggle-search-panel');
+		if (searchToggleButton && searchToggleButton.dataset.gewebAiBound !== '1') {
+			searchToggleButton.dataset.gewebAiBound = '1';
+			searchToggleButton.addEventListener('click', (event) => {
+				event.preventDefault();
+				this.toggleSearchPanelVisibility();
+			});
+		}
 
-        const fullscreenButton = document.getElementById('geweb-ai-toggle-fullscreen');
-        if (fullscreenButton && fullscreenButton.dataset.gewebAiBound !== '1') {
-            fullscreenButton.dataset.gewebAiBound = '1';
-            fullscreenButton.addEventListener('click', async (event) => {
-                event.preventDefault();
-                await this.togglePageFullscreen();
-            });
+		const fullscreenButton = document.getElementById('geweb-ai-toggle-fullscreen');
+		if (fullscreenButton && fullscreenButton.dataset.gewebAiBound !== '1') {
+			fullscreenButton.dataset.gewebAiBound = '1';
+			fullscreenButton.addEventListener('click', async (event) => {
+				event.preventDefault();
+				await this.togglePageFullscreen();
+			});
 
-            const syncFullscreenState = () => this.syncPageToolbarFullscreenState(fullscreenButton);
-            document.addEventListener('fullscreenchange', syncFullscreenState);
-            document.addEventListener('webkitfullscreenchange', syncFullscreenState);
-            syncFullscreenState();
-        }
-    },
+			const syncFullscreenState = () => this.syncPageToolbarFullscreenState(fullscreenButton);
+			document.addEventListener('fullscreenchange', syncFullscreenState);
+			document.addEventListener('webkitfullscreenchange', syncFullscreenState);
+			syncFullscreenState();
+		}
+	},
 
 	    getPageFullscreenElement() {
 	        return document.fullscreenElement || document.webkitFullscreenElement || null;
@@ -1250,46 +1351,46 @@ jQuery(document).ready(function($) {
 	        this.syncPageViewHeightToViewport();
 	    },
 
-    toggleSearchPanelVisibility() {
-        const $searchPanel = $('.geweb-ai-search-results-panel');
-        if (!$searchPanel.length) {
-            return;
-        }
+	toggleSearchPanelVisibility() {
+		const $searchPanel = $('.geweb-ai-search-results-panel');
+		if (!$searchPanel.length) {
+			return;
+		}
 
-        const willHide = !$searchPanel.hasClass('is-hidden');
-        $searchPanel.toggleClass('is-hidden', willHide);
+		const willHide = !$searchPanel.hasClass('is-hidden');
+		$searchPanel.toggleClass('is-hidden', willHide);
 
-        if (!willHide) {
-            $searchPanel.removeClass('is-collapsed');
-        }
+		if (!willHide) {
+			$searchPanel.removeClass('is-collapsed');
+		}
 
-        this.syncPanelCollapseButtons();
-    },
+		this.syncPanelCollapseButtons();
+	},
 
-    ensureSearchPanelMobileDefault() {
-        const workspace = this.getWorkspaceElement();
-        if (this.isMobileWorkspaceNavigationActive(workspace)) {
-            const $searchPanel = $('.geweb-ai-search-results-panel');
-            if ($searchPanel.length && !$searchPanel.hasClass('is-hidden')) {
-                $searchPanel.addClass('is-hidden');
-            }
-        }
-    },
+	ensureSearchPanelMobileDefault() {
+		const workspace = this.getWorkspaceElement();
+		if (this.isMobileWorkspaceNavigationActive(workspace)) {
+			const $searchPanel = $('.geweb-ai-search-results-panel');
+			if ($searchPanel.length && !$searchPanel.hasClass('is-hidden')) {
+				$searchPanel.addClass('is-hidden');
+			}
+		}
+	},
 
-    ensurePageResizeHandle() {
-        if (!this.ai || this.ai.querySelector('.geweb-ai-page-resize-handle')) {
-            return;
-        }
+	ensurePageResizeHandle() {
+		if (!this.ai || this.ai.querySelector('.geweb-ai-page-resize-handle')) {
+			return;
+		}
 
-        const handle = document.createElement('button');
-        handle.type = 'button';
-        handle.className = 'geweb-ai-page-resize-handle';
-        handle.setAttribute('aria-label', 'Resize AI search window');
-        handle.setAttribute('title', 'Drag to resize the AI search window');
-        handle.innerHTML = '<span class="geweb-ai-page-resize-handle-bar" aria-hidden="true"></span>';
-        this.ai.appendChild(handle);
-        this.bindPageResizeHandle(handle);
-    },
+		const handle = document.createElement('button');
+		handle.type = 'button';
+		handle.className = 'geweb-ai-page-resize-handle';
+		handle.setAttribute('aria-label', 'Resize AI search window');
+		handle.setAttribute('title', 'Drag to resize the AI search window');
+		handle.innerHTML = '<span class="geweb-ai-page-resize-handle-bar" aria-hidden="true"></span>';
+		this.ai.appendChild(handle);
+		this.bindPageResizeHandle(handle);
+	},
 
 	    bindPageResizeHandle(handle) {
 	        if (!handle || handle.dataset.gewebAiResizeBound === '1') {
@@ -1477,14 +1578,14 @@ jQuery(document).ready(function($) {
 	                    return;
 	                }
 	                workspace.classList.toggle('is-right-collapsed');
-            } else if (target === 'search') {
-                $searchPanel.removeClass('is-hidden');
-                $searchPanel.toggleClass('is-collapsed');
-            }
+			} else if (target === 'search') {
+				$searchPanel.removeClass('is-hidden');
+				$searchPanel.toggleClass('is-collapsed');
+			}
 
-            GewebModal.syncPanelCollapseButtons();
-        });
-    },
+			GewebModal.syncPanelCollapseButtons();
+		});
+	},
 
 	    syncPanelCollapseButtons() {
 	        const workspace = this.ai ? this.ai.querySelector('.geweb-ai-workspace') : null;
@@ -1653,7 +1754,9 @@ jQuery(document).ready(function($) {
 		    draftMessage: '',
 
 		    init() {
-		        if (!this.$textarea.length) return;
+		        if (!this.$textarea.length) {
+return;
+}
 
 		        this.$textarea.on('input', () => {
 		            this.toggleSubmitButton();
@@ -1673,9 +1776,15 @@ jQuery(document).ready(function($) {
 		        this.$togglePromptEditorBtn.on('click', () => this.toggleTemporaryPromptEditor());
 		        this.$modelSelector.on('change', () => this.handleTemporaryModelChange());
 		        this.$temporaryPrompt.on('input', () => this.updateTemporarySettingsSummary());
-		        this.$copyConversationBtn.on('click', () => { void this.copyCurrentConversation(); });
-		        this.$renameConversationBtn.on('click', () => { void this.renameCurrentConversation(); });
-		        this.$deleteConversationBtn.on('click', () => { void this.deleteCurrentConversation(); });
+		        this.$copyConversationBtn.on('click', () => {
+ void this.copyCurrentConversation();
+});
+		        this.$renameConversationBtn.on('click', () => {
+ void this.renameCurrentConversation();
+});
+		        this.$deleteConversationBtn.on('click', () => {
+ void this.deleteCurrentConversation();
+});
 		        this.$newConversationBtn.on('click', () => this.createNewConversation(true));
 		        this.$conversationOverview.off('click.gewebPaneActivate').on('click.gewebPaneActivate', (event) => {
 		            event.stopPropagation();
@@ -1919,10 +2028,14 @@ jQuery(document).ready(function($) {
 
 	    navigateHistory(direction) {
 	        const questions = this.getUserQuestions();
-	        if (!questions.length) return;
+	        if (!questions.length) {
+return;
+}
 
 	        if (this.historyNavIndex === -1) {
-	            if (direction > 0) return;
+	            if (direction > 0) {
+return;
+}
 	            this.draftMessage = this.$textarea.val();
 	            this.historyNavIndex = questions.length;
 	        }
@@ -1972,7 +2085,9 @@ jQuery(document).ready(function($) {
 	    },
 
 	    async retryLastQuestion() {
-	        if (this.requestInFlight) return;
+	        if (this.requestInFlight) {
+return;
+}
 
 	        let lastUserIndex = -1;
 	        for (let i = this.conversationHistory.length - 1; i >= 0; i--) {
@@ -2008,14 +2123,14 @@ jQuery(document).ready(function($) {
 
 	            this.$retryLastBtn = $parent.find('.geweb-ai-retry-last, .geweb-ai-retry-btn, button[title*="Retry"], button:contains("↻")');
 	            if (!this.$retryLastBtn.length) {
-	                this.$retryLastBtn = $(`<button type="button" class="geweb-ai-retry-last button button-link" title="${t('retryLast', 'Retry last question')}" style="padding: 0 4px; min-width: auto; text-decoration: none; color: inherit; display: flex; align-items: center; justify-content: center; font-size: 16px;" aria-label="Retry last question"><span aria-hidden="true">↻</span></button>`);
+	                this.$retryLastBtn = $(`<button type="button" class="geweb-ai-icon-button geweb-ai-retry-last" title="${t('retryLast', 'Retry last question')}" aria-label="Retry last question"><span aria-hidden="true" class="geweb-ai-icon">↻</span></button>`);
 	                this.$historyUpBtn.before(this.$retryLastBtn);
 	            }
 	        } else {
 	            const $controls = $('<div class="geweb-ai-history-controls" style="display: flex; gap: 4px; align-items: center; margin-right: 8px;"></div>');
-	            this.$retryLastBtn = $(`<button type="button" class="button button-link geweb-ai-retry-last" title="${t('retryLast', 'Retry last question')}" style="padding: 0 4px; min-width: auto; text-decoration: none; color: inherit; display: flex; align-items: center; justify-content: center; font-size: 16px;" aria-label="Retry last question"><span aria-hidden="true">↻</span></button>`);
-	            this.$historyUpBtn = $(`<button type="button" class="button button-link geweb-ai-history-up" title="${t('historyPrev', 'Previous question')}" style="padding: 0 4px; min-width: auto; text-decoration: none; color: inherit; display: flex; align-items: center; justify-content: center; font-size: 16px;" aria-label="Previous question"><span aria-hidden="true">↑</span></button>`);
-	            this.$historyDownBtn = $(`<button type="button" class="button button-link geweb-ai-history-down" title="${t('historyNext', 'Next question')}" style="padding: 0 4px; min-width: auto; text-decoration: none; color: inherit; display: flex; align-items: center; justify-content: center; font-size: 16px;" aria-label="Next question"><span aria-hidden="true">↓</span></button>`);
+	            this.$retryLastBtn = $(`<button type="button" class="geweb-ai-icon-button geweb-ai-retry-last" title="${t('retryLast', 'Retry last question')}" aria-label="Retry last question"><span aria-hidden="true" class="geweb-ai-icon">↻</span></button>`);
+	            this.$historyUpBtn = $(`<button type="button" class="geweb-ai-icon-button geweb-ai-history-up" title="${t('historyPrev', 'Previous question')}" aria-label="Previous question"><span aria-hidden="true" class="geweb-ai-icon">↑</span></button>`);
+	            this.$historyDownBtn = $(`<button type="button" class="geweb-ai-icon-button geweb-ai-history-down" title="${t('historyNext', 'Next question')}" aria-label="Next question"><span aria-hidden="true" class="geweb-ai-icon">↓</span></button>`);
 
 	            $controls.append(this.$retryLastBtn, this.$historyUpBtn, this.$historyDownBtn);
 	            this.$submitBtn.before($controls);
@@ -2035,7 +2150,7 @@ jQuery(document).ready(function($) {
 	            this.retryLastQuestion();
 	        });
 
-	        this.$textarea.on('keydown', (e) => {
+	        this.$textarea.off('keydown.history').on('keydown.history', (e) => {
 	            if (e.key === 'ArrowUp' && this.$textarea.val().trim() === '') {
 	                e.preventDefault();
 	                this.navigateHistory(-1);
@@ -2900,6 +3015,7 @@ jQuery(document).ready(function($) {
 
 	                const payload = response?.data && typeof response.data === 'object' ? response.data : {};
 	                const status = String(payload.status || '').trim();
+	                this.updateLoaderFromJobProgress($loader, payload.progress);
 
 	                if (status === 'completed' && payload.result && typeof payload.result === 'object') {
 	                    await this.handleResponse({
@@ -3266,7 +3382,9 @@ jQuery(document).ready(function($) {
 	            ? prefilledMessage.trim()
 	            : this.$textarea.val().trim();
 
-	        if (!message || this.requestInFlight) return;
+	        if (!message || this.requestInFlight) {
+return;
+}
 
 	        const userEntry = {
 	            role: 'user',
@@ -3285,7 +3403,19 @@ jQuery(document).ready(function($) {
 	        this.toggleSubmitButton();
 	        GewebModal.schedulePageViewViewportSync();
 
-	        const $loader = $(`<p class="ai-message loading geweb-ai-thinking-indicator" aria-live="polite" style="animation:none; transition:opacity 0.3s ease-in-out;">${this.escapeHtml(t('thinking', 'Thinking...'))}</p>`);
+	        const supportsThoughtProcess = this.modelSupportsThoughtProcess(this.getSelectedModel());
+	        const loaderLabel = supportsThoughtProcess
+	            ? t('thoughtProcessPending', 'Collecting thought process...')
+	            : t('thinking', 'Thinking...');
+	        const loaderClassName = supportsThoughtProcess
+	            ? 'ai-message loading geweb-ai-thinking-indicator geweb-ai-thinking-indicator--thoughts'
+	            : 'ai-message loading geweb-ai-thinking-indicator';
+	        const $loader = $(`<div class="${loaderClassName}" aria-live="polite" style="animation:none; transition:opacity 0.3s ease-in-out;"></div>`);
+	        this.renderLoaderState($loader, {
+	            supportsThoughtProcess: supportsThoughtProcess,
+	            label: loaderLabel,
+	            thoughts: [],
+	        });
 	        this.$answerBox.append($loader);
 	        this.scrollToBottom();
 
@@ -3485,19 +3615,12 @@ jQuery(document).ready(function($) {
 		        this.scrollElementIntoView($msg.get(0));
 		    } else {
 		        const $container = $('<div class="ai-message"></div>');
-		        const messageData = options?.messageData && typeof options.messageData === 'object' ? options.messageData : {};
 		        const responseMeta = text?.meta && typeof text.meta === 'object' ? text.meta : {};
-		        const aiTooltip = this.buildMessageTooltip({
-		            type: 'ai',
-		            content: text?.answer || '',
-		            messageData: messageData,
-		            responseMeta: responseMeta,
-		            includeReuseHint: false,
-		        });
 		        const sourceFootnoteMap = this.getResponseSourceFootnoteMap(text.sources || [], text.answer || '', responseMeta);
 		        const answerWithFootnotes = this.decorateAnswerWithGroundingFootnotes(String(text.answer || ''), responseMeta, sourceFootnoteMap, text.sources || []);
 		        const sanitizedAnswer = this.sanitizeAnswer(answerWithFootnotes);
 		        const $content = $('<div class="geweb-ai-message-content"></div>').html(sanitizedAnswer);
+		        const $thoughtProcess = this.buildThoughtProcessBlock(responseMeta);
 		        const fallbackFootnotes = this.getFallbackFootnoteNumbers(sourceFootnoteMap, text.sources || []);
 		        if (fallbackFootnotes.length) {
 		            $content.append($(this.appendFallbackFootnoteGroup('', fallbackFootnotes)));
@@ -3549,7 +3672,7 @@ jQuery(document).ready(function($) {
 		                $detailsButton.attr('aria-label', t('showDetails', 'Show details'));
 		                $detailsButton.find('.geweb-ai-message-action-label').text(t('showDetails', 'Show details'));
 		            });
-		            const $detailsButton = $('<button type="button" class="geweb-ai-message-details-toggle"></button>');
+		            const $detailsButton = $('<button type="button" class="geweb-ai-icon-button geweb-ai-message-details-toggle"></button>');
 		            $detailsButton.attr('aria-expanded', 'false');
 		            $detailsButton.attr('aria-label', t('showDetails', 'Show details'));
 		            $detailsButton.append($('<span class="geweb-ai-message-action-icon geweb-ai-message-action-icon--details" aria-hidden="true">ⓘ</span>'));
@@ -3566,6 +3689,9 @@ jQuery(document).ready(function($) {
 
 		        if ($messageActions.children().length) {
 		            $content.prepend($messageActions);
+		        }
+		        if ($thoughtProcess) {
+		            $container.append($thoughtProcess);
 		        }
 		        $container.append($content);
 		        if ($details) {
@@ -3657,7 +3783,7 @@ jQuery(document).ready(function($) {
 
 	        const extraClass = String(options?.extraClass || '').trim();
 	        const showActionLabel = options?.showActionLabel !== false;
-	        const buttonClassName = ['geweb-ai-message-info-toggle', extraClass].filter(Boolean).join(' ');
+	        const buttonClassName = ['geweb-ai-icon-button', 'geweb-ai-message-info-toggle', extraClass].filter(Boolean).join(' ');
 	        const $button = $(`<button type="button" class="${buttonClassName}"></button>`);
 	        const infoLabel = t('messageInfo', 'Message info');
 	        $button.attr('aria-label', infoLabel);
@@ -3700,7 +3826,7 @@ jQuery(document).ready(function($) {
 
 	        try {
 	            return new Date(normalized * 1000).toISOString().slice(0, 10);
-	        } catch (error) {
+	        } catch (_) {
 	            return '';
 	        }
 	    },
@@ -3737,6 +3863,9 @@ jQuery(document).ready(function($) {
 	            if (usage.output_tokens) {
 	                lines.push(isAiTooltip ? `Output tokens: ${usage.output_tokens}` : `Answer output tokens: ${usage.output_tokens}`);
 	            }
+	            if (usage.thought_tokens) {
+	                lines.push(isAiTooltip ? `Thought tokens: ${usage.thought_tokens}` : `Answer thought tokens: ${usage.thought_tokens}`);
+	            }
 	            if (responseMeta?.estimated_cost_usd !== undefined && responseMeta?.estimated_cost_usd !== null) {
 	                const cost = Number(responseMeta.estimated_cost_usd);
 	                if (Number.isFinite(cost)) {
@@ -3750,6 +3879,135 @@ jQuery(document).ready(function($) {
 	        }
 
 	        return lines.filter(Boolean).join('\n');
+	    },
+
+	    modelSupportsThoughtProcess(model) {
+	        const normalizedModel = String(model || '').trim().toLowerCase();
+	        return normalizedModel.indexOf('gemini-3') === 0;
+	    },
+
+	    renderLoaderState($loader, options = {}) {
+	        if (!$loader || !$loader.length) {
+	            return;
+	        }
+
+	        const supportsThoughtProcess = options?.supportsThoughtProcess === true;
+	        const label = String(options?.label || '').trim() || t('thinking', 'Thinking...');
+	        const thoughts = Array.isArray(options?.thoughts)
+	            ? options.thoughts.map((item) => String(item || '').trim()).filter(Boolean)
+	            : [];
+
+	        $loader.empty();
+	        if (!supportsThoughtProcess) {
+	            $loader.text(label);
+	            return;
+	        }
+
+	        const $block = $('<section class="geweb-ai-thought-process geweb-ai-thought-process--loading"></section>');
+	        $block.append($('<div class="geweb-ai-thought-process-title"></div>').text(t('thoughtProcess', 'Denkproces')));
+	        if (thoughts.length) {
+	            $block.append($('<div class="geweb-ai-thought-process-body"></div>').html(this.renderThoughtProcessHtml(thoughts)));
+	        }
+	        $loader.append($block);
+	    },
+
+	    updateLoaderFromJobProgress($loader, progress) {
+	        if (!$loader || !$loader.length || !progress || typeof progress !== 'object') {
+	            return;
+	        }
+
+	        const supportsThoughtProcess = progress.supports_thoughts === true || $loader.hasClass('geweb-ai-thinking-indicator--thoughts');
+	        const label = String(progress.label || '').trim()
+	            || (supportsThoughtProcess
+	                ? t('thoughtProcessPending', 'Denkproces wordt opgebouwd...')
+	                : t('thinking', 'Thinking...'));
+	        const thoughts = Array.isArray(progress.thoughts) ? progress.thoughts : [];
+
+	        this.renderLoaderState($loader, {
+	            supportsThoughtProcess: supportsThoughtProcess,
+	            label: label,
+	            thoughts: thoughts,
+	        });
+	    },
+
+	    getThoughtProcessItems(responseMeta) {
+	        if (!responseMeta || typeof responseMeta !== 'object' || !Array.isArray(responseMeta.thoughts)) {
+	            return [];
+	        }
+
+	        return responseMeta.thoughts
+	            .map((item) => String(item || '').trim())
+	            .filter(Boolean);
+	    },
+
+	    renderThoughtProcessHtml(thoughts) {
+	        const normalizedThoughts = Array.isArray(thoughts)
+	            ? thoughts.map((item) => String(item || '').trim()).filter(Boolean)
+	            : [];
+	        if (!normalizedThoughts.length) {
+	            return '';
+	        }
+
+	        const sections = normalizedThoughts.flatMap((item) => this.splitThoughtProcessSections(item));
+	        return sections.map((section) => this.renderThoughtProcessSection(section)).join('');
+	    },
+
+	    splitThoughtProcessSections(text) {
+	        const normalizedText = String(text || '').trim();
+	        if (!normalizedText) {
+	            return [];
+	        }
+
+	        const matches = Array.from(normalizedText.matchAll(/(?:^|\n\n)([A-Z][^\n]{0,100})\n\n([\s\S]*?)(?=\n\n[A-Z][^\n]{0,100}\n\n|$)/gu));
+	        if (!matches.length) {
+	            return [{ title: '', body: normalizedText }];
+	        }
+
+	        return matches.map((match) => ({
+	            title: String(match[1] || '').trim(),
+	            body: String(match[2] || '').trim(),
+	        })).filter((section) => section.title || section.body);
+	    },
+
+	    renderThoughtProcessSection(section) {
+	        const title = String(section?.title || '').trim();
+	        const body = String(section?.body || '').trim();
+	        const bodyHtml = this.renderThoughtProcessMarkdown(body || title);
+	        if (!title) {
+	            return `<div class="geweb-ai-thought-process-entry"><div class="geweb-ai-thought-process-entry-body">${bodyHtml}</div></div>`;
+	        }
+
+	        return [
+	            '<div class="geweb-ai-thought-process-entry">',
+	            `<div class="geweb-ai-thought-process-entry-title">${this.escapeHtml(title)}</div>`,
+	            `<div class="geweb-ai-thought-process-entry-body">${bodyHtml}</div>`,
+	            '</div>',
+	        ].join('');
+	    },
+
+	    renderThoughtProcessMarkdown(text) {
+	        const markdown = String(text || '').trim();
+	        if (!markdown) {
+	            return '';
+	        }
+
+	        if (globalThis.GewebAisearchMarkdown && typeof globalThis.GewebAisearchMarkdown.render === 'function') {
+	            return String(globalThis.GewebAisearchMarkdown.render(markdown) || '').trim();
+	        }
+
+	        return '<p>' + this.escapeHtml(markdown).replaceAll(/\n/g, '<br>') + '</p>';
+	    },
+
+	    buildThoughtProcessBlock(responseMeta) {
+	        const thoughts = this.getThoughtProcessItems(responseMeta);
+	        if (!thoughts.length) {
+	            return null;
+	        }
+
+	        const $block = $('<section class="geweb-ai-thought-process" aria-live="polite"></section>');
+	        $block.append($('<div class="geweb-ai-thought-process-title"></div>').text(t('thoughtProcess', 'Thought process')));
+	        $block.append($('<div class="geweb-ai-thought-process-body"></div>').html(this.renderThoughtProcessHtml(thoughts)));
+	        return $block;
 	    },
 
 	    buildCopyButton(text) {
@@ -4149,7 +4407,12 @@ jQuery(document).ready(function($) {
 	            const tooltipLabel = dateLabel ? `${summaryLabel} (${dateLabel})` : summaryLabel;
 	            $item.attr('title', tooltipLabel);
 	            $item.attr('aria-label', tooltipLabel);
-	            $item.append($('<span class="geweb-ai-overview-item-icon" aria-hidden="true">💬</span>'));
+	            const $metaRow = $('<div class="geweb-ai-overview-meta-row"></div>');
+	            const $metaLeft = $('<div class="geweb-ai-overview-meta-left"></div>');
+	            $metaLeft.append($('<span class="geweb-ai-overview-item-icon" aria-hidden="true">💬</span>'));
+	            if (dateLabel) {
+	                $metaLeft.append($('<span class="geweb-ai-overview-timestamp"></span>').text(dateLabel));
+	            }
 
 	            const $removeButton = $('<button type="button" class="geweb-ai-overview-item-remove" aria-label="Remove chat" title="Remove chat"><span aria-hidden="true">−</span></button>');
 	            $removeButton.on('click', (event) => {
@@ -4158,8 +4421,9 @@ jQuery(document).ready(function($) {
 	                void this.deleteConversationById(entry.id);
 	            });
 
-	            $item.append($removeButton);
-	            $item.append($('<div class="geweb-ai-overview-role"></div>').text(dateLabel || t('savedChat', 'Saved chat')));
+	            $metaRow.append($metaLeft, $removeButton);
+	            $item.append($metaRow);
+	            $item.append($('<div class="geweb-ai-overview-role"></div>').text(t('savedChat', 'Saved chat')));
 	            $item.append($('<div class="geweb-ai-overview-preview"></div>').text(summaryLabel));
 	            $item.on('click', async () => {
 	                const loaded = await this.loadConversation(entry.id);
@@ -4714,5 +4978,5 @@ jQuery(document).ready(function($) {
 	globalThis.GewebAIModal = GewebModal;
 	GewebModal.init();
 	GewebAIChat.init();
-	highlightFirstPageMatch();
+	scheduleHighlightFirstPageMatch();
 });

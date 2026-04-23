@@ -145,6 +145,74 @@
     opacity: 0.72;
     animation: geweb-ai-thinking-dot 1.1s ease-in-out infinite;
 }
+.geweb-ai-thinking-indicator--thoughts {
+    animation: none;
+}
+.geweb-ai-thinking-indicator--thoughts::after {
+    display: none;
+}
+.geweb-ai-thought-process {
+    margin: 0 0 10px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(241, 245, 249, 0.85);
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    color: #334155;
+}
+.geweb-ai-thought-process--loading {
+    margin-bottom: 0;
+}
+.geweb-ai-thought-process-title {
+    font-size: 11px;
+    line-height: 1.3;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #64748b;
+    margin: 0 0 6px;
+}
+.geweb-ai-thought-process-status {
+    font-size: 13px;
+    line-height: 1.45;
+    color: #475569;
+    margin: 0 0 8px;
+}
+.geweb-ai-thought-process-body {
+    font-size: 13px;
+    line-height: 1.5;
+}
+.geweb-ai-thought-process-entry + .geweb-ai-thought-process-entry {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
+.geweb-ai-thought-process-entry-title {
+    font-size: 12px;
+    line-height: 1.35;
+    font-weight: 600;
+    color: #0f172a;
+    margin: 0 0 6px;
+}
+.geweb-ai-thought-process-entry-body {
+    color: #334155;
+}
+.geweb-ai-thought-process-body > :first-child {
+    margin-top: 0;
+}
+.geweb-ai-thought-process-body > :last-child {
+    margin-bottom: 0;
+}
+.geweb-ai-thought-process-entry-body > :first-child {
+    margin-top: 0;
+}
+.geweb-ai-thought-process-entry-body > :last-child {
+    margin-bottom: 0;
+}
+.geweb-ai-thought-process-body p,
+.geweb-ai-thought-process-body ul,
+.geweb-ai-thought-process-body ol {
+    margin: 0 0 8px;
+}
 .geweb-ai-message-actions {
     position: absolute;
     top: 0;
@@ -166,24 +234,6 @@
     position: relative;
     padding-top: 2px;
     padding-right: 74px;
-}
-.geweb-ai-message-info-toggle {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0;
-    flex: 0 0 auto;
-    width: 28px;
-    min-width: 28px;
-    height: 28px;
-    padding: 0;
-    border: 1px solid rgba(100, 116, 139, 0.45);
-    border-radius: 6px;
-    background: rgba(248, 250, 252, 0.96);
-    color: #475569;
-    box-shadow: none;
-    cursor: pointer;
 }
 .geweb-ai-message-info-toggle:hover,
 .geweb-ai-message-info-toggle:focus,
@@ -227,6 +277,14 @@
     line-height: 1;
     cursor: pointer;
     box-shadow: none;
+    transition: color 0.15s ease, transform 0.15s ease;
+}
+.geweb-ai-message-details-toggle {
+    width: 28px;
+    min-width: 28px;
+    height: 28px;
+    font-size: 12px;
+    font-weight: 500;
     transition: color 0.15s ease, transform 0.15s ease;
 }
 .geweb-ai-copy-answer:hover,
@@ -729,7 +787,7 @@
 .geweb-aisearch-modal-window .geweb-ai-question-toolbar {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 4px;
     width: 100%;
     justify-content: space-between;
 }
@@ -1501,4 +1559,27 @@
     .geweb-ai-panel-heading-actions {
         flex-wrap: wrap;
     }
+}
+
+/* Retry button styling - icon only */
+.geweb-ai-retry-last,
+.geweb-ai-retry-answer {
+    padding: 0 !important;
+    min-width: auto !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    color: inherit !important;
+    text-decoration: none !important;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+}
+
+.geweb-ai-retry-last:hover,
+.geweb-ai-retry-answer:hover {
+    opacity: 0.7;
 }

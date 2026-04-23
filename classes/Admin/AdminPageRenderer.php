@@ -160,6 +160,15 @@ class AdminPageRenderer {
                 <tr>
                     <th><label for="geweb_aisearch_timeout_flash">API Timeouts:</label></th>
                     <td>
+                        <?php
+                        $systemRetries = is_numeric(get_option(\Geweb\AISearch\Gemini::OPTION_SYSTEM_RETRIES, ''))
+                            ? max(1, min(4, (int) get_option(\Geweb\AISearch\Gemini::OPTION_SYSTEM_RETRIES, '')))
+                            : \Geweb\AISearch\Gemini::DEFAULT_SYSTEM_RETRIES;
+                        $humanRetries = is_numeric(get_option(\Geweb\AISearch\Gemini::OPTION_HUMAN_RETRIES, ''))
+                            ? max(0, min(4, (int) get_option(\Geweb\AISearch\Gemini::OPTION_HUMAN_RETRIES, '')))
+                            : \Geweb\AISearch\Gemini::DEFAULT_HUMAN_RETRIES;
+                        $maxAttempts = $systemRetries * (1 + $humanRetries);
+                        ?>
                         <p style="margin-top:0;">
                             <label for="geweb_aisearch_timeout_flash"><strong>Standard/Flash Model Timeout (seconds)</strong></label><br>
                             <input type="number" id="geweb_aisearch_timeout_flash" name="<?php echo esc_attr(\Geweb\AISearch\Gemini::OPTION_TIMEOUT_FLASH); ?>" min="15" max="300" step="1" value="<?php echo esc_attr((string) get_option(\Geweb\AISearch\Gemini::OPTION_TIMEOUT_FLASH, '')); ?>" placeholder="<?php echo esc_attr((string) \Geweb\AISearch\Gemini::DEFAULT_HTTP_TIMEOUT_SECONDS); ?>" class="small-text">
@@ -168,7 +177,16 @@ class AdminPageRenderer {
                             <label for="geweb_aisearch_timeout_pro"><strong>Pro Model Timeout (seconds)</strong></label><br>
                             <input type="number" id="geweb_aisearch_timeout_pro" name="<?php echo esc_attr(\Geweb\AISearch\Gemini::OPTION_TIMEOUT_PRO); ?>" min="15" max="300" step="1" value="<?php echo esc_attr((string) get_option(\Geweb\AISearch\Gemini::OPTION_TIMEOUT_PRO, '')); ?>" placeholder="<?php echo esc_attr((string) \Geweb\AISearch\Gemini::DEFAULT_PRO_HTTP_TIMEOUT_SECONDS); ?>" class="small-text">
                         </p>
+                        <p style="margin-top:12px;">
+                            <label for="geweb_aisearch_gemini_system_retries"><strong>Automatic retries per request</strong></label><br>
+                            <input type="number" id="geweb_aisearch_gemini_system_retries" name="<?php echo esc_attr(\Geweb\AISearch\Gemini::OPTION_SYSTEM_RETRIES); ?>" min="1" max="4" step="1" value="<?php echo esc_attr((string) $systemRetries); ?>" class="small-text">
+                        </p>
+                        <p style="margin-top:12px;">
+                            <label for="geweb_aisearch_gemini_human_retries"><strong>Manual retry rounds allowed after timeouts</strong></label><br>
+                            <input type="number" id="geweb_aisearch_gemini_human_retries" name="<?php echo esc_attr(\Geweb\AISearch\Gemini::OPTION_HUMAN_RETRIES); ?>" min="0" max="4" step="1" value="<?php echo esc_attr((string) $humanRetries); ?>" class="small-text">
+                        </p>
                         <p class="description">Maximum time WordPress will wait for a response from the Gemini API. Complex queries or large document contexts take longer to process. Leave empty to use the defaults.</p>
+                        <p class="description">Retries are tracked per same question + model + prompt combination. The total maximum attempts for the same combination are currently <strong><?php echo esc_html((string) $maxAttempts); ?></strong>.</p>
                     </td>
                 </tr>
 

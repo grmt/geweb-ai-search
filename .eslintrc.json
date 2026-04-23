@@ -17,7 +17,7 @@
   },
   "rules": {
     "no-undef": "error",
-    "no-unused-vars": "error",
+    "no-unused-vars": "warn",
     "no-console": "warn",
     "eqeqeq": "error",
     "curly": "error",

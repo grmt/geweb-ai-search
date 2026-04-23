@@ -316,6 +316,11 @@
     border-radius: 8px !important;
 }
 @media only screen and (max-width: 767px) {
+    .geweb-ai-workspace {
+        --geweb-ai-left-pane-width: 160px;
+        --geweb-ai-right-pane-width: 200px;
+        --geweb-ai-pane-gap: 6px;
+    }
     .geweb-aisearch-modal-window--page .geweb-ai-search-results-content {
         max-height: min(36vh, 320px);
     }

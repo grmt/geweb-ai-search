@@ -402,6 +402,15 @@ class WP {
                 'updated_at' => time(),
                 'result' => null,
                 'error_message' => '',
+                'progress' => [
+                    'stage' => 'queued',
+                    'label' => __('Queued', 'geweb-ai-search'),
+                    'thoughts' => [
+                        __('Queued the request and waiting for the background worker to start.', 'geweb-ai-search'),
+                    ],
+                    'supports_thoughts' => strpos(strtolower($selectedModel), 'gemini-3') === 0,
+                    'updated_at' => time(),
+                ],
             ]);
 
             $this->sendAsyncJsonAndContinue([
@@ -440,6 +449,10 @@ class WP {
             'conversation_id' => (string) ($job['conversation_id'] ?? ''),
         ];
 
+        if (isset($job['progress']) && is_array($job['progress'])) {
+            $payload['progress'] = $job['progress'];
+        }
+
         if ($status === 'completed' && isset($job['result']) && is_array($job['result'])) {
             $payload['result'] = $job['result'];
         }
@@ -459,6 +472,15 @@ class WP {
 
         $job['status'] = 'running';
         $job['updated_at'] = time();
+        $this->updateAiChatJobProgress(
+            $job,
+            'starting',
+            __('Preparing request', 'geweb-ai-search'),
+            [
+                __('Loading the saved conversation state.', 'geweb-ai-search'),
+                __('Checking the selected model and request settings.', 'geweb-ai-search'),
+            ]
+        );
         $this->writeAiChatJob($job);
 
         try {
@@ -467,6 +489,8 @@ class WP {
             $selectedModel = (string) ($job['requested_model'] ?? '');
             $temporaryPrompt = (string) ($job['temporary_prompt'] ?? '');
             $excludedSources = isset($job['excluded_sources']) && is_array($job['excluded_sources']) ? $job['excluded_sources'] : [];
+            $thoughtHistory = [];
+            $requestStartedAt = microtime(true);
 
             $provider = ProviderFactory::make();
             $requestId = 'chat-' . wp_generate_password(10, false, false);
@@ -477,6 +501,52 @@ class WP {
                     'ajax_action' => 'geweb_ai_chat_async',
                 ]);
             }
+            if (method_exists($provider, 'setStreamProgressCallback')) {
+                $lastProgressHash = '';
+                $lastProgressWriteAt = 0.0;
+                $provider->setStreamProgressCallback(function (array $progress) use (&$job, &$lastProgressHash, &$lastProgressWriteAt): void {
+                    $thoughts = isset($progress['thoughts']) && is_array($progress['thoughts'])
+                        ? $progress['thoughts']
+                        : [];
+                    $label = isset($progress['label']) ? (string) $progress['label'] : '';
+                    $stage = isset($progress['stage']) ? (string) $progress['stage'] : 'streaming';
+                    $signature = md5((string) wp_json_encode([
+                        'stage' => $stage,
+                        'label' => $label,
+                        'thoughts' => $thoughts,
+                    ]));
+                    $now = microtime(true);
+                    if ($signature === $lastProgressHash && ($now - $lastProgressWriteAt) < 0.8) {
+                        return;
+                    }
+
+                    $this->updateAiChatJobProgress($job, $stage, $label, $thoughts);
+                    $job['updated_at'] = time();
+                    $this->writeAiChatJob($job);
+                    if (!empty($thoughts)) {
+                        $thoughtHistory[] = [
+                            'stage' => sanitize_key($stage),
+                            'label' => trim($label),
+                            'changed_at_ms' => (int) round(microtime(true) * 1000),
+                            'elapsed_ms' => (int) round((microtime(true) - $requestStartedAt) * 1000),
+                            'thoughts' => array_values($thoughts),
+                        ];
+                    }
+                    $lastProgressHash = $signature;
+                    $lastProgressWriteAt = $now;
+                });
+            }
+
+            $this->updateAiChatJobProgress(
+                $job,
+                'context',
+                __('Preparing context', 'geweb-ai-search'),
+                [
+                    __('Reviewing the recent conversation for the next request.', 'geweb-ai-search'),
+                    __('Checking whether earlier messages need to be compacted.', 'geweb-ai-search'),
+                ]
+            );
+            $this->writeAiChatJob($job);
 
             $context = $this->conversationManager->compactConversationForRequest($fullMessages);
             $context = $this->refineTrimmedContext($context, $fullMessages, $provider, $selectedModel, $conversationId);
@@ -488,13 +558,30 @@ class WP {
                 (string) ($context['summary'] ?? '')
             );
 
+            $contextThoughts = [
+                !empty($context['compacted'])
+                    ? __('Compacted older messages to keep the request focused.', 'geweb-ai-search')
+                    : __('Kept the full recent conversation context.', 'geweb-ai-search'),
+            ];
+            if (trim((string) ($context['summary'] ?? '')) !== '') {
+                $contextThoughts[] = __('Attached the saved conversation summary for continuity.', 'geweb-ai-search');
+            }
+            $contextThoughts[] = __('Prepared the message bundle for Gemini search.', 'geweb-ai-search');
+            $this->updateAiChatJobProgress(
+                $job,
+                'search',
+                __('Waiting for Gemini', 'geweb-ai-search'),
+                $contextThoughts
+            );
+            $this->writeAiChatJob($job);
+
             $result = $provider->search(
                 $context['messages'],
                 $selectedModel,
                 $temporaryPrompt !== '' ? $temporaryPrompt : null,
                 $excludedSources
             );
-            $result = $this->attachRequestDebugMeta($result, $context, $selectedModel, $temporaryPrompt, $excludedSources);
+            $result = $this->attachRequestDebugMeta($result, $context, $selectedModel, $temporaryPrompt, $excludedSources, $thoughtHistory);
             $this->appendAiResponseToConversation($fullMessages, $result);
             $this->conversationManager->recordConversationUsage($conversationId, $fullMessages, $context['summary'], $result, $provider);
 
@@ -505,14 +592,61 @@ class WP {
             $job['updated_at'] = time();
             $job['result'] = $result;
             $job['error_message'] = '';
+            $this->updateAiChatJobProgress(
+                $job,
+                'completed',
+                __('Completed', 'geweb-ai-search'),
+                [
+                    __('Gemini returned an answer and the response is ready to display.', 'geweb-ai-search'),
+                ]
+            );
             $this->writeAiChatJob($job);
         } catch (\Exception $e) {
             $job['status'] = 'error';
             $job['updated_at'] = time();
             $job['error_message'] = $e->getMessage();
             $job['result'] = null;
+            $this->updateAiChatJobProgress(
+                $job,
+                'error',
+                __('Request failed', 'geweb-ai-search'),
+                [
+                    __('The request stopped before Gemini returned a complete answer.', 'geweb-ai-search'),
+                ]
+            );
             $this->writeAiChatJob($job);
         }
+    }
+
+    /**
+     * @param array<string,mixed> $job
+     * @param array<int,string> $thoughts
+     */
+    private function updateAiChatJobProgress(array &$job, string $stage, string $label, array $thoughts = []): void {
+        $supportsThoughts = false;
+        $requestedModel = isset($job['requested_model']) ? strtolower(trim((string) $job['requested_model'])) : '';
+        if (
+            $requestedModel !== ''
+            && (strpos($requestedModel, 'gemini-3') === 0 || strpos($requestedModel, 'gemini-2.5') === 0)
+        ) {
+            $supportsThoughts = true;
+        }
+
+        $normalizedThoughts = [];
+        foreach ($thoughts as $thought) {
+            $text = trim((string) $thought);
+            if ($text !== '') {
+                $normalizedThoughts[] = $text;
+            }
+        }
+
+        $job['progress'] = [
+            'stage' => sanitize_key($stage),
+            'label' => trim($label),
+            'thoughts' => array_values(array_unique($normalizedThoughts)),
+            'supports_thoughts' => $supportsThoughts,
+            'updated_at' => time(),
+        ];
     }
 
     /**
@@ -521,9 +655,10 @@ class WP {
      * @param string $selectedModel
      * @param string $temporaryPrompt
      * @param array<int,array{key:string,title:string,url:string}> $excludedSources
+     * @param array<int,array<string,mixed>> $thoughtHistory
      * @return array<string,mixed>
      */
-    private function attachRequestDebugMeta(array $result, array $context, string $selectedModel, string $temporaryPrompt, array $excludedSources): array {
+    private function attachRequestDebugMeta(array $result, array $context, string $selectedModel, string $temporaryPrompt, array $excludedSources, array $thoughtHistory = []): array {
         $meta = isset($result['meta']) && is_array($result['meta']) ? $result['meta'] : [];
 
         $meta['request'] = [
@@ -537,6 +672,12 @@ class WP {
             'excluded_sources' => $this->buildExcludedSourceDebugLabels($excludedSources),
             'messages_preview' => $this->buildContextMessagePreview($context['messages']),
         ];
+        if (!empty($thoughtHistory)) {
+            $meta['thought_history'] = array_values(array_filter($thoughtHistory, static function ($entry): bool {
+                return is_array($entry) && !empty($entry['thoughts']) && is_array($entry['thoughts']);
+            }));
+            $meta['request']['thought_history_updates'] = count($meta['thought_history']);
+        }
 
         $result['meta'] = $meta;
         return $result;

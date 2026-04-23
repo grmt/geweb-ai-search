@@ -175,6 +175,36 @@ class AdminSettingsManager {
                 500000
             )
         );
+        $this->persistOptionalPositiveIntOption(
+            Gemini::OPTION_TIMEOUT_FLASH,
+            isset($_POST[Gemini::OPTION_TIMEOUT_FLASH]) ? wp_unslash($_POST[Gemini::OPTION_TIMEOUT_FLASH]) : null,
+            15,
+            300
+        );
+        $this->persistOptionalPositiveIntOption(
+            Gemini::OPTION_TIMEOUT_PRO,
+            isset($_POST[Gemini::OPTION_TIMEOUT_PRO]) ? wp_unslash($_POST[Gemini::OPTION_TIMEOUT_PRO]) : null,
+            15,
+            300
+        );
+        update_option(
+            Gemini::OPTION_SYSTEM_RETRIES,
+            $this->sanitizePositiveIntOption(
+                isset($_POST[Gemini::OPTION_SYSTEM_RETRIES]) ? wp_unslash($_POST[Gemini::OPTION_SYSTEM_RETRIES]) : null,
+                Gemini::DEFAULT_SYSTEM_RETRIES,
+                1,
+                4
+            )
+        );
+        update_option(
+            Gemini::OPTION_HUMAN_RETRIES,
+            $this->sanitizePositiveIntOption(
+                isset($_POST[Gemini::OPTION_HUMAN_RETRIES]) ? wp_unslash($_POST[Gemini::OPTION_HUMAN_RETRIES]) : null,
+                Gemini::DEFAULT_HUMAN_RETRIES,
+                0,
+                4
+            )
+        );
     }
 
     /**
@@ -598,5 +628,18 @@ class AdminSettingsManager {
         }
 
         return $normalized;
+    }
+
+    /**
+     * @param mixed $value
+     * @return void
+     */
+    private function persistOptionalPositiveIntOption(string $optionName, $value, int $min, int $max): void {
+        if ($value === null || $value === '') {
+            delete_option($optionName);
+            return;
+        }
+
+        update_option($optionName, $this->sanitizePositiveIntOption($value, $min, $min, $max));
     }
 }

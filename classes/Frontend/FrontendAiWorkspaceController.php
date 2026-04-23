@@ -141,6 +141,8 @@ class FrontendAiWorkspaceController {
                 'askAi' => __('Ask AI', 'geweb-ai-search'),
                 'searchWithAi' => $searchWithAiLabel,
                 'thinking' => __('Thinking...', 'geweb-ai-search'),
+                'thoughtProcess' => __('Denkproces', 'geweb-ai-search'),
+                'thoughtProcessPending' => __('Denkproces wordt opgebouwd...', 'geweb-ai-search'),
                 'couldNotStart' => __('Could not start the AI search. Please try again.', 'geweb-ai-search'),
                 'connectionError' => __('Connection error. Please try again.', 'geweb-ai-search'),
                 'requestTimedOut' => __('The AI request timed out. Please try again.', 'geweb-ai-search'),
@@ -328,19 +330,19 @@ class FrontendAiWorkspaceController {
                             <div class="geweb-ai-panel-heading-main">
                                 <div class="geweb-ai-panel-title geweb-ai-panel-title--inline"><?php echo esc_html__('Chat', 'geweb-ai-search'); ?></div>
                                 <div class="geweb-ai-panel-heading-actions geweb-ai-panel-heading-actions--conversation">
-                                    <button type="button" class="button button-small geweb-ai-new-conversation geweb-ai-overview-action-button geweb-ai-overview-action-button--icon-first" aria-label="<?php echo esc_attr__('New chat', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('New chat', 'geweb-ai-search'); ?>">
+                                    <button type="button" class="geweb-ai-new-conversation geweb-ai-overview-action-button geweb-ai-overview-action-button--icon-first" aria-label="<?php echo esc_attr__('New chat', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('New chat', 'geweb-ai-search'); ?>">
                                         <span class="geweb-ai-overview-action-icon" aria-hidden="true">+</span>
                                         <span class="geweb-ai-overview-action-label"><?php echo esc_html__('New', 'geweb-ai-search'); ?></span>
                                     </button>
                                     <?php if ($showManageLink && current_user_can('manage_options')): ?>
-                                        <a class="button button-small geweb-ai-overview-action-button geweb-ai-overview-action-button--icon-first" href="<?php echo esc_url(($this->getTabUrl)('conversations')); ?>" aria-label="<?php echo esc_attr__('Manage chats', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Manage chats', 'geweb-ai-search'); ?>">
+                                        <a class="geweb-ai-overview-action-button geweb-ai-overview-action-button--icon-first" href="<?php echo esc_url(($this->getTabUrl)('conversations')); ?>" aria-label="<?php echo esc_attr__('Manage chats', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Manage chats', 'geweb-ai-search'); ?>">
                                             <span class="geweb-ai-overview-action-icon" aria-hidden="true">⚙</span>
                                             <span class="geweb-ai-overview-action-label"><?php echo esc_html__('Manage', 'geweb-ai-search'); ?></span>
                                         </a>
                                     <?php endif; ?>
                                 </div>
                             </div>
-                            <button type="button" class="button button-small geweb-ai-panel-collapse" data-panel-toggle="left" aria-expanded="true" aria-label="<?php echo esc_attr__('Collapse chats panel', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Collapse chats panel', 'geweb-ai-search'); ?>">
+                            <button type="button" class="geweb-ai-icon-button geweb-ai-panel-collapse" data-panel-toggle="left" aria-expanded="true" aria-label="<?php echo esc_attr__('Collapse chats panel', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Collapse chats panel', 'geweb-ai-search'); ?>">
                                 <span class="geweb-ai-panel-collapse-icon" aria-hidden="true">◀</span>
                             </button>
                         </div>
@@ -349,15 +351,15 @@ class FrontendAiWorkspaceController {
                         <div class="geweb-ai-current-conversation-header">
                             <div class="geweb-ai-current-conversation-label"><?php echo esc_html__('Current chat', 'geweb-ai-search'); ?></div>
                             <div class="geweb-ai-current-conversation-actions">
-                                <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-secondary-button--icon-first geweb-ai-current-conversation-action" id="geweb-ai-copy-conversation" aria-label="<?php echo esc_attr__('Copy chat', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Copy chat', 'geweb-ai-search'); ?>">
+                                <button type="button" class="geweb-ai-icon-button geweb-ai-secondary-button geweb-ai-secondary-button--icon-first geweb-ai-current-conversation-action" id="geweb-ai-copy-conversation" aria-label="<?php echo esc_attr__('Copy chat', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Copy chat', 'geweb-ai-search'); ?>">
                                     <span class="geweb-ai-overview-action-icon" aria-hidden="true">⧉</span>
                                     <span class="geweb-ai-overview-action-label"><?php echo esc_html__('Copy', 'geweb-ai-search'); ?></span>
                                 </button>
-                                <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-secondary-button--icon-first geweb-ai-current-conversation-action" id="geweb-ai-rename-conversation" aria-label="<?php echo esc_attr__('Rename chat', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Rename chat', 'geweb-ai-search'); ?>">
+                                <button type="button" class="geweb-ai-icon-button geweb-ai-secondary-button geweb-ai-secondary-button--icon-first geweb-ai-current-conversation-action" id="geweb-ai-rename-conversation" aria-label="<?php echo esc_attr__('Rename chat', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Rename chat', 'geweb-ai-search'); ?>">
                                     <span class="geweb-ai-overview-action-icon" aria-hidden="true">✎</span>
                                     <span class="geweb-ai-overview-action-label"><?php echo esc_html__('Rename', 'geweb-ai-search'); ?></span>
                                 </button>
-                                <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-secondary-button--icon-first geweb-ai-current-conversation-action" id="geweb-ai-delete-conversation" aria-label="<?php echo esc_attr__('Remove chat', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Remove chat', 'geweb-ai-search'); ?>">
+                                <button type="button" class="geweb-ai-icon-button geweb-ai-secondary-button geweb-ai-secondary-button--icon-first geweb-ai-current-conversation-action" id="geweb-ai-delete-conversation" aria-label="<?php echo esc_attr__('Remove chat', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Remove chat', 'geweb-ai-search'); ?>">
                                     <span class="geweb-ai-overview-action-icon" aria-hidden="true">−</span>
                                     <span class="geweb-ai-overview-action-label"><?php echo esc_html__('Remove', 'geweb-ai-search'); ?></span>
                                 </button>
@@ -383,10 +385,13 @@ class FrontendAiWorkspaceController {
                                 </button>
                             </div>
                             <div class="geweb-ai-question-toolbar-actions">
-                                <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-secondary-button--icon-only geweb-ai-question-history-button" id="geweb-ai-question-history-prev" aria-label="<?php echo esc_attr__('Previous question', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Previous question', 'geweb-ai-search'); ?>" disabled>
+                                <button type="button" class="geweb-ai-icon-button" data-geweb-temp-settings-toggle="1" aria-label="<?php echo esc_attr__('Settings', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Change model or prompt', 'geweb-ai-search'); ?>">
+                                    <span aria-hidden="true" class="geweb-ai-icon">⚙</span>
+                                </button>
+                                <button type="button" class="geweb-ai-icon-button geweb-ai-secondary-button geweb-ai-secondary-button--icon-only geweb-ai-question-history-button" id="geweb-ai-question-history-prev" aria-label="<?php echo esc_attr__('Previous question', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Previous question', 'geweb-ai-search'); ?>" disabled>
                                     <span aria-hidden="true">↑</span>
                                 </button>
-                                <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-secondary-button--icon-only geweb-ai-question-history-button" id="geweb-ai-question-history-next" aria-label="<?php echo esc_attr__('Next question', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Next question', 'geweb-ai-search'); ?>" disabled>
+                                <button type="button" class="geweb-ai-icon-button geweb-ai-secondary-button geweb-ai-secondary-button--icon-only geweb-ai-question-history-button" id="geweb-ai-question-history-next" aria-label="<?php echo esc_attr__('Next question', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Next question', 'geweb-ai-search'); ?>" disabled>
                                     <span aria-hidden="true">↓</span>
                                 </button>
                             </div>
@@ -397,7 +402,7 @@ class FrontendAiWorkspaceController {
                                     <div class="geweb-ai-temporary-settings-title"><?php echo esc_html__('Next question settings', 'geweb-ai-search'); ?></div>
                                     <p class="geweb-ai-temporary-settings-note"><?php echo esc_html__('Applies to the next questions until you reset it.', 'geweb-ai-search'); ?></p>
                                 </div>
-                                <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-secondary-button--icon-only geweb-ai-temporary-settings-close" id="geweb-ai-close-temp-settings" aria-label="<?php echo esc_attr__('Close settings', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Close settings', 'geweb-ai-search'); ?>">×</button>
+                                <button type="button" class="geweb-ai-icon-button geweb-ai-secondary-button geweb-ai-secondary-button--icon-only geweb-ai-temporary-settings-close" id="geweb-ai-close-temp-settings" aria-label="<?php echo esc_attr__('Close settings', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Close settings', 'geweb-ai-search'); ?>">×</button>
                             </div>
                             <?php if (!empty($models)): ?>
                                 <div class="geweb-ai-temporary-settings-row">
@@ -408,7 +413,7 @@ class FrontendAiWorkspaceController {
                                                 <option value="<?php echo esc_attr($model); ?>" <?php selected($selectedModel, $model); ?>><?php echo esc_html($model); ?></option>
                                             <?php endforeach; ?>
                                         </select>
-                                        <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-temporary-reset-button geweb-ai-temporary-inline-action geweb-ai-temporary-inline-action--icon" id="geweb-ai-reset-temp-model" aria-label="<?php echo esc_attr__('Use default model', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Use default model', 'geweb-ai-search'); ?>">
+                                        <button type="button" class="geweb-ai-icon-button geweb-ai-secondary-button geweb-ai-temporary-reset-button geweb-ai-temporary-inline-action geweb-ai-temporary-inline-action--icon" id="geweb-ai-reset-temp-model" aria-label="<?php echo esc_attr__('Use default model', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Use default model', 'geweb-ai-search'); ?>">
                                             <span class="geweb-ai-temporary-inline-action-icon" aria-hidden="true">↺</span>
                                         </button>
                                     </div>
@@ -418,10 +423,10 @@ class FrontendAiWorkspaceController {
                                 <label for="geweb-ai-temporary-prompt" class="geweb-ai-model-selector-label"><?php echo esc_html__('Prompt', 'geweb-ai-search'); ?></label>
                                 <div class="geweb-ai-temporary-settings-controls geweb-ai-temporary-settings-controls--prompt">
                                     <div id="geweb-ai-temporary-prompt-summary" class="geweb-ai-temporary-prompt-summary"><?php echo esc_html($currentPromptName); ?></div>
-                                    <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-temporary-inline-action geweb-ai-temporary-inline-action--icon" id="geweb-ai-toggle-prompt-editor" aria-label="<?php echo esc_attr__('Edit prompt', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Edit prompt', 'geweb-ai-search'); ?>">
+                                    <button type="button" class="geweb-ai-icon-button geweb-ai-secondary-button geweb-ai-temporary-inline-action geweb-ai-temporary-inline-action--icon" id="geweb-ai-toggle-prompt-editor" aria-label="<?php echo esc_attr__('Edit prompt', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Edit prompt', 'geweb-ai-search'); ?>">
                                         <span class="geweb-ai-temporary-inline-action-icon geweb-ai-temporary-inline-action-icon--edit" aria-hidden="true">✎</span>
                                     </button>
-                                    <button type="button" class="button button-small geweb-ai-secondary-button geweb-ai-temporary-reset-button geweb-ai-temporary-inline-action geweb-ai-temporary-inline-action--icon" id="geweb-ai-reset-temp-prompt" aria-label="<?php echo esc_attr__('Use default prompt', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Use default prompt', 'geweb-ai-search'); ?>">
+                                    <button type="button" class="geweb-ai-icon-button geweb-ai-secondary-button geweb-ai-temporary-reset-button geweb-ai-temporary-inline-action geweb-ai-temporary-inline-action--icon" id="geweb-ai-reset-temp-prompt" aria-label="<?php echo esc_attr__('Use default prompt', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Use default prompt', 'geweb-ai-search'); ?>">
                                         <span class="geweb-ai-temporary-inline-action-icon" aria-hidden="true">↺</span>
                                     </button>
                                 </div>
@@ -443,14 +448,14 @@ class FrontendAiWorkspaceController {
                             <div class="geweb-ai-panel-title"><?php echo esc_html__('Source references', 'geweb-ai-search'); ?></div>
                             <div class="geweb-ai-panel-heading-actions">
                                 <?php if (current_user_can('manage_options')): ?>
-                                    <a class="button button-small geweb-ai-overview-action-button geweb-ai-overview-action-button--icon-first" href="<?php echo esc_url(($this->getTabUrl)('documents')); ?>" aria-label="<?php echo esc_attr__('Manage source references', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Manage source references', 'geweb-ai-search'); ?>">
+                                    <a class="geweb-ai-overview-action-button geweb-ai-overview-action-button--icon-first" href="<?php echo esc_url(($this->getTabUrl)('documents')); ?>" aria-label="<?php echo esc_attr__('Manage source references', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Manage source references', 'geweb-ai-search'); ?>">
                                         <span class="geweb-ai-overview-action-icon" aria-hidden="true">⚙</span>
                                         <span class="geweb-ai-overview-action-label"><?php echo esc_html__('Manage', 'geweb-ai-search'); ?></span>
                                     </a>
                                 <?php endif; ?>
                             </div>
                         </div>
-                        <button type="button" class="button button-small geweb-ai-panel-collapse" data-panel-toggle="right" aria-expanded="true" aria-label="<?php echo esc_attr__('Collapse sources panel', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Collapse sources panel', 'geweb-ai-search'); ?>">
+                        <button type="button" class="geweb-ai-icon-button geweb-ai-panel-collapse" data-panel-toggle="right" aria-expanded="true" aria-label="<?php echo esc_attr__('Collapse sources panel', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Collapse sources panel', 'geweb-ai-search'); ?>">
                             <span class="geweb-ai-panel-collapse-icon" aria-hidden="true">▶</span>
                         </button>
                     </div>
@@ -460,15 +465,15 @@ class FrontendAiWorkspaceController {
             </div>
             <?php if ($isFrontendAiPage): ?>
                 <nav class="geweb-ai-mobile-pane-footer" aria-label="<?php echo esc_attr__('Workspace panes', 'geweb-ai-search'); ?>">
-                    <button type="button" class="button geweb-ai-mobile-pane-tab" data-mobile-pane-target="left" aria-pressed="false">
+                    <button type="button" class="geweb-ai-icon-button geweb-ai-mobile-pane-tab" data-mobile-pane-target="left" aria-pressed="false">
                         <span class="geweb-ai-mobile-pane-tab-icon" aria-hidden="true">☰</span>
                         <span class="geweb-ai-mobile-pane-tab-label"><?php echo esc_html__('History', 'geweb-ai-search'); ?></span>
                     </button>
-                    <button type="button" class="button geweb-ai-mobile-pane-tab" data-mobile-pane-target="main" aria-pressed="true">
+                    <button type="button" class="geweb-ai-icon-button geweb-ai-mobile-pane-tab" data-mobile-pane-target="main" aria-pressed="true">
                         <span class="geweb-ai-mobile-pane-tab-icon" aria-hidden="true">✎</span>
                         <span class="geweb-ai-mobile-pane-tab-label"><?php echo esc_html__('AI chat', 'geweb-ai-search'); ?></span>
                     </button>
-                    <button type="button" class="button geweb-ai-mobile-pane-tab" data-mobile-pane-target="right" aria-pressed="false">
+                    <button type="button" class="geweb-ai-icon-button geweb-ai-mobile-pane-tab" data-mobile-pane-target="right" aria-pressed="false">
                         <span class="geweb-ai-mobile-pane-tab-icon" aria-hidden="true">#</span>
                         <span class="geweb-ai-mobile-pane-tab-label"><?php echo esc_html__('Sources', 'geweb-ai-search'); ?></span>
                     </button>
@@ -485,7 +490,7 @@ class FrontendAiWorkspaceController {
             <div class="geweb-ai-page-toolbar-actions">
                 <button
                     type="button"
-                    class="button button-small geweb-ai-page-toolbar-button geweb-ai-page-toolbar-button--menu"
+                    class="geweb-ai-icon-button geweb-ai-page-toolbar-button geweb-ai-page-toolbar-button--menu"
                     id="geweb-ai-toggle-mobile-menu"
                     data-panel-toggle="left"
                     aria-label="<?php echo esc_attr__('Show chats panel', 'geweb-ai-search'); ?>"
@@ -497,7 +502,7 @@ class FrontendAiWorkspaceController {
                 </button>
                 <button
                     type="button"
-                    class="button button-small geweb-ai-page-toolbar-button geweb-ai-page-toolbar-button--align"
+                    class="geweb-ai-icon-button geweb-ai-page-toolbar-button geweb-ai-page-toolbar-button--align"
                     id="geweb-ai-align-workspace"
                     aria-label="<?php echo esc_attr__('Align workspace to the browser window', 'geweb-ai-search'); ?>"
                     title="<?php echo esc_attr__('Align workspace to the browser window', 'geweb-ai-search'); ?>"
@@ -507,7 +512,7 @@ class FrontendAiWorkspaceController {
                 </button>
                 <button
                     type="button"
-                    class="button button-small geweb-ai-page-toolbar-button geweb-ai-page-toolbar-button--toggle-search"
+                    class="geweb-ai-icon-button geweb-ai-page-toolbar-button geweb-ai-page-toolbar-button--toggle-search"
                     id="geweb-ai-toggle-search-panel"
                     data-panel-toggle="search"
                     aria-label="<?php echo esc_attr__('Toggle classic search results', 'geweb-ai-search'); ?>"
@@ -519,7 +524,7 @@ class FrontendAiWorkspaceController {
                 </button>
                 <button
                     type="button"
-                    class="button button-small geweb-ai-page-toolbar-button geweb-ai-page-toolbar-button--fullscreen"
+                    class="geweb-ai-icon-button geweb-ai-page-toolbar-button geweb-ai-page-toolbar-button--fullscreen"
                     id="geweb-ai-toggle-fullscreen"
                     aria-label="<?php echo esc_attr__('Enter fullscreen', 'geweb-ai-search'); ?>"
                     title="<?php echo esc_attr__('Enter fullscreen', 'geweb-ai-search'); ?>"
@@ -529,7 +534,7 @@ class FrontendAiWorkspaceController {
                 </button>
                 <?php if (current_user_can('manage_options')): ?>
                     <a
-                        class="button button-small geweb-ai-page-toolbar-button geweb-ai-page-toolbar-button--settings"
+                        class="geweb-ai-icon-button geweb-ai-page-toolbar-button geweb-ai-page-toolbar-button--settings"
                         href="<?php echo esc_url(admin_url('admin.php?page=geweb-ai-search')); ?>"
                         aria-label="<?php echo esc_attr__('Open AI search settings', 'geweb-ai-search'); ?>"
                         title="<?php echo esc_attr__('Open AI search settings', 'geweb-ai-search'); ?>"
@@ -585,7 +590,7 @@ class FrontendAiWorkspaceController {
                     >
                         <span class="geweb-ai-search-results-info-icon" aria-hidden="true">i</span>
                     </button>
-                    <button type="button" class="button button-small geweb-ai-panel-collapse" data-panel-toggle="search" aria-expanded="<?php echo $initialHeight > 0 ? 'true' : 'false'; ?>" aria-label="<?php echo esc_attr($initialHeight > 0 ? __('Collapse classic search results', 'geweb-ai-search') : __('Expand classic search results', 'geweb-ai-search')); ?>" title="<?php echo esc_attr($initialHeight > 0 ? __('Collapse classic search results', 'geweb-ai-search') : __('Expand classic search results', 'geweb-ai-search')); ?>">
+                    <button type="button" class="geweb-ai-icon-button geweb-ai-panel-collapse" data-panel-toggle="search" aria-expanded="<?php echo $initialHeight > 0 ? 'true' : 'false'; ?>" aria-label="<?php echo esc_attr($initialHeight > 0 ? __('Collapse classic search results', 'geweb-ai-search') : __('Expand classic search results', 'geweb-ai-search')); ?>" title="<?php echo esc_attr($initialHeight > 0 ? __('Collapse classic search results', 'geweb-ai-search') : __('Expand classic search results', 'geweb-ai-search')); ?>">
                         <span class="geweb-ai-panel-collapse-icon" aria-hidden="true"><?php echo $initialHeight > 0 ? '▴' : '▾'; ?></span>
                     </button>
                 </div>
@@ -606,7 +611,7 @@ class FrontendAiWorkspaceController {
                     <?php if ($conversationId !== ''): ?>
                         <input type="hidden" name="geweb_ai_conversation" value="<?php echo esc_attr($conversationId); ?>">
                     <?php endif; ?>
-                    <button type="submit" class="button geweb-ai-inline-search-submit"><?php echo esc_html__('Search', 'geweb-ai-search'); ?></button>
+                    <button type="submit" class="geweb-ai-icon-button geweb-ai-inline-search-submit"><?php echo esc_html__('Search', 'geweb-ai-search'); ?></button>
                 </form>
                 <?php if ($query !== ''): ?>
                     <?php
