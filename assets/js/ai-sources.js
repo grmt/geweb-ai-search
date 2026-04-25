@@ -282,6 +282,60 @@
 				$wrapper.append(this.buildResponseDetailsList(entries));
 			}
 
+			const requestAttempts = Array.isArray(meta?.request_attempts)
+				? meta.request_attempts.filter((item) => item && typeof item === 'object')
+				: [];
+			if (requestAttempts.length) {
+				const $attemptList = $('<ol class="geweb-ai-response-details-inline-list"></ol>');
+				const toTimestampMs = (value) => {
+					const numeric = Number(value || 0);
+					return numeric > 0 && numeric < 1000000000000 ? numeric * 1000 : numeric;
+				};
+				requestAttempts.forEach((attempt) => {
+					const startedAt = this.formatThoughtHistoryTimestamp(toTimestampMs(attempt.started_at));
+					const finishedAt = this.formatThoughtHistoryTimestamp(toTimestampMs(attempt.finished_at));
+					const model = String(attempt.model || requestMeta.model || meta.model_version || meta.model || '').trim();
+					const httpCode = Number(attempt.http_code || 0);
+					const status = String(attempt.status || '').replaceAll('_', ' ').trim();
+					const elapsedMs = Number(attempt.elapsed_ms || 0);
+					const retryTriplet = String(attempt.retry_triplet || '').trim();
+					const bits = [];
+
+					if (startedAt) {
+						bits.push(`started ${startedAt}`);
+					}
+					if (finishedAt) {
+						bits.push(`finished ${finishedAt}`);
+					}
+					if (elapsedMs > 0) {
+						bits.push(`${elapsedMs} ms`);
+					}
+					if (httpCode > 0) {
+						bits.push(`HTTP ${httpCode}`);
+					}
+					if (status) {
+						bits.push(status);
+					}
+					if (model) {
+						bits.push(`model ${model}`);
+					}
+
+					const label = retryTriplet
+						? `Attempt ${retryTriplet}`
+						: `Attempt ${Number(attempt.attempt || 0) || $attemptList.children().length + 1}`;
+					const $line = $('<li></li>');
+					$line.append($('<strong></strong>').text(`${label}: `));
+					$line.append(document.createTextNode(bits.join(' · ')));
+					$attemptList.append($line);
+				});
+
+				$wrapper.append(this.buildResponseDetailsSection(
+					'Request attempts',
+					$('<div></div>').append($attemptList),
+					true
+				));
+			}
+
 			const excludedSources = Array.isArray(requestMeta.excluded_sources)
 				? requestMeta.excluded_sources.map((item) => String(item || '').trim()).filter(Boolean)
 				: [];
@@ -480,6 +534,9 @@
 			}
 			if (meta.estimated_cost_usd !== undefined) {
 				pushLabeledEntry(entries, 'Estimated cost', `$${Number(meta.estimated_cost_usd).toFixed(6)}`);
+			}
+			if (Array.isArray(meta.request_attempts) && meta.request_attempts.length) {
+				pushLabeledEntry(entries, 'Request attempts', `${meta.request_attempts.length}`);
 			}
 
 			const chunks = this.getGroundingChunks(grounding);
@@ -2518,7 +2575,7 @@
 				const parsed = safeParseUrl(resolvedRef.url);
 				if (parsed) {
 					const pathname = parsed.pathname;
-					const documentName = pathname.split('/').filter(Boolean).pop() || '';
+					const documentName = pathname.split('/').findLast(Boolean) || '';
 					if (documentName) {
 						newTitle = `${documentName} (page ${pageId})`;
 					}

@@ -43,6 +43,7 @@ module.exports = [
 		HTMLUListElement: 'readonly',
 		HTMLLIElement: 'readonly',
 		SVGElement: 'readonly',
+		MutationObserver: 'readonly',
 		Event: 'readonly',
 		CustomEvent: 'readonly',
 		MouseEvent: 'readonly',
@@ -53,6 +54,7 @@ module.exports = [
 		getComputedStyle: 'readonly',
 		// Performance & browser APIs
 		performance: 'readonly',
+		Intl: 'readonly',
 		alert: 'readonly',
 		confirm: 'readonly',
 		// WordPress globals

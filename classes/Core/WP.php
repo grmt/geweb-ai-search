@@ -459,6 +459,9 @@ class WP {
 
         if ($status === 'error') {
             $payload['message'] = (string) ($job['error_message'] ?? 'The AI request did not complete.');
+            if (isset($job['error_meta']) && is_array($job['error_meta'])) {
+                $payload['meta'] = $job['error_meta'];
+            }
         }
 
         wp_send_json_success($payload);
@@ -606,6 +609,26 @@ class WP {
             $job['updated_at'] = time();
             $job['error_message'] = $e->getMessage();
             $job['result'] = null;
+            $job['error_meta'] = [
+                'provider' => 'Google Gemini',
+                'model' => (string) ($job['requested_model'] ?? ''),
+                'request' => [
+                    'created_at' => (int) ($job['created_at'] ?? time()),
+                    'finished_at' => time(),
+                    'model' => (string) ($job['requested_model'] ?? ''),
+                    'temporary_prompt_active' => trim((string) ($job['temporary_prompt'] ?? '')) !== '',
+                    'excluded_source_count' => isset($job['excluded_sources']) && is_array($job['excluded_sources']) ? count($job['excluded_sources']) : 0,
+                ],
+                'error' => [
+                    'message' => $e->getMessage(),
+                ],
+            ];
+            if (isset($provider) && method_exists($provider, 'getLastRequestAttempts')) {
+                $attempts = $provider->getLastRequestAttempts();
+                if (is_array($attempts) && !empty($attempts)) {
+                    $job['error_meta']['request_attempts'] = $attempts;
+                }
+            }
             $this->updateAiChatJobProgress(
                 $job,
                 'error',

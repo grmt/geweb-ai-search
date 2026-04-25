@@ -3169,7 +3169,8 @@ return;
 	        this.appendMessage({
 	            answer: entry.content,
 	            sources: Array.isArray(entry.sources) ? entry.sources : [],
-	            meta: entry.meta && typeof entry.meta === 'object' ? entry.meta : {}
+	            meta: entry.meta && typeof entry.meta === 'object' ? entry.meta : {},
+	            created_at: entry.created_at
 	        }, 'ai', { messageData: entry });
 	        this.renderSources();
 	        await this.persistConversation();
@@ -3221,7 +3222,8 @@ return;
 	                    await this.handleResponse({
 	                        success: false,
 	                        data: {
-	                            message: String(payload.message || '').trim()
+	                            message: String(payload.message || '').trim(),
+	                            meta: payload.meta && typeof payload.meta === 'object' ? payload.meta : {}
 	                        }
 	                    }, $loader);
 	                    return false;
@@ -3711,12 +3713,19 @@ return;
 		        await this.appendAiHistoryEntry(aiEntry);
 			    } else {
 		        const backendMessage = response?.data?.message ? String(response.data.message) : '';
+		        const backendMeta = response?.data?.meta && typeof response.data.meta === 'object' ? response.data.meta : {};
 		        await this.appendAiHistoryEntry(this.buildAiHistoryEntry({
 		            content: this.normalizeAiErrorMessage(backendMessage, t('answerError', 'Error: Unable to get response')),
 		            meta: {
+		                ...backendMeta,
 		                error: true,
 		                error_type: 'backend',
-		                raw_message: backendMessage
+		                raw_message: backendMessage,
+		                model: backendMeta.model || backendMeta?.request?.model || this.getSelectedModel(),
+		                request: {
+		                    ...(backendMeta.request || {}),
+		                    finished_at: backendMeta?.request?.finished_at || this.normalizeEpochSeconds(Math.floor(Date.now() / 1000)),
+		                },
 		            }
 		        }));
 			    }
@@ -3737,7 +3746,13 @@ return;
 		            error_type: shouldRecover ? 'transport_recoverable' : 'transport',
 		            pending_recovery: shouldRecover,
 		            raw_message: ajaxErrorMessage,
-		            http_status: Number(xhr?.status || 0) || null
+		            http_status: Number(xhr?.status || 0) || null,
+		            model: this.getSelectedModel(),
+		            request: {
+		                created_at: userCreatedAt || this.normalizeEpochSeconds(Math.floor(Date.now() / 1000)),
+		                finished_at: this.normalizeEpochSeconds(Math.floor(Date.now() / 1000)),
+		                model: this.getSelectedModel(),
+		            },
 		        }
 		    }));
 	        this.syncHistoryButtons();
@@ -3765,6 +3780,10 @@ return;
 		        }
 		        const $text = $('<span class="geweb-ai-user-message-text"></span>').html(this.escapeHtml(questionText));
 		        $msg.append($text);
+		        const userTimestamp = this.formatMessageTimestamp(messageData?.created_at ?? messageData?.createdAt);
+		        if (userTimestamp) {
+		            $msg.append($('<span class="geweb-ai-message-timestamp geweb-ai-message-timestamp--user"></span>').text(userTimestamp));
+		        }
 		        if (historyIndex >= 0) {
 		            const $removeButton = $('<button type="button" class="geweb-ai-user-message-remove" aria-label="Remove question and answer" title="Remove question and answer"><span aria-hidden="true">−</span></button>');
 		            $removeButton.on('click', async (event) => {
@@ -3808,8 +3827,14 @@ return;
 		    } else {
 		        const $container = $('<div class="ai-message"></div>');
 		        const responseMeta = text?.meta && typeof text.meta === 'object' ? text.meta : {};
+		        const aiMessageData = options?.messageData && typeof options.messageData === 'object' ? options.messageData : {};
+		        const aiTimestamp = this.formatMessageTimestamp(aiMessageData?.created_at ?? aiMessageData?.createdAt ?? text?.created_at ?? text?.createdAt ?? responseMeta?.request?.finished_at ?? responseMeta?.request?.created_at);
 		        const sourceFootnoteMap = this.getResponseSourceFootnoteMap(text.sources || [], text.answer || '', responseMeta);
-		        const answerWithFootnotes = this.decorateAnswerWithGroundingFootnotes(String(text.answer || ''), responseMeta, sourceFootnoteMap, text.sources || []);
+		        const rawAnswer = String(text.answer || '');
+		        const answerHtml = responseMeta.error && rawAnswer.includes('"error"') && rawAnswer.includes('HTTP code')
+		            ? this.normalizeAiErrorMessage(this.extractPlainTextFromHtml(rawAnswer), t('answerError', 'Error: Unable to get response'))
+		            : rawAnswer;
+		        const answerWithFootnotes = this.decorateAnswerWithGroundingFootnotes(answerHtml, responseMeta, sourceFootnoteMap, text.sources || []);
 		        const sanitizedAnswer = this.sanitizeAnswer(answerWithFootnotes);
 		        const $content = $('<div class="geweb-ai-message-content"></div>').html(sanitizedAnswer);
 		        const $thoughtProcess = this.buildThoughtProcessBlock(responseMeta);
@@ -3897,6 +3922,9 @@ return;
 
 		        if ($messageActions.children().length) {
 		            $content.prepend($messageActions);
+		        }
+		        if (aiTimestamp) {
+		            $content.append($('<div class="geweb-ai-message-timestamp geweb-ai-message-timestamp--ai"></div>').text(aiTimestamp));
 		        }
 		        if ($thoughtProcess) {
 		            $container.append($thoughtProcess);
@@ -4033,7 +4061,31 @@ return;
 	        }
 
 	        try {
-	            return new Date(normalized * 1000).toISOString().slice(0, 10);
+	            return new Intl.DateTimeFormat(undefined, {
+	                year: 'numeric',
+	                month: 'short',
+	                day: '2-digit',
+	                hour: '2-digit',
+	                minute: '2-digit',
+	                second: '2-digit',
+	            }).format(new Date(normalized * 1000));
+	        } catch (_) {
+	            return '';
+	        }
+	    },
+
+	    formatMessageTimestamp(epochSeconds) {
+	        const normalized = this.normalizeEpochSeconds(epochSeconds);
+	        if (!normalized) {
+	            return '';
+	        }
+
+	        try {
+	            return new Intl.DateTimeFormat(undefined, {
+	                hour: '2-digit',
+	                minute: '2-digit',
+	                second: '2-digit',
+	            }).format(new Date(normalized * 1000));
 	        } catch (_) {
 	            return '';
 	        }
@@ -4061,6 +4113,22 @@ return;
 	            const model = String(responseMeta?.model_version || responseMeta?.model || '').trim();
 	            if (model) {
 	                lines.push(isAiTooltip ? `Model: ${model}` : `Answer model: ${model}`);
+	            }
+	            const requestFinishedAt = this.formatTooltipTimestamp(responseMeta?.request?.finished_at);
+	            if (requestFinishedAt) {
+	                lines.push(isAiTooltip ? `Returned: ${requestFinishedAt}` : `Answer returned: ${requestFinishedAt}`);
+	            }
+	            const attempts = Array.isArray(responseMeta?.request_attempts) ? responseMeta.request_attempts : [];
+	            if (attempts.length) {
+	                lines.push(`${isAiTooltip ? 'Request' : 'Answer request'} attempts: ${attempts.length}`);
+	                attempts.slice(-3).forEach((attempt) => {
+	                    const startedAt = this.formatTooltipTimestamp(attempt?.started_at);
+	                    const status = String(attempt?.status || '').replaceAll('_', ' ').trim();
+	                    const httpCode = Number(attempt?.http_code || 0);
+	                    const elapsedMs = Number(attempt?.elapsed_ms || 0);
+	                    const triplet = String(attempt?.retry_triplet || attempt?.attempt || '').trim();
+	                    lines.push(`Attempt ${triplet}: ${[startedAt, httpCode ? `HTTP ${httpCode}` : '', status, elapsedMs ? `${elapsedMs} ms` : ''].filter(Boolean).join(' · ')}`);
+	                });
 	            }
 	            if (usage.total_tokens) {
 	                lines.push(isAiTooltip ? `Tokens: ${usage.total_tokens}` : `Answer tokens: ${usage.total_tokens}`);
@@ -4757,7 +4825,22 @@ return;
 
 	        try {
 	            const parsed = JSON.parse(jsonText);
-	            return `${summary}\n\n${JSON.stringify(parsed, null, 2)}`;
+	            const error = parsed?.error && typeof parsed.error === 'object' ? parsed.error : {};
+	            const status = String(error.status || '').trim();
+	            const remoteMessage = String(error.message || '')
+	                .replaceAll(/https?:\/\/\S+/g, '')
+	                .replaceAll(/\s+/g, ' ')
+	                .trim();
+
+	            if (/monthly spending cap|spend cap/i.test(remoteMessage)) {
+	                return `${summary} the Google AI Studio project has exceeded its monthly spending cap. Increase the spend cap or switch to another API key/project, then retry.`;
+	            }
+
+	            if (status === 'RESOURCE_EXHAUSTED') {
+	                return `${summary} the Gemini API quota or spending limit has been reached for this project.`;
+	            }
+
+	            return `${summary} ${remoteMessage || t('answerError', 'Error: Unable to get response')}${status ? ` (${status})` : ''}`;
 	        } catch (_) {
 	            return decoded;
 	        }

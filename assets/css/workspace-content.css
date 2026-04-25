@@ -96,6 +96,23 @@
     min-width: 0;
     overflow-wrap: anywhere;
 }
+.geweb-ai-message-timestamp {
+    display: block;
+    color: #64748b;
+    font-size: 11px;
+    line-height: 1.2;
+    white-space: nowrap;
+}
+.geweb-ai-message-timestamp--user {
+    align-self: flex-end;
+    margin-left: 2px;
+    padding-top: 2px;
+    color: #475569;
+}
+.geweb-ai-message-timestamp--ai {
+    margin-top: 8px;
+    text-align: right;
+}
 .geweb-ai-user-message-remove {
     display: inline-flex;
     align-items: center;
