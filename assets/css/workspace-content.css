@@ -159,6 +159,12 @@
     border: 1px solid rgba(148, 163, 184, 0.28);
     color: #334155;
 }
+.geweb-ai-thought-process[hidden] {
+    display: none !important;
+}
+.geweb-ai-thought-process.is-open {
+    display: block;
+}
 .geweb-ai-thought-process--loading {
     margin-bottom: 0;
 }
@@ -258,6 +264,7 @@
     transform: translateY(-2px);
 }
 .geweb-ai-copy-answer,
+.geweb-ai-message-thoughts-toggle,
 .geweb-ai-message-details-toggle {
     position: relative;
     display: inline-flex;
@@ -279,6 +286,11 @@
     box-shadow: none;
     transition: color 0.15s ease, transform 0.15s ease;
 }
+.geweb-ai-message-thoughts-toggle {
+    width: 28px;
+    min-width: 28px;
+    height: 28px;
+}
 .geweb-ai-message-details-toggle {
     width: 28px;
     min-width: 28px;
@@ -289,6 +301,8 @@
 }
 .geweb-ai-copy-answer:hover,
 .geweb-ai-copy-answer:focus,
+.geweb-ai-message-thoughts-toggle:hover,
+.geweb-ai-message-thoughts-toggle:focus,
 .geweb-ai-message-details-toggle:hover,
 .geweb-ai-message-details-toggle:focus {
     color: #0f172a;
@@ -321,6 +335,10 @@
     font-size: 14px;
     font-weight: 700;
 }
+.geweb-ai-message-action-icon--thoughts {
+    font-size: 13px;
+    font-weight: 700;
+}
 .geweb-ai-message-action-label {
     position: absolute;
     top: calc(100% + 6px);
@@ -343,6 +361,9 @@
 .geweb-ai-copy-answer:hover .geweb-ai-message-action-label,
 .geweb-ai-copy-answer:focus .geweb-ai-message-action-label,
 .geweb-ai-copy-answer:focus-visible .geweb-ai-message-action-label,
+.geweb-ai-message-thoughts-toggle:hover .geweb-ai-message-action-label,
+.geweb-ai-message-thoughts-toggle:focus .geweb-ai-message-action-label,
+.geweb-ai-message-thoughts-toggle:focus-visible .geweb-ai-message-action-label,
 .geweb-ai-message-info-toggle:hover .geweb-ai-message-action-label,
 .geweb-ai-message-info-toggle:focus .geweb-ai-message-action-label,
 .geweb-ai-message-info-toggle:focus-visible .geweb-ai-message-action-label,

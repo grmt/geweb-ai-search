@@ -1304,7 +1304,7 @@ class Gemini implements AIProviderInterface {
             $this->runtimeLogContext['request_fingerprint'] = $retryPlan['request_fingerprint'];
         }
         $this->logInfo(sprintf(
-            'Gemini search dispatch request_id=%s question_hash=%s conversation_id=%s message_count=%d excluded_sources=%d model="%s" system_retries=%d human_retries=%d overall_attempt_start=%d overall_attempt_max=%d',
+            'Gemini search dispatch request_id=%s question_hash=%s conversation_id=%s message_count=%d excluded_sources=%d model="%s" system_retries=%d human_retries=%d overall_attempt_start=%d overall_attempt_max=%d retry_triplet_start=%s',
             $requestId,
             $questionHash !== '' ? $questionHash : 'none',
             isset($this->runtimeLogContext['conversation_id']) ? (string) $this->runtimeLogContext['conversation_id'] : 'none',
@@ -1314,7 +1314,8 @@ class Gemini implements AIProviderInterface {
             $retryPlan['system_retries'],
             $retryPlan['human_retries'],
             $retryPlan['overall_attempt_start'],
-            $retryPlan['overall_attempt_max']
+            $retryPlan['overall_attempt_max'],
+            $this->formatRetryTriplet($retryPlan['overall_attempt_start'], $retryPlan['system_retries'], $retryPlan['overall_attempt_max'])
         ));
 
         // Build request body
@@ -1432,7 +1433,7 @@ class Gemini implements AIProviderInterface {
                     continue;
                 }
 
-                $text = trim((string) $part['text']);
+                $text = (string) $part['text'];
                 if ($text !== '') {
                     $textParts[] = $text;
                 }
@@ -1443,7 +1444,7 @@ class Gemini implements AIProviderInterface {
             }
         }
 
-        return trim(implode("\n", $textParts));
+        return trim(implode('', $textParts));
     }
 
     /**
@@ -1514,7 +1515,12 @@ class Gemini implements AIProviderInterface {
             ];
         }
 
-        $decoded = json_decode($responseText, true);
+        $normalizedResponseText = trim($responseText);
+        if (preg_match('/^```(?:json)?\s*(.*?)\s*```$/is', $normalizedResponseText, $matches)) {
+            $normalizedResponseText = trim((string) ($matches[1] ?? ''));
+        }
+
+        $decoded = json_decode($normalizedResponseText, true);
         if (json_last_error() !== JSON_ERROR_NONE || !is_array($decoded)) {
             return [
                 'answer' => $formattedAnswer,
@@ -1644,12 +1650,13 @@ class Gemini implements AIProviderInterface {
             $startedAt = microtime(true);
             $overallAttempt = $overallAttemptBase + $attempt;
             $this->logInfo(sprintf(
-                'Gemini request starting method=%s attempt=%d/%d overall_attempt=%d/%d timeout_seconds=%d body_bytes=%d endpoint="%s"%s',
+                'Gemini request starting method=%s attempt=%d/%d overall_attempt=%d/%d retry_triplet=%s timeout_seconds=%d body_bytes=%d endpoint="%s"%s',
                 $method,
                 $attempt,
                 $maxAttempts,
                 $overallAttempt,
                 $overallAttemptMax,
+                $this->formatRetryTriplet($overallAttempt, $maxAttempts, $overallAttemptMax),
                 $attemptTimeoutSeconds,
                 $bodyBytes,
                 $url,
@@ -1662,10 +1669,13 @@ class Gemini implements AIProviderInterface {
             if (is_wp_error($response)) {
                 $errorMessage = $response->get_error_message();
                 $this->logError(sprintf(
-                    'Gemini request transport failure method=%s attempt=%d/%d elapsed_ms=%d endpoint="%s" message="%s"%s',
+                    'Gemini request transport failure method=%s attempt=%d/%d overall_attempt=%d/%d retry_triplet=%s elapsed_ms=%d endpoint="%s" message="%s"%s',
                     $method,
                     $attempt,
                     $maxAttempts,
+                    $overallAttempt,
+                    $overallAttemptMax,
+                    $this->formatRetryTriplet($overallAttempt, $maxAttempts, $overallAttemptMax),
                     $elapsedMs,
                     $url,
                     $errorMessage,
@@ -1689,10 +1699,13 @@ class Gemini implements AIProviderInterface {
             $responseBody = wp_remote_retrieve_body($response);
             $responseBytes = strlen($responseBody);
             $this->logInfo(sprintf(
-                'Gemini request response method=%s attempt=%d/%d http_code=%d elapsed_ms=%d response_bytes=%d endpoint="%s"%s',
+                'Gemini request response method=%s attempt=%d/%d overall_attempt=%d/%d retry_triplet=%s http_code=%d elapsed_ms=%d response_bytes=%d endpoint="%s"%s',
                 $method,
                 $attempt,
                 $maxAttempts,
+                $overallAttempt,
+                $overallAttemptMax,
+                $this->formatRetryTriplet($overallAttempt, $maxAttempts, $overallAttemptMax),
                 $httpCode,
                 $elapsedMs,
                 $responseBytes,
@@ -1800,12 +1813,13 @@ class Gemini implements AIProviderInterface {
             $overallAttempt = $overallAttemptBase + $attempt;
             $startedAt = microtime(true);
             $this->logInfo(sprintf(
-                'Gemini streaming request starting method=%s attempt=%d/%d overall_attempt=%d/%d timeout_seconds=%d body_bytes=%d endpoint="%s"%s',
+                'Gemini streaming request starting method=%s attempt=%d/%d overall_attempt=%d/%d retry_triplet=%s timeout_seconds=%d body_bytes=%d endpoint="%s"%s',
                 'POST',
                 $attempt,
                 $maxAttempts,
                 $overallAttempt,
                 $overallAttemptMax,
+                $this->formatRetryTriplet($overallAttempt, $maxAttempts, $overallAttemptMax),
                 $attemptTimeoutSeconds,
                 $bodyBytes,
                 $url,
@@ -1877,10 +1891,13 @@ class Gemini implements AIProviderInterface {
             $elapsedMs = (int) round((microtime(true) - $startedAt) * 1000);
             if ($streamErrorMessage !== '') {
                 $this->logError(sprintf(
-                    'Gemini streaming request parse failure method=%s attempt=%d/%d elapsed_ms=%d endpoint="%s" message="%s"%s',
+                    'Gemini streaming request parse failure method=%s attempt=%d/%d overall_attempt=%d/%d retry_triplet=%s elapsed_ms=%d endpoint="%s" message="%s"%s',
                     'POST',
                     $attempt,
                     $maxAttempts,
+                    $overallAttempt,
+                    $overallAttemptMax,
+                    $this->formatRetryTriplet($overallAttempt, $maxAttempts, $overallAttemptMax),
                     $elapsedMs,
                     $url,
                     $streamErrorMessage,
@@ -1892,10 +1909,13 @@ class Gemini implements AIProviderInterface {
             if ($execResult === false) {
                 $errorMessage = $curlError !== '' ? $curlError : 'Unknown cURL streaming error';
                 $this->logError(sprintf(
-                    'Gemini streaming request transport failure method=%s attempt=%d/%d elapsed_ms=%d endpoint="%s" message="%s"%s',
+                    'Gemini streaming request transport failure method=%s attempt=%d/%d overall_attempt=%d/%d retry_triplet=%s elapsed_ms=%d endpoint="%s" message="%s"%s',
                     'POST',
                     $attempt,
                     $maxAttempts,
+                    $overallAttempt,
+                    $overallAttemptMax,
+                    $this->formatRetryTriplet($overallAttempt, $maxAttempts, $overallAttemptMax),
                     $elapsedMs,
                     $url,
                     $errorMessage,
@@ -1917,10 +1937,13 @@ class Gemini implements AIProviderInterface {
 
             $responseBytes = strlen($rawBuffer);
             $this->logInfo(sprintf(
-                'Gemini streaming request response method=%s attempt=%d/%d http_code=%d elapsed_ms=%d response_bytes=%d endpoint="%s"%s',
+                'Gemini streaming request response method=%s attempt=%d/%d overall_attempt=%d/%d retry_triplet=%s http_code=%d elapsed_ms=%d response_bytes=%d endpoint="%s"%s',
                 'POST',
                 $attempt,
                 $maxAttempts,
+                $overallAttempt,
+                $overallAttemptMax,
+                $this->formatRetryTriplet($overallAttempt, $maxAttempts, $overallAttemptMax),
                 $httpCode,
                 $elapsedMs,
                 $responseBytes,
@@ -2325,6 +2348,15 @@ class Gemini implements AIProviderInterface {
             'model' => trim($model),
             'prompt_hash' => $promptInstruction !== '' ? hash('sha256', trim($promptInstruction)) : '',
         ]));
+    }
+
+    private function formatRetryTriplet(int $attempt, int $phaseAttemptMax, int $overallAttemptMax): string {
+        return sprintf(
+            '%d/%d/%d',
+            max(1, $attempt),
+            max(1, $phaseAttemptMax),
+            max(1, $overallAttemptMax)
+        );
     }
 
     private function isTimeoutException(\Exception $exception): bool {

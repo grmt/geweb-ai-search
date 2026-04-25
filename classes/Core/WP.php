@@ -504,7 +504,7 @@ class WP {
             if (method_exists($provider, 'setStreamProgressCallback')) {
                 $lastProgressHash = '';
                 $lastProgressWriteAt = 0.0;
-                $provider->setStreamProgressCallback(function (array $progress) use (&$job, &$lastProgressHash, &$lastProgressWriteAt): void {
+                $provider->setStreamProgressCallback(function (array $progress) use (&$job, &$lastProgressHash, &$lastProgressWriteAt, &$thoughtHistory, $requestStartedAt): void {
                     $thoughts = isset($progress['thoughts']) && is_array($progress['thoughts'])
                         ? $progress['thoughts']
                         : [];

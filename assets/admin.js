@@ -64,6 +64,156 @@ function decodeHtmlEntities(text) {
 		return textarea.value;
 }
 
+function getLastTruthyValue(values) {
+		return Array.isArray(values) ? values.findLast(Boolean) || '' : '';
+}
+
+function safeDecodeURIComponent(value) {
+		try {
+				return decodeURIComponent(String(value || ''));
+		} catch (error) {
+				return String(value || '');
+		}
+}
+
+function readLocalStorageString(key) {
+		try {
+				return String(globalThis.localStorage?.getItem(key) || '');
+		} catch (error) {
+				return '';
+		}
+}
+
+function writeLocalStorageString(key, value) {
+		try {
+				globalThis.localStorage?.setItem(key, String(value || ''));
+				return true;
+		} catch (error) {
+				return false;
+		}
+}
+
+function parseLocalSortSpecs($table) {
+		try {
+				const rawValue = String($table.attr('data-local-sort-specs') || '[]');
+				const parsedValue = JSON.parse(rawValue);
+				return Array.isArray(parsedValue)
+						? parsedValue.filter((spec) => {
+								return spec && typeof spec.column === 'string' && typeof spec.direction === 'string';
+						})
+						: [];
+		} catch (error) {
+				return [];
+		}
+}
+
+function cycleSortDirection(currentDirection) {
+		if (currentDirection === 'asc') {
+				return 'desc';
+		}
+
+		if (currentDirection === 'desc') {
+				return '';
+		}
+
+		return 'asc';
+}
+
+function getSortIndicator(isActive, direction) {
+		if (!isActive) {
+				return '';
+		}
+
+		return direction === 'desc' ? '↓' : '↑';
+}
+
+function getAriaSortValue(direction) {
+		if (direction === 'desc') {
+				return 'descending';
+		}
+
+		if (direction === 'asc') {
+				return 'ascending';
+		}
+
+		return 'none';
+}
+
+function ensureOriginalRowIndex($row, index) {
+		if ($row.attr('data-original-index') === undefined) {
+				$row.attr('data-original-index', String(index));
+		}
+}
+
+function getRegexMatch(text, pattern) {
+		const match = pattern.exec(String(text || ''));
+		pattern.lastIndex = 0;
+		return match;
+}
+
+function buildCountSuffix(count, singular, plural) {
+		if (typeof count !== 'number') {
+				return '';
+		}
+
+		const label = count === 1 ? singular : plural;
+		return ' (' + count + ' ' + label + ')';
+}
+
+function submitFormWithFallback(form) {
+		if (!form) {
+				return;
+		}
+
+		if (typeof form.requestSubmit === 'function') {
+				form.requestSubmit();
+				return;
+		}
+
+		form.submit();
+}
+
+function buildModelOption(value, selectedValue, statusEntry) {
+		const normalizedValue = String(value || '');
+		const isFailedModel = String(statusEntry?.status || '') === 'failed';
+		const option = new Option(normalizedValue, normalizedValue, false, normalizedValue === selectedValue);
+		option.dataset.modelStatus = isFailedModel ? 'failed' : 'ok';
+		if (isFailedModel) {
+				option.style.color = '#b32d2e';
+		}
+
+		return option;
+}
+
+function populateModelSelectOptions($select, responseData, remoteSelected) {
+		const sourceModels = responseData?.dropdown_models || responseData?.models || [];
+		$.each(sourceModels, (_, model) => {
+				const value = String(model || '');
+				if (!value) {
+						return;
+				}
+
+				$select.append(buildModelOption(value, remoteSelected, responseData?.model_statuses?.[value]));
+		});
+
+		if (!remoteSelected) {
+				return;
+		}
+
+		const hasSelectedOption = $select.find('option[value="' + escapeSelectorAttributeValue(remoteSelected) + '"]').length > 0;
+		if (hasSelectedOption) {
+				$select.val(remoteSelected);
+				return;
+		}
+
+		const statusEntry = responseData?.model_statuses?.[remoteSelected];
+		if (statusEntry?.permanent_unavailable) {
+				return;
+		}
+
+		$select.prepend(buildModelOption(remoteSelected, remoteSelected, statusEntry));
+}
+
 function getPreviewUrlLeaf(url) {
 		const normalizedUrl = String(url || '').trim();
 		if (!normalizedUrl) {
@@ -73,15 +223,11 @@ function getPreviewUrlLeaf(url) {
 		try {
 				const parsedUrl = new URL(normalizedUrl, globalThis.location?.origin || undefined);
 				const pathname = String(parsedUrl.pathname || '');
-				const leaf = pathname.split('/').filter(Boolean).pop() || '';
-				return decodeURIComponent(leaf || normalizedUrl);
-		} catch (_) {
-				const leaf = normalizedUrl.split('/').filter(Boolean).pop() || normalizedUrl;
-				try {
-						return decodeURIComponent(leaf);
-				} catch (_) {
-						return leaf;
-				}
+				const leaf = getLastTruthyValue(pathname.split('/'));
+				return safeDecodeURIComponent(leaf || normalizedUrl);
+		} catch (error) {
+				const leaf = getLastTruthyValue(normalizedUrl.split('/')) || normalizedUrl;
+				return safeDecodeURIComponent(leaf);
 		}
 }
 
@@ -191,7 +337,7 @@ function applyInlineMarkdown(text) {
 				.replaceAll(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, (_, label, url) => {
 						return '<a href="' + escapeHtml(url) + '" title="' + escapeHtml(url) + '">' + label + '</a>';
 				})
-				.replaceAll(/\\([\\`*_{}\[\]()#+.!-])/g, '$1');
+				.replaceAll(/\\([\\`*_{}[\]()#+.!-])/g, '$1');
 }
 
 function buildMarkdownTableHtml(lines, startIndex) {
@@ -299,7 +445,7 @@ function renderMarkdownPreview(markdown) {
 						}
 				}
 
-				const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
+				const headingMatch = getRegexMatch(trimmed, /^(#{1,6})\s+(.+)$/);
 				if (headingMatch) {
 						flushList();
 						const level = Math.min(6, headingMatch[1].length);
@@ -315,7 +461,7 @@ function renderMarkdownPreview(markdown) {
 						continue;
 				}
 
-				const listMatch = trimmed.match(/^[-*]\s+(.+)$/);
+				const listMatch = getRegexMatch(trimmed, /^[-*]\s+(.+)$/);
 				if (listMatch) {
 						listItems.push('<li>' + applyInlineMarkdown(listMatch[1]) + '</li>');
 						lineIndex += 1;
@@ -369,34 +515,8 @@ function compareSortableValues(leftValue, rightValue, sortType, direction) {
 		return left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' }) * normalizedDirection;
 }
 
-function getModelDiagnosticsSortSpecs($table) {
-		try {
-				const rawValue = String($table.attr('data-local-sort-specs') || '[]');
-				const parsedValue = JSON.parse(rawValue);
-				return Array.isArray(parsedValue)
-						? parsedValue.filter((spec) => {
-								return spec && typeof spec.column === 'string' && typeof spec.direction === 'string';
-						})
-						: [];
-		} catch (_) {
-				return [];
-		}
-}
-
 function setModelDiagnosticsSortSpecs($table, specs) {
 		$table.attr('data-local-sort-specs', JSON.stringify(Array.isArray(specs) ? specs : []));
-}
-
-function cycleModelDiagnosticsSortDirection(currentDirection) {
-		if (currentDirection === 'asc') {
-				return 'desc';
-		}
-
-		if (currentDirection === 'desc') {
-				return '';
-		}
-
-		return 'asc';
 }
 
 function getModelDiagnosticsStatusRank(status) {
@@ -443,14 +563,14 @@ function updateModelDiagnosticsHeaderState($table, specs) {
 				});
 				const isActive = specIndex >= 0;
 				const direction = isActive ? String(activeSpecs[specIndex].direction || '') : '';
-				const indicator = isActive ? (direction === 'desc' ? '↓' : '↑') : '';
+				const indicator = getSortIndicator(isActive, direction);
 				$button.attr('aria-pressed', isActive ? 'true' : 'false');
 				$button.css({
 						fontWeight: isActive ? '600' : '',
 						opacity: isActive ? '0.92' : ''
 				});
 				$button.find('[aria-hidden="true"]').text(indicator);
-				$button.closest('th').attr('aria-sort', direction === 'desc' ? 'descending' : (direction === 'asc' ? 'ascending' : 'none'));
+				$button.closest('th').attr('aria-sort', getAriaSortValue(direction));
 		});
 }
 
@@ -460,13 +580,13 @@ function sortModelDiagnosticsTable($table, column, sortType) {
 				return;
 		}
 
-		const currentSpecs = getModelDiagnosticsSortSpecs($table);
+		const currentSpecs = parseLocalSortSpecs($table);
 		const nextSpecs = currentSpecs.slice();
 		const existingIndex = nextSpecs.findIndex((spec) => {
 				return String(spec.column || '') === column;
 		});
 		const currentDirection = existingIndex >= 0 ? String(nextSpecs[existingIndex].direction || '') : '';
-		const nextDirection = cycleModelDiagnosticsSortDirection(currentDirection);
+		const nextDirection = cycleSortDirection(currentDirection);
 
 		if (!nextDirection) {
 				if (existingIndex >= 0) {
@@ -486,17 +606,15 @@ function sortModelDiagnosticsTable($table, column, sortType) {
 		const rows = $tbody.find('tr').get();
 		rows.forEach((row, index) => {
 				const $row = $(row);
-				if (typeof $row.attr('data-original-index') === 'undefined') {
-						$row.attr('data-original-index', String(index));
-				}
+				ensureOriginalRowIndex($row, index);
 		});
 
 		rows.sort((leftRow, rightRow) => {
 				const $leftRow = $(leftRow);
 				const $rightRow = $(rightRow);
 
-				for (let specIndex = 0; specIndex < nextSpecs.length; specIndex += 1) {
-						const result = compareModelDiagnosticsRows($leftRow, $rightRow, nextSpecs[specIndex]);
+				for (const spec of nextSpecs) {
+						const result = compareModelDiagnosticsRows($leftRow, $rightRow, spec);
 						if (result !== 0) {
 								return result;
 						}
@@ -520,11 +638,9 @@ function prepareModelDiagnosticsTableHeaders() {
 				const $table = jQuery(this);
 				$table.find('tbody tr').each(function(index) {
 						const $row = jQuery(this);
-						if (typeof $row.attr('data-original-index') === 'undefined') {
-								$row.attr('data-original-index', String(index));
-						}
+						ensureOriginalRowIndex($row, index);
 				});
-				updateModelDiagnosticsHeaderState($table, getModelDiagnosticsSortSpecs($table));
+				updateModelDiagnosticsHeaderState($table, parseLocalSortSpecs($table));
 		});
 }
 
@@ -541,7 +657,7 @@ function getReferencedDocumentsCellSortValue($row, column) {
 
 		if (normalizedColumn === 'last_modified' || normalizedColumn === 'last_uploaded') {
 				const text = String($cell.text() || '').trim();
-				const matched = text.match(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
+				const matched = getRegexMatch(text, /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
 				return matched ? matched[0] : text;
 		}
 
@@ -559,38 +675,12 @@ function getReferencedDocumentsCellSortValue($row, column) {
 		return String($cell.text() || '').trim();
 }
 
-function getReferencedDocumentsSortSpecs($table) {
-		try {
-				const rawValue = String($table.attr('data-local-sort-specs') || '[]');
-				const parsedValue = JSON.parse(rawValue);
-				return Array.isArray(parsedValue)
-						? parsedValue.filter((spec) => {
-								return spec && typeof spec.column === 'string' && typeof spec.direction === 'string';
-						})
-						: [];
-		} catch (_) {
-				return [];
-		}
-}
-
 function setReferencedDocumentsSortSpecs($table, specs) {
 		$table.attr('data-local-sort-specs', JSON.stringify(Array.isArray(specs) ? specs : []));
 }
 
 function getReferencedDocumentsColumnSortType(column) {
 		return column === 'last_modified' || column === 'last_uploaded' ? 'date' : 'text';
-}
-
-function cycleReferencedDocumentsSortDirection(currentDirection) {
-		if (currentDirection === 'asc') {
-				return 'desc';
-		}
-
-		if (currentDirection === 'desc') {
-				return '';
-		}
-
-		return 'asc';
 }
 
 function updateReferencedDocumentsHeaderState($table, specs) {
@@ -607,10 +697,10 @@ function updateReferencedDocumentsHeaderState($table, specs) {
 
 				$th.removeClass('sorted asc desc sortable');
 				$th.addClass(isActive ? ('sorted ' + direction) : 'sortable');
-				$th.attr('aria-sort', direction === 'desc' ? 'descending' : (direction === 'asc' ? 'ascending' : 'none'));
+				$th.attr('aria-sort', getAriaSortValue(direction));
 
 				if ($link.length) {
-						$link.attr('aria-sort', direction === 'desc' ? 'descending' : (direction === 'asc' ? 'ascending' : 'none'));
+						$link.attr('aria-sort', getAriaSortValue(direction));
 						$link.css({
 								fontWeight: isActive ? '600' : '',
 								opacity: isActive ? '0.92' : ''
@@ -626,13 +716,13 @@ function sortReferencedDocumentsTable($table, column) {
 				return;
 		}
 
-		const currentSpecs = getReferencedDocumentsSortSpecs($table);
+		const currentSpecs = parseLocalSortSpecs($table);
 		const nextSpecs = currentSpecs.slice();
 		const existingIndex = nextSpecs.findIndex((spec) => {
 				return String(spec.column || '') === column;
 		});
 		const currentDirection = existingIndex >= 0 ? String(nextSpecs[existingIndex].direction || '') : '';
-		const nextDirection = cycleReferencedDocumentsSortDirection(currentDirection);
+		const nextDirection = cycleSortDirection(currentDirection);
 		if (!nextDirection) {
 				if (existingIndex >= 0) {
 						nextSpecs.splice(existingIndex, 1);
@@ -649,19 +739,17 @@ function sortReferencedDocumentsTable($table, column) {
 		const rows = $tbody.find('tr').get();
 		rows.forEach((row, index) => {
 				const $row = $(row);
-				if (typeof $row.attr('data-original-index') === 'undefined') {
-						$row.attr('data-original-index', String(index));
-				}
+				ensureOriginalRowIndex($row, index);
 		});
 
 		rows.sort((leftRow, rightRow) => {
 				const $leftRow = $(leftRow);
 				const $rightRow = $(rightRow);
 
-				for (let specIndex = 0; specIndex < nextSpecs.length; specIndex += 1) {
-						const spec = nextSpecs[specIndex] || {};
-						const specColumn = String(spec.column || '').trim();
-						const specDirection = String(spec.direction || '').trim();
+				for (const spec of nextSpecs) {
+						const currentSpec = spec || {};
+						const specColumn = String(currentSpec.column || '').trim();
+						const specDirection = String(currentSpec.direction || '').trim();
 						if (!specColumn || !specDirection) {
 								continue;
 						}
@@ -700,29 +788,23 @@ function prepareReferencedDocumentsTableHeaders() {
 				prepareReferencedDocumentsSearchBox($form);
 				$table.find('th a .sorting-indicator').hide();
 				$searchInput.attr('autocomplete', 'on');
-				if ($searchInput.length && !$searchInput.val()) {
-						try {
-								const savedSearch = String(globalThis.localStorage?.getItem('gewebReferencedDocumentsSearch') || '');
-								if (savedSearch) {
-										$searchInput.val(savedSearch);
-								}
-						} catch (_) {
-							// localStorage may be disabled or inaccessible, gracefully ignore
-						}
-				}
-				$table.find('tbody tr').each(function(index) {
-						const $row = jQuery(this);
-						if (typeof $row.attr('data-original-index') === 'undefined') {
-								$row.attr('data-original-index', String(index));
-						}
-				});
-				updateReferencedDocumentsHeaderState($table, getReferencedDocumentsSortSpecs($table));
-			applyReferencedDocumentsFilters($form);
-		});
+					if ($searchInput.length && !$searchInput.val()) {
+							const savedSearch = readLocalStorageString('gewebReferencedDocumentsSearch');
+							if (savedSearch) {
+									$searchInput.val(savedSearch);
+							}
+					}
+					$table.find('tbody tr').each(function(index) {
+							const $row = jQuery(this);
+							ensureOriginalRowIndex($row, index);
+					});
+					updateReferencedDocumentsHeaderState($table, parseLocalSortSpecs($table));
+				applyReferencedDocumentsFilters($form);
+			});
 }
 
 function updateReferencedDocumentsSearchBoxState($form, expanded) {
-		if (!$form || !$form.length) {
+		if (!$form?.length) {
 			return;
 		}
 
@@ -739,7 +821,7 @@ function updateReferencedDocumentsSearchBoxState($form, expanded) {
 	}
 
 function prepareReferencedDocumentsSearchBox($form) {
-		if (!$form || !$form.length) {
+		if (!$form?.length) {
 			return;
 		}
 
@@ -800,7 +882,6 @@ function applyReferencedDocumentsFilters($form) {
 			return;
 		}
 
-		const startTime = performance.now();
 		const filters = getReferencedDocumentsFilters($form);
 		const $table = $form.find('table').first();
 		if (!$table.length) {
@@ -809,7 +890,6 @@ function applyReferencedDocumentsFilters($form) {
 
 		const $rows = $table.find('tbody tr');
 		let visibleCount = 0;
-		const rowFilterStart = performance.now();
 		$rows.each(function() {
 			const $row = jQuery(this);
 			const showRow = rowMatchesReferencedDocumentsFilters($row, filters);
@@ -818,7 +898,6 @@ function applyReferencedDocumentsFilters($form) {
 				visibleCount += 1;
 			}
 		});
-		const rowFilterMs = Math.round(performance.now() - rowFilterStart);
 
 		let $message = $form.find('.geweb-referenced-documents-no-results');
 		if (!$message.length) {
@@ -826,11 +905,6 @@ function applyReferencedDocumentsFilters($form) {
 			$table.after($message);
 		}
 		$message.toggle(visibleCount === 0);
-
-		const totalMs = Math.round(performance.now() - startTime);
-		if (totalMs > 500 || $rows.length > 1000) {
-			console.log('[geweb-ai-search] Referenced document filter: ' + $rows.length + ' rows in ' + totalMs + 'ms (filtering: ' + rowFilterMs + 'ms, visible: ' + visibleCount + ')');
-		}
 }
 
 function prepareConversationsTableSearch() {
@@ -839,13 +913,10 @@ function prepareConversationsTableSearch() {
 				const $searchInput = $form.find('input[name="s"]').first();
 				$searchInput.attr('autocomplete', 'on');
 				if ($searchInput.length && !$searchInput.val()) {
-						try {
-								const savedSearch = String(globalThis.localStorage?.getItem('gewebConversationsSearch') || '');
-								if (savedSearch) {
-										$searchInput.val(savedSearch);
-								}
-						// eslint-disable-next-line no-empty
-						} catch (_) {}
+						const savedSearch = readLocalStorageString('gewebConversationsSearch');
+						if (savedSearch) {
+								$searchInput.val(savedSearch);
+						}
 				}
 		});
 }
@@ -912,6 +983,20 @@ function replaceReferencedDocumentRow($row, rowHtml) {
 		const $replacement = jQuery(rowHtml);
 		$row.replaceWith($replacement);
 		return $replacement;
+}
+
+function setRefreshButtonState($button, disabled, label) {
+		if (!$button?.length) {
+				return;
+		}
+
+		$button.prop('disabled', !!disabled).text(label);
+}
+
+function renderMarkdownCacheModalMessage($modal, message) {
+		$modal.find('.geweb-ai-markdown-cache-modal-rendered').html('<p>' + escapeHtml(message) + '</p>');
+		$modal.find('.geweb-ai-markdown-cache-modal-body').text(message);
+		$modal.find('.geweb-ai-markdown-cache-modal-html').text(message);
 }
 
 function pollPostIndexStatus($trigger, postId, attempt) {
@@ -1093,9 +1178,10 @@ return;
 		}
 
 		function buildGroupRevisionData(extraData) {
-				return Object.assign({}, extraData || {}, {
+				return {
+						...(extraData || {}),
 						group_revision: getGroupRevision()
-				});
+				};
 		}
 
 		function getRenderedAdminViewRevision(tab) {
@@ -1104,7 +1190,7 @@ return;
 
 		function setRenderedAdminViewRevision(tab, revision) {
 				const normalized = $.trim(String(revision || ''));
-				if (!normalized || !Object.prototype.hasOwnProperty.call(renderedAdminViewRevisions, tab)) {
+				if (!normalized || !Object.hasOwn(renderedAdminViewRevisions, tab)) {
 return;
 }
 
@@ -1258,7 +1344,7 @@ return;
 						const url = new URL(href, globalThis.location?.origin || globalThis.location?.href || undefined);
 						const tab = String(url.searchParams.get('geweb_tab') || 'general').trim();
 						title = titleMap[tab] || title;
-				} catch (_) {
+				} catch (error) {
 						if (href.includes('geweb_tab=documents')) {
 								title = titleMap.documents;
 						} else if (href.includes('geweb_tab=stores')) {
@@ -1410,38 +1496,7 @@ return;
 						const selectedValue = String($select.val() || '');
 						const remoteSelected = String(response.data.selected_model || selectedValue || '');
 						$select.empty();
-
-				const sourceModels = response.data.dropdown_models || response.data.models;
-				$.each(sourceModels, (_, model) => {
-						const value = String(model || '');
-						if (!value) {
-return;
-}
-						const statusEntry = response?.data?.model_statuses?.[value];
-						const isFailedModel = statusEntry && String(statusEntry.status || '') === 'failed';
-						const option = new Option(value, value, false, value === remoteSelected);
-						option.setAttribute('data-model-status', isFailedModel ? 'failed' : 'ok');
-						if (isFailedModel) {
-								option.style.color = '#b32d2e';
-						}
-						$select.append(option);
-				});
-
-				if (remoteSelected && $select.find('option[value="' + escapeSelectorAttributeValue(remoteSelected) + '"]').length === 0) {
-						const statusEntry = response?.data?.model_statuses?.[remoteSelected];
-						const isPermanentlyUnavailable = !!(statusEntry && statusEntry.permanent_unavailable);
-						if (!isPermanentlyUnavailable) {
-								const isFailedModel = statusEntry && String(statusEntry.status || '') === 'failed';
-								const option = new Option(remoteSelected, remoteSelected, true, true);
-								option.setAttribute('data-model-status', isFailedModel ? 'failed' : 'ok');
-								if (isFailedModel) {
-										option.style.color = '#b32d2e';
-								}
-								$select.prepend(option);
-						}
-				} else if (remoteSelected) {
-						$select.val(remoteSelected);
-				}
+						populateModelSelectOptions($select, response.data, remoteSelected);
 
 						syncModelSelectTint($select);
 
@@ -1549,38 +1604,7 @@ return;
 						const selectedValue = String($select.val() || '');
 						const remoteSelected = String(response.data.selected_model || selectedValue || '');
 						$select.empty();
-
-						const sourceModels = response.data.dropdown_models || response.data.models;
-						$.each(sourceModels, (_, model) => {
-								const value = String(model || '');
-								if (!value) {
-return;
-}
-								const statusEntry = response?.data?.model_statuses?.[value];
-								const isFailedModel = statusEntry && String(statusEntry.status || '') === 'failed';
-								const option = new Option(value, value, false, value === remoteSelected);
-								option.setAttribute('data-model-status', isFailedModel ? 'failed' : 'ok');
-								if (isFailedModel) {
-										option.style.color = '#b32d2e';
-								}
-								$select.append(option);
-						});
-
-						if (remoteSelected && $select.find('option[value="' + escapeSelectorAttributeValue(remoteSelected) + '"]').length === 0) {
-								const statusEntry = response?.data?.model_statuses?.[remoteSelected];
-								const isPermanentlyUnavailable = !!(statusEntry && statusEntry.permanent_unavailable);
-								if (!isPermanentlyUnavailable) {
-										const isFailedModel = statusEntry && String(statusEntry.status || '') === 'failed';
-										const option = new Option(remoteSelected, remoteSelected, true, true);
-										option.setAttribute('data-model-status', isFailedModel ? 'failed' : 'ok');
-										if (isFailedModel) {
-												option.style.color = '#b32d2e';
-										}
-										$select.prepend(option);
-								}
-						} else if (remoteSelected) {
-								$select.val(remoteSelected);
-						}
+						populateModelSelectOptions($select, response.data, remoteSelected);
 
 						syncModelSelectTint($select);
 						if ($status.length) {
@@ -2001,8 +2025,7 @@ $(document).on('submit', '.geweb-gemini-stores-table-form', () => {
 		});
 
 		$(document).on('input', '.geweb-referenced-documents-table-form input[name="s"]', function() {
-			const input = this;
-			const $form = jQuery(input).closest('.geweb-referenced-documents-table-form');
+			const $form = jQuery(this).closest('.geweb-referenced-documents-table-form');
 			if (!$form.length) {
 				return;
 			}
@@ -2011,11 +2034,7 @@ $(document).on('submit', '.geweb-gemini-stores-table-form', () => {
 
 			globalThis.clearTimeout(referencedDocumentsFilterTimer);
 			referencedDocumentsFilterTimer = globalThis.setTimeout(() => {
-				try {
-					globalThis.localStorage?.setItem('gewebReferencedDocumentsSearch', String(input.value || ''));
-				// eslint-disable-next-line no-empty
-				} catch (_) {}
-
+				writeLocalStorageString('gewebReferencedDocumentsSearch', this.value);
 				applyReferencedDocumentsFilters($form);
 			}, 350);
 		});
@@ -2041,22 +2060,18 @@ $(document).on('submit', '.geweb-gemini-stores-table-form', () => {
 		});
 
 		$(document).on('input', '.geweb-conversations-table-form input[name="s"]', function() {
-				const input = this;
-				const form = input.form;
+				const form = this.form;
 				if (!form) {
 						return;
 				}
 
 				globalThis.clearTimeout(conversationsFilterTimer);
 				conversationsFilterTimer = globalThis.setTimeout(() => {
-						try {
-								globalThis.localStorage?.setItem('gewebConversationsSearch', String(input.value || ''));
-						// eslint-disable-next-line no-empty
-						} catch (_) {}
+						writeLocalStorageString('gewebConversationsSearch', this.value);
 
 						suppressBeforeUnloadWarning = true;
 						showAdminLoadingOverlay('Loading Chats…');
-						form.requestSubmit ? form.requestSubmit() : form.submit();
+						submitFormWithFallback(form);
 				}, 350);
 		});
 
@@ -2065,21 +2080,17 @@ $(document).on('submit', '.geweb-gemini-stores-table-form', () => {
 						return;
 				}
 
-				const input = this;
-				const form = input.form;
+				const form = this.form;
 				if (!form) {
 						return;
 				}
 
 				event.preventDefault();
 				globalThis.clearTimeout(conversationsFilterTimer);
-				try {
-						globalThis.localStorage?.setItem('gewebConversationsSearch', String(input.value || ''));
-				// eslint-disable-next-line no-empty
-				} catch (_) {}
+				writeLocalStorageString('gewebConversationsSearch', this.value);
 				suppressBeforeUnloadWarning = true;
 				showAdminLoadingOverlay('Loading Chats…');
-				form.requestSubmit ? form.requestSubmit() : form.submit();
+				submitFormWithFallback(form);
 		});
 
 		$('#geweb_ai_search_preserve_data_on_uninstall').on('change', function() {
@@ -2328,12 +2339,10 @@ return;
 						}
 				}).done((response) => {
 						if (!response?.success) {
-								const message = response?.data?.message || 'Could not load Markdown cache.';
-								$modal.find('.geweb-ai-markdown-cache-modal-rendered').html('<p>' + escapeHtml(message) + '</p>');
-								$modal.find('.geweb-ai-markdown-cache-modal-body').text(message);
-								$modal.find('.geweb-ai-markdown-cache-modal-html').text(message);
-								return;
-						}
+									const message = response?.data?.message || 'Could not load Markdown cache.';
+									renderMarkdownCacheModalMessage($modal, message);
+									return;
+							}
 
 						const title = String(response?.data?.title || '').trim();
 						const filename = String(response?.data?.filename || '').trim();
@@ -2358,11 +2367,9 @@ return;
 						$modal.find('.geweb-ai-markdown-cache-modal-body').text(markdown);
 						$modal.find('.geweb-ai-markdown-cache-modal-html').text(renderedHtml);
 				}).fail((xhr) => {
-						const message = xhr?.responseJSON?.data?.message || 'Could not load Markdown cache.';
-						$modal.find('.geweb-ai-markdown-cache-modal-rendered').html('<p>' + escapeHtml(message) + '</p>');
-						$modal.find('.geweb-ai-markdown-cache-modal-body').text(message);
-						$modal.find('.geweb-ai-markdown-cache-modal-html').text(message);
-				});
+							const message = xhr?.responseJSON?.data?.message || 'Could not load Markdown cache.';
+							renderMarkdownCacheModalMessage($modal, message);
+					});
 		});
 
 		$(document).on('click', '.geweb-ai-markdown-cache-mode', function(event) {
@@ -2434,7 +2441,7 @@ subtitleParts.push(timestamp);
 
 				if (status === 'failed' || status === 'timeout') {
 						$modal.find('.geweb-ai-model-test-details-response-label').text('Error Message');
-						$modal.find('.geweb-ai-model-test-details-response').text(message ? message : 'No stored error message.');
+						$modal.find('.geweb-ai-model-test-details-response').text(message || 'No stored error message.');
 				} else {
 						$modal.find('.geweb-ai-model-test-details-response-label').text('Answer');
 						$modal.find('.geweb-ai-model-test-details-response').text(response ? '"' + response + '"' : 'No stored test answer.');
@@ -2635,10 +2642,8 @@ return;
 
 						$container.html(response.data.html).attr('data-needs-refresh', '0');
 						prepareReferencedDocumentsTableHeaders();
-						const suffix = typeof response.data.count === 'number'
-								? ' (' + response.data.count + ' documents)'
-								: '';
-						$status.text('Last refreshed: ' + (response.data.refreshed_at || 'just now') + suffix);
+							const suffix = buildCountSuffix(response.data.count, 'document', 'documents');
+							$status.text('Last refreshed: ' + (response.data.refreshed_at || 'just now') + suffix);
 						if (!normalizedOptions.keepOverlay) {
 								hideAdminLoadingOverlay();
 						}
@@ -2655,9 +2660,8 @@ return;
 				});
 		}
 
-		function refreshSelectedGeminiStoreDocuments(storeName, storeLabel, preloadJobId, options) {
-				const normalizedOptions = options || {};
-				const $panel = $('#geweb-gemini-store-documents-panel');
+			function refreshSelectedGeminiStoreDocuments(storeName, storeLabel, preloadJobId) {
+					const $panel = $('#geweb-gemini-store-documents-panel');
 				const $container = $('#geweb-gemini-store-documents-container');
 				const $status = $('#geweb-gemini-store-documents-status');
 				const $error = $('#geweb-gemini-store-documents-error');
@@ -2695,30 +2699,30 @@ return;
 								$status.text(message);
 								$error.text(message).show();
 								$container.html('<p>Could not load uploaded items.</p>');
-								$button.prop('disabled', false).text('Refresh List');
-								$storesRefreshButton.prop('disabled', false).text('Refresh List');
-								isRefreshingGeminiStoreDocuments = false;
-								return;
-						}
+									setRefreshButtonState($button, false, 'Refresh List');
+									setRefreshButtonState($storesRefreshButton, false, 'Refresh List');
+									isRefreshingGeminiStoreDocuments = false;
+									return;
+							}
 
 						$container.html(response.data.html);
 						applyGeminiStoreDocumentsBrowserState();
 						$title.text(response.data.store_label || storeLabel || storeName);
-						$status.text((response.data.message || 'Uploaded items refreshed.') + (typeof response.data.count === 'number' ? ' (' + response.data.count + ' items)' : ''));
+							$status.text((response.data.message || 'Uploaded items refreshed.') + buildCountSuffix(response.data.count, 'item', 'items'));
 						$error.hide().text('');
-						$button.prop('disabled', false).text('Refresh List');
-						$storesRefreshButton.prop('disabled', false).text('Refresh List');
-						isRefreshingGeminiStoreDocuments = false;
-				}).fail((xhr) => {
-						const message = xhr?.responseJSON?.data?.message || 'Could not refresh uploaded items.';
-						$status.text(message);
-						$error.text(message).show();
-						$container.html('<p>Could not load uploaded items.</p>');
-						$button.prop('disabled', false).text('Refresh List');
-						$storesRefreshButton.prop('disabled', false).text('Refresh List');
-						isRefreshingGeminiStoreDocuments = false;
-				});
-		}
+							setRefreshButtonState($button, false, 'Refresh List');
+							setRefreshButtonState($storesRefreshButton, false, 'Refresh List');
+							isRefreshingGeminiStoreDocuments = false;
+					}).fail((xhr) => {
+							const message = xhr?.responseJSON?.data?.message || 'Could not refresh uploaded items.';
+							$status.text(message);
+							$error.text(message).show();
+							$container.html('<p>Could not load uploaded items.</p>');
+							setRefreshButtonState($button, false, 'Refresh List');
+							setRefreshButtonState($storesRefreshButton, false, 'Refresh List');
+							isRefreshingGeminiStoreDocuments = false;
+					});
+			}
 
 		function refreshConversations(preloadJobId, options) {
 				const normalizedOptions = options || {};
@@ -2756,9 +2760,7 @@ return;
 
 						$container.html(response.data.html);
 						prepareConversationsTableSearch();
-						const suffix = typeof response.data.count === 'number'
-								? ' (' + response.data.count + ' ' + (response.data.count === 1 ? 'chat' : 'chats') + ')'
-								: '';
+							const suffix = buildCountSuffix(response.data.count, 'chat', 'chats');
 						$status.text('Last refreshed: ' + (response.data.refreshed_at || 'just now') + suffix);
 						if (!normalizedOptions.keepOverlay) {
 								hideAdminLoadingOverlay();
@@ -3432,15 +3434,14 @@ return;
 								$selectedButton = $('.geweb-select-gemini-store').first();
 						}
 						if ($selectedButton.length) {
-								refreshSelectedGeminiStoreDocuments(
-										String($selectedButton.data('store-name') || ''),
-										String($selectedButton.data('store-label') || ''),
-										preloadJobId || '',
-										normalizedOptions
-								);
-						} else {
-								$('#geweb-refresh-gemini-store-documents').prop('disabled', false).text('Refresh List');
-						}
+									refreshSelectedGeminiStoreDocuments(
+											String($selectedButton.data('store-name') || ''),
+											String($selectedButton.data('store-label') || ''),
+											preloadJobId || ''
+									);
+							} else {
+									setRefreshButtonState($('#geweb-refresh-gemini-store-documents'), false, 'Refresh List');
+							}
 						if (!normalizedOptions.keepOverlay) {
 								hideAdminLoadingOverlay();
 						}

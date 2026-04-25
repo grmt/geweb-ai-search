@@ -908,7 +908,7 @@
 }
 .geweb-ai-source-list {
     border-collapse: separate;
-    border-spacing: 0 4px;
+    border-spacing: 0 1px;
     width: 100%;
     table-layout: fixed;
 }
@@ -926,69 +926,47 @@
     border-radius: 0;
 }
 .geweb-ai-source-item-cell {
-    padding: 6px 4px;
+    padding: 3px 3px;
     vertical-align: middle;
 }
 .geweb-ai-source-item-cell--checkbox {
-    width: 24px;
+    width: 20px;
     white-space: nowrap;
-    padding-left: 2px;
-    padding-right: 2px;
+    padding-left: 1px;
+    padding-right: 1px;
     text-align: center;
 }
 .geweb-ai-source-item-cell--number {
-    width: 24px;
+    width: 18px;
     white-space: nowrap;
     padding-left: 0;
-    padding-right: 2px;
+    padding-right: 1px;
     text-align: center;
 }
 .geweb-ai-source-item-cell--icon {
     width: 20px;
     white-space: nowrap;
     padding-left: 0;
-    padding-right: 2px;
+    padding-right: 1px;
     text-align: center;
-}
-.geweb-ai-source-item-cell--size {
-    width: 58px;
-    white-space: nowrap;
-    padding-left: 2px;
-    padding-right: 4px;
-    text-align: right;
-}
-.geweb-ai-source-item-cell--page {
-    width: 44px;
-    white-space: nowrap;
-    padding-left: 2px;
-    padding-right: 4px;
-    text-align: right;
 }
 .geweb-ai-source-item-cell--path {
     width: auto;
-    padding-left: 4px;
+    padding-left: 3px;
     padding-right: 6px;
 }
 .geweb-ai-source-item-number {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 100%;
-    min-height: 16px;
+    width: 14px;
+    min-width: 14px;
+    min-height: 14px;
     color: #64748b;
     font-size: 11px;
     line-height: 1;
     font-weight: 600;
     text-align: center;
-}
-.geweb-ai-source-size,
-.geweb-ai-source-page-id {
-    color: #64748b;
-    font-size: 11px;
-    line-height: 1.2;
-}
-.geweb-ai-source-size {
-    font-variant-numeric: tabular-nums;
 }
 .geweb-ai-source-item-header .geweb-ai-source-toggle {
     display: inline-flex;
@@ -1017,18 +995,88 @@
     word-break: break-word;
     overflow-wrap: anywhere;
 }
+.geweb-ai-source-path-link {
+    display: inline;
+    color: #1d4ed8;
+    text-decoration: underline;
+    text-decoration-color: rgba(37, 99, 235, 0.45);
+    text-underline-offset: 0.14em;
+}
+.geweb-ai-source-meta {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.geweb-ai-source-meta-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: #475569;
+    cursor: pointer;
+    box-shadow: none;
+}
+.geweb-ai-source-meta-toggle:hover,
+.geweb-ai-source-meta-toggle:focus {
+    color: #1d4ed8;
+    outline: none;
+}
+.geweb-ai-source-link-icon {
+    font-size: 12px;
+    line-height: 1;
+}
+.geweb-ai-source-meta-tooltip {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 50%;
+    z-index: 15;
+    display: none;
+    min-width: 132px;
+    max-width: 220px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: #0f172a;
+    color: #f8fafc;
+    box-shadow: 0 12px 24px rgba(15, 23, 42, 0.2);
+    transform: translateX(-50%);
+}
+.geweb-ai-source-meta:hover .geweb-ai-source-meta-tooltip,
+.geweb-ai-source-meta:focus-within .geweb-ai-source-meta-tooltip,
+.geweb-ai-source-meta.is-open .geweb-ai-source-meta-tooltip {
+    display: block;
+}
+.geweb-ai-source-meta-tooltip-row + .geweb-ai-source-meta-tooltip-row {
+    margin-top: 4px;
+}
+.geweb-ai-source-meta-tooltip-label {
+    color: rgba(226, 232, 240, 0.8);
+    font-size: 11px;
+    font-weight: 600;
+    margin-right: 4px;
+}
+.geweb-ai-source-meta-tooltip-value {
+    color: #f8fafc;
+    font-size: 11px;
+    font-weight: 600;
+}
 .geweb-ai-source-detail-row {
     display: none;
 }
 .geweb-ai-source-detail-cell {
-    padding: 0 0 10px;
+    padding: 0 0 6px;
     background: transparent;
     border: 0;
 }
 .geweb-ai-source-details {
     display: block;
     margin-top: 0;
-    padding: 2px 10px 0 10px;
+    padding: 1px 10px 0 10px;
 }
 .geweb-ai-source-details-header {
     display: flex;
@@ -1101,11 +1149,9 @@
 .geweb-ai-source-link {
     display: block;
     width: 100%;
-    padding: 10px 12px;
-    text-decoration: underline;
-    text-decoration-color: rgba(37, 99, 235, 0.45);
-    text-underline-offset: 0.14em;
-    color: #1d4ed8;
+    padding: 8px 10px;
+    text-decoration: none;
+    color: #334155;
     background: #fff;
     border: 1px solid rgba(0, 0, 0, 0.08);
     border-radius: 10px;
@@ -1122,26 +1168,31 @@
     border-color: rgba(0, 0, 0, 0.28);
     box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
     color: #1e3a8a;
-    text-decoration-color: rgba(30, 58, 138, 0.6);
 }
 .geweb-ai-source-item.is-active .geweb-ai-source-toggle {
     background: #f8fafc;
 }
 .geweb-ai-source-link-label {
-    color: inherit;
     cursor: pointer;
 }
 .geweb-ai-source-link-label:hover,
 .geweb-ai-source-link-label:focus {
     text-decoration: underline;
+    text-decoration-color: rgba(30, 58, 138, 0.6);
 }
 .geweb-ai-source-filter-toggle {
-    justify-content: flex-start;
+    display: inline-flex;
     min-width: 14px;
+    width: 14px;
+    height: 14px;
     border-radius: 0;
     color: #475569;
-    align-self: center;
+    align-items: center;
+    justify-content: center;
     margin-right: 0;
+    line-height: 1;
+    vertical-align: middle;
+    transform: translateY(1px);
 }
 .geweb-ai-source-filter-toggle:hover,
 .geweb-ai-source-filter-toggle:focus {
@@ -1152,6 +1203,7 @@
 }
 .geweb-ai-source-filter-checkbox {
     margin: 0;
+    display: block;
     accent-color: auto;
     width: 14px;
     height: 14px;
@@ -1162,7 +1214,7 @@
 }
 .geweb-ai-source-snippet {
     display: block;
-    padding: 10px 12px;
+    padding: 8px 10px;
     border-radius: 10px;
     background: rgba(248, 250, 252, 0.95);
     border: 1px solid rgba(203, 213, 225, 0.8);
@@ -1358,6 +1410,9 @@
     line-height: 20px;
 }
 @media only screen and (max-width: 767px) {
+    .geweb-ai-source-item-cell--icon {
+        width: 20px;
+    }
     .geweb-ai-source-link {
         padding: 6px 0;
         border: 0;
@@ -1387,6 +1442,10 @@
     }
     .geweb-ai-source-filter-toolbar {
         padding: 8px 10px;
+    }
+    .geweb-ai-source-meta-tooltip {
+        left: 0;
+        transform: none;
     }
     .geweb-ai-source-filter-reset {
         font-size: 0;

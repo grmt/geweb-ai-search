@@ -388,10 +388,10 @@ class FrontendAiWorkspaceController {
                                 <button type="button" class="geweb-ai-icon-button" data-geweb-temp-settings-toggle="1" aria-label="<?php echo esc_attr__('Settings', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Change model or prompt', 'geweb-ai-search'); ?>">
                                     <span aria-hidden="true" class="geweb-ai-icon">⚙</span>
                                 </button>
-                                <button type="button" class="geweb-ai-icon-button geweb-ai-secondary-button geweb-ai-secondary-button--icon-only geweb-ai-question-history-button" id="geweb-ai-question-history-prev" aria-label="<?php echo esc_attr__('Previous question', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Previous question', 'geweb-ai-search'); ?>" disabled>
+                                <button type="button" class="geweb-ai-icon-button geweb-ai-question-history-button" id="geweb-ai-question-history-prev" aria-label="<?php echo esc_attr__('Previous question', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Previous question', 'geweb-ai-search'); ?>" disabled>
                                     <span aria-hidden="true">↑</span>
                                 </button>
-                                <button type="button" class="geweb-ai-icon-button geweb-ai-secondary-button geweb-ai-secondary-button--icon-only geweb-ai-question-history-button" id="geweb-ai-question-history-next" aria-label="<?php echo esc_attr__('Next question', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Next question', 'geweb-ai-search'); ?>" disabled>
+                                <button type="button" class="geweb-ai-icon-button geweb-ai-question-history-button" id="geweb-ai-question-history-next" aria-label="<?php echo esc_attr__('Next question', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Next question', 'geweb-ai-search'); ?>" disabled>
                                     <span aria-hidden="true">↓</span>
                                 </button>
                             </div>

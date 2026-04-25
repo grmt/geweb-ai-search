@@ -1682,9 +1682,8 @@
 			const firstMatchPhrase = contexts[0]?.matchPhrase || '';
 			const sourceKind = this.getSourceKind(source);
 			const sourceIcon = this.getSourceIcon(source);
-			const pageIdLabel = this.getSourcePageIdLabel(url, source.url);
 			const pathLabel = this.getSourcePathLabel(url, source.url);
-			const sizeLabel = this.getSourceSizeLabel(url, source.url);
+			const tooltipEntries = this.getSourceMetaEntries(url, source.url);
 			const $item = $('<tr class="geweb-ai-source-item"></tr>');
 			$item.data('sourceInfo', source);
 			const $itemHeader = $item;
@@ -1694,29 +1693,14 @@
 				? this.isSourceTemporarilyExcluded(source)
 				: false;
 
-			const normalizedUrl = this.normalizeManagedSourceUrl(url);
-			const resolvedRef = normalizedUrl ? this.sourceReferenceCache?.[normalizedUrl] : null;
-			const pageId = resolvedRef ? this.extractManagedSourcePostId(resolvedRef.url) : this.extractManagedSourcePostId(url);
-			let titleWithPageId = sourceLabel;
-
-			if (sourceKind === 'document') {
-				const parsed = safeParseUrl(url);
-				if (parsed) {
-					const pathname = parsed.pathname;
-					const documentName = pathname.split('/').filter(Boolean).pop() || '';
-					if (documentName) {
-						titleWithPageId = `${documentName} (page ${pageId})`;
-					}
-				}
-			} else if (pageId > 0) {
-				titleWithPageId = `${sourceLabel} (page ${pageId})`;
-			}
-
 			$toggle.attr('aria-label', `Show context for ${sourceLabel}`);
 			$toggle.attr('title', `Show context for ${sourceLabel}`);
-			const $pathLinkLabel = $('<span class="geweb-ai-source-link-label geweb-ai-source-path"></span>').text(pathLabel || title);
-			$toggle.append($pathLinkLabel);
-			const $icon = $('<span class="geweb-ai-source-link-icon" aria-hidden="true"></span>').text(sourceIcon);
+			const $pathLabel = $('<span class="geweb-ai-source-path"></span>');
+			const $pathLinkLabel = $('<span class="geweb-ai-source-link-label geweb-ai-source-path-link"></span>')
+				.text(pathLabel || title);
+			$pathLabel.append($pathLinkLabel);
+			$toggle.append($pathLabel);
+			const $icon = this.buildSourceMetaTooltip(sourceIcon, tooltipEntries, sourceLabel);
 			this.applySourceItemAttributes($item, { footnote, title, snippet, previewSnippet, url, contexts });
 			$item.attr('data-source-kind', sourceKind);
 			this.bindSourceToggleInteractions($toggle, $item, url, firstMatchPhrase, $itemHeader, $number, $pathLinkLabel);
@@ -1727,20 +1711,10 @@
 			$item.append($('<td class="geweb-ai-source-item-cell geweb-ai-source-item-cell--checkbox"></td>').append(this.buildSourceExcludeToggle(source, sourceLabel, isExcluded)));
 			$item.append($('<td class="geweb-ai-source-item-cell geweb-ai-source-item-cell--number"></td>').append($number));
 			$item.append($('<td class="geweb-ai-source-item-cell geweb-ai-source-item-cell--icon"></td>').append($icon));
-			$item.append(
-				$('<td class="geweb-ai-source-item-cell geweb-ai-source-item-cell--size"></td>').append(
-					$('<div class="geweb-ai-source-size"></div>').text(sizeLabel)
-				)
-			);
-			$item.append(
-				$('<td class="geweb-ai-source-item-cell geweb-ai-source-item-cell--page"></td>').append(
-					$('<div class="geweb-ai-source-page-id"></div>').text(pageIdLabel)
-				)
-			);
 			$item.append($('<td class="geweb-ai-source-item-cell geweb-ai-source-item-cell--path"></td>').append($toggle));
 
 			const $detailsRow = $('<tr class="geweb-ai-source-detail-row" aria-hidden="true"></tr>');
-			const $detailsCell = $('<td class="geweb-ai-source-detail-cell" colspan="6"></td>');
+			const $detailsCell = $('<td class="geweb-ai-source-detail-cell" colspan="4"></td>');
 			const $details = this.buildSourceDetails(url, contexts, previewSnippet, referenceHint, $item, footnote);
 			if ($details.children().length) {
 				$detailsCell.append($details);
@@ -1810,6 +1784,185 @@
 			}
 
 			return '';
+		},
+
+		getSourceMetaEntries(url, originalUrl = '') {
+			const entries = [];
+			const sizeLabel = this.getSourceSizeLabel(url, originalUrl);
+			const pageIdLabel = this.getSourcePageIdLabel(url, originalUrl);
+
+			if (sizeLabel) {
+				entries.push({
+					label: t('sourceMetaSize', 'Size'),
+					value: sizeLabel,
+				});
+			}
+
+			if (pageIdLabel) {
+				entries.push({
+					label: t('sourceMetaPageId', 'Page ID'),
+					value: pageIdLabel,
+				});
+			}
+
+			return entries;
+		},
+
+		buildSourceMetaTooltip(sourceIcon, entries, sourceLabel) {
+			const tooltipText = entries.length
+				? entries.map((entry) => `${entry.label}: ${entry.value}`).join(' • ')
+				: t('sourceMetaUnavailable', 'No extra source details available');
+			const buttonLabel = entries.length
+				? `${t('sourceMetaDetails', 'Source details')}: ${tooltipText}.`
+				: `${t('sourceMetaDetails', 'Source details')}: ${tooltipText}`;
+			const $wrapper = $('<div class="geweb-ai-source-meta"></div>');
+			const $button = $('<button type="button" class="geweb-ai-source-meta-toggle"></button>');
+			const $icon = $('<span class="geweb-ai-source-link-icon" aria-hidden="true"></span>').text(sourceIcon);
+			const $tooltip = $('<div class="geweb-ai-source-meta-tooltip" role="tooltip" aria-hidden="true"></div>');
+
+			$button.attr('aria-label', `${buttonLabel} ${sourceLabel}`.trim());
+			$button.attr('title', '');
+			$button.append($icon);
+
+			if (entries.length) {
+				entries.forEach((entry) => {
+					const $row = $('<div class="geweb-ai-source-meta-tooltip-row"></div>');
+					$row.append(
+						$('<span class="geweb-ai-source-meta-tooltip-label"></span>').text(`${entry.label}:`)
+					);
+					$row.append(
+						$('<span class="geweb-ai-source-meta-tooltip-value"></span>').text(entry.value)
+					);
+					$tooltip.append($row);
+				});
+			} else {
+				$tooltip.append(
+					$('<div class="geweb-ai-source-meta-tooltip-row"></div>').text(tooltipText)
+				);
+			}
+
+			this.bindSourceMetaTooltipInteractions($wrapper, $button, $tooltip);
+			$wrapper.append($button, $tooltip);
+			return $wrapper;
+		},
+
+		closeAllSourceMetaTooltips() {
+			$('.geweb-ai-source-meta.is-open').each((_, element) => {
+				const $wrapper = $(element);
+				$wrapper.removeClass('is-open');
+				$wrapper.find('.geweb-ai-source-meta-toggle').attr('aria-expanded', 'false');
+				$wrapper.find('.geweb-ai-source-meta-tooltip').attr('aria-hidden', 'true');
+			});
+		},
+
+		bindSourceMetaTooltipInteractions($wrapper, $button, $tooltip) {
+			if (!$wrapper?.length || !$button?.length || !$tooltip?.length) {
+				return;
+			}
+
+			const hasFinePointer = () => (
+				!!globalThis.matchMedia &&
+				globalThis.matchMedia('(hover: hover) and (pointer: fine)').matches
+			);
+
+			const closeTooltip = () => {
+				$wrapper.removeClass('is-open');
+				$button.attr('aria-expanded', 'false');
+				$tooltip.attr('aria-hidden', 'true');
+			};
+
+			const openTooltip = () => {
+				this.closeAllSourceMetaTooltips();
+				$wrapper.addClass('is-open');
+				$button.attr('aria-expanded', 'true');
+				$tooltip.attr('aria-hidden', 'false');
+			};
+
+			$button.attr('aria-expanded', 'false');
+
+			$button.on('click', (event) => {
+				event.preventDefault();
+				event.stopPropagation();
+				if ($wrapper.hasClass('is-open')) {
+					closeTooltip();
+					return;
+				}
+
+				openTooltip();
+			});
+
+			$button.on('focus', () => {
+				if (!hasFinePointer()) {
+					return;
+				}
+
+				openTooltip();
+			});
+
+			$wrapper.on('mouseleave', () => {
+				if (!hasFinePointer()) {
+					return;
+				}
+
+				closeTooltip();
+			});
+
+			$wrapper.on('focusout', (event) => {
+				const nextFocused = event.relatedTarget;
+				if (nextFocused && $wrapper.get(0)?.contains(nextFocused)) {
+					return;
+				}
+
+				closeTooltip();
+			});
+
+			if (!this._boundSourceMetaTooltipDocumentClick) {
+				$(document).on('click.geweb-ai-source-meta-tooltip', (event) => {
+					if ($(event.target).closest('.geweb-ai-source-meta').length) {
+						return;
+					}
+
+					this.closeAllSourceMetaTooltips();
+				});
+				this._boundSourceMetaTooltipDocumentClick = true;
+			}
+		},
+
+		refreshSourceMetaTooltip($item, url, originalUrl = '') {
+			if (!$item?.length) {
+				return;
+			}
+
+			const entries = this.getSourceMetaEntries(url, originalUrl);
+			const $button = $item.find('.geweb-ai-source-meta-toggle').first();
+			const $tooltip = $item.find('.geweb-ai-source-meta-tooltip').first();
+			const sourceLabel = String($item.attr('data-source-title') || '').trim();
+			const tooltipText = entries.length
+				? entries.map((entry) => `${entry.label}: ${entry.value}`).join(' • ')
+				: t('sourceMetaUnavailable', 'No extra source details available');
+
+			if ($button.length) {
+				$button.attr('aria-label', `${t('sourceMetaDetails', 'Source details')}: ${tooltipText}. ${sourceLabel}`.trim());
+			}
+
+			if (!$tooltip.length) {
+				return;
+			}
+
+			$tooltip.empty();
+			if (entries.length) {
+				entries.forEach((entry) => {
+					const $row = $('<div class="geweb-ai-source-meta-tooltip-row"></div>');
+					$row.append($('<span class="geweb-ai-source-meta-tooltip-label"></span>').text(`${entry.label}:`));
+					$row.append($('<span class="geweb-ai-source-meta-tooltip-value"></span>').text(entry.value));
+					$tooltip.append($row);
+				});
+				return;
+			}
+
+			$tooltip.append(
+				$('<div class="geweb-ai-source-meta-tooltip-row"></div>').text(tooltipText)
+			);
 		},
 
 		buildSourceExcludeToggle(source, sourceLabel, isExcluded) {
@@ -1922,7 +2075,7 @@
 			}
 			if ($itemHeader?.length) {
 				$itemHeader.on('click', (event) => {
-					if ($(event.target).closest('.geweb-ai-source-filter-toggle, .geweb-ai-source-link-label, .geweb-ai-source-item-number').length) {
+					if ($(event.target).closest('.geweb-ai-source-filter-toggle, .geweb-ai-source-link-label, .geweb-ai-source-item-number, .geweb-ai-source-meta-toggle, .geweb-ai-source-meta-tooltip').length) {
 						return;
 					}
 
@@ -2213,8 +2366,7 @@
 
 			$item.attr('data-source-url-original', originalUrl);
 			$item.attr('data-source-url', nextUrl);
-			$item.find('.geweb-ai-source-size').first().text(this.getSourceSizeLabel(nextUrl, originalUrl));
-			$item.find('.geweb-ai-source-page-id').first().text(this.getSourcePageIdLabel(nextUrl, originalUrl));
+			this.refreshSourceMetaTooltip($item, nextUrl, originalUrl);
 			$item.find('.geweb-ai-source-link-label').first().text(this.getSourcePathLabel(nextUrl, originalUrl));
 		},
 

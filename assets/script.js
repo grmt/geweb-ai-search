@@ -2,6 +2,8 @@ const INLINE_MATCH_MAX_WINDOW = 16;
 const INLINE_MATCH_MIN_WINDOW_THRESHOLD = 8;
 const SNIPPET_CONTEXT_BEFORE = 90;
 const SNIPPET_CONTEXT_AFTER = 110;
+const PAGE_MATCH_MAX_OBSERVE_MS = 15000;
+const PAGE_MATCH_MUTATION_DEBOUNCE_MS = 250;
 
 function getAiSearchConfig() {
 	return globalThis.geweb_aisearch ?? {};
@@ -160,6 +162,30 @@ function showPageMatchPreview(snippetHtml) {
 	document.body.appendChild(preview);
 }
 
+function logPageMatchDebug(stage, details = {}) {
+	const hasMatchParam = (() => {
+		try {
+			const currentUrl = globalThis.location?.href || '';
+			if (!currentUrl) {
+				return false;
+			}
+
+			return String(new URL(currentUrl, globalThis.location?.origin).searchParams.get('geweb_ai_match') || '').trim() !== '';
+		} catch (_) {
+			return false;
+		}
+	})();
+
+	if (!hasMatchParam) {
+		return;
+	}
+
+	console.debug('geweb-ai-search: page match', {
+		stage,
+		...details,
+	});
+}
+
 function selectPageMatchRange(range) {
 	if (!range || typeof globalThis.getSelection !== 'function') {
 		return;
@@ -246,11 +272,16 @@ function centerInlineMatchInAncestor(element, ancestor, behavior = 'smooth') {
 
 function scrollInlineMatchIntoView(element) {
 	if (!element) {
+		logPageMatchDebug('scroll-skip-missing-element');
 		return;
 	}
 
 	const scrollingElement = document.scrollingElement || document.documentElement || document.body;
 	const attempts = [0, 180, 700];
+	logPageMatchDebug('scroll-start', {
+		attempts,
+		text: String(element.textContent || '').trim().slice(0, 160),
+	});
 
 	attempts.forEach((delay, index) => {
 		globalThis.setTimeout(() => {
@@ -281,6 +312,14 @@ function scrollInlineMatchIntoView(element) {
 					behavior,
 				});
 			}
+
+			logPageMatchDebug('scroll-attempt', {
+				delay,
+				behavior,
+				rectTop: rect.top,
+				rectBottom: rect.bottom,
+				viewportHeight,
+			});
 		}, delay);
 	});
 }
@@ -288,10 +327,12 @@ function scrollInlineMatchIntoView(element) {
 function highlightFirstPageMatch() {
 	const currentUrl = globalThis.location?.href;
 	if (!currentUrl) {
+		logPageMatchDebug('skip-missing-url');
 		return false;
 	}
 
 	if (document.querySelector('mark.geweb-ai-inline-match')) {
+		logPageMatchDebug('skip-existing-highlight');
 		return true;
 	}
 
@@ -301,14 +342,23 @@ function highlightFirstPageMatch() {
 		phrase = String(url.searchParams.get('geweb_ai_match') || '').trim();
 	} catch (error) {
 		console.debug('Reading geweb_ai_match failed.', error);
+		logPageMatchDebug('skip-invalid-url', {
+			message: error instanceof Error ? error.message : String(error || ''),
+		});
 		return false;
 	}
 
 	if (!phrase) {
+		logPageMatchDebug('skip-missing-phrase');
 		return false;
 	}
 
 	const candidates = buildInlineMatchCandidates(phrase);
+	logPageMatchDebug('start', {
+		phrase,
+		candidateCount: candidates.length,
+		candidates: candidates.slice(0, 8),
+	});
 
 	const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
 		acceptNode(node) {
@@ -327,8 +377,10 @@ function highlightFirstPageMatch() {
 
 	let matchedNode = null;
 	let matchedPhrase = '';
+	let inspectedNodeCount = 0;
 
 	while ((matchedNode = walker.nextNode())) {
+		inspectedNodeCount += 1;
 		const rawText = String(matchedNode.textContent || '');
 		const normalizedText = normalizeInlineMatchText(rawText);
 		matchedPhrase = candidates.find((candidate) => normalizedText.includes(normalizeInlineMatchText(candidate))) || '';
@@ -336,8 +388,19 @@ function highlightFirstPageMatch() {
 			continue;
 		}
 
+		logPageMatchDebug('candidate-found', {
+			inspectedNodeCount,
+			matchedPhrase,
+			rawTextSample: rawText.trim().slice(0, 220),
+			parentTag: matchedNode.parentElement?.tagName || '',
+		});
+
 		const matchRange = findInlineMatchRangeInText(rawText, matchedPhrase);
 		if (!matchRange) {
+			logPageMatchDebug('candidate-range-miss', {
+				matchedPhrase,
+				rawTextSample: rawText.trim().slice(0, 220),
+			});
 			continue;
 		}
 
@@ -345,41 +408,141 @@ function highlightFirstPageMatch() {
 		range.setStart(matchedNode, matchRange.start);
 		range.setEnd(matchedNode, matchRange.start + matchRange.length);
 		if (!isInlineMatchRangeVisible(range)) {
+			logPageMatchDebug('candidate-invisible-range', {
+				matchedPhrase,
+				rangeStart: matchRange.start,
+				rangeLength: matchRange.length,
+				rectCount: Array.from(range.getClientRects()).length,
+				parentTag: matchedNode.parentElement?.tagName || '',
+			});
 			continue;
 		}
 		selectPageMatchRange(range);
 		const highlight = document.createElement('mark');
 		highlight.className = 'geweb-ai-inline-match';
 		range.surroundContents(highlight);
+		logPageMatchDebug('highlight-inserted', {
+			matchedPhrase,
+			highlightedText: String(highlight.textContent || '').trim(),
+			parentTag: highlight.parentElement?.tagName || '',
+		});
 		showPageMatchPreview(buildPageMatchSnippet(rawText, matchRange.start, matchRange.length));
 		scrollInlineMatchIntoView(highlight);
+		logPageMatchDebug('success', {
+			inspectedNodeCount,
+			matchedPhrase,
+		});
 		return true;
 	}
 
+	logPageMatchDebug('no-match-found', {
+		phrase,
+		inspectedNodeCount,
+	});
 	return false;
 }
 
 function scheduleHighlightFirstPageMatch() {
 	if (globalThis.__gewebAiPageMatchScheduled) {
+		logPageMatchDebug('schedule-skip-already-running');
 		return;
 	}
 
+	const stopScheduledHighlighting = () => {
+		if (globalThis.__gewebAiPageMatchMutationTimer) {
+			globalThis.clearTimeout(globalThis.__gewebAiPageMatchMutationTimer);
+			globalThis.__gewebAiPageMatchMutationTimer = null;
+		}
+		if (globalThis.__gewebAiPageMatchObserver) {
+			globalThis.__gewebAiPageMatchObserver.disconnect();
+			globalThis.__gewebAiPageMatchObserver = null;
+		}
+		globalThis.__gewebAiPageMatchScheduled = false;
+		logPageMatchDebug('schedule-stop');
+	};
+
+	const attemptHighlight = () => {
+		logPageMatchDebug('attempt-start');
+		if (highlightFirstPageMatch()) {
+			stopScheduledHighlighting();
+			return true;
+		}
+
+		logPageMatchDebug('attempt-no-match-yet');
+		return false;
+	};
+
 	globalThis.__gewebAiPageMatchScheduled = true;
-	const attemptDelays = [0, 200, 800, 1800, 3200];
+	const attemptDelays = [0, 200, 800, 1800, 3200, 5000, 8000, 12000];
+	logPageMatchDebug('schedule-start', {
+		attemptDelays,
+	});
 	attemptDelays.forEach((delay) => {
 		globalThis.setTimeout(() => {
-			if (highlightFirstPageMatch()) {
-				globalThis.__gewebAiPageMatchScheduled = false;
+			if (!globalThis.__gewebAiPageMatchScheduled) {
+				return;
 			}
+
+			logPageMatchDebug('scheduled-attempt', {
+				delay,
+			});
+			attemptHighlight();
 		}, delay);
 	});
 
+	if (typeof MutationObserver === 'function' && document.body) {
+		const observerStartedAt = Date.now();
+		globalThis.__gewebAiPageMatchObserver = new MutationObserver(() => {
+			if (!globalThis.__gewebAiPageMatchScheduled) {
+				return;
+			}
+
+			if ((Date.now() - observerStartedAt) > PAGE_MATCH_MAX_OBSERVE_MS) {
+				logPageMatchDebug('observer-timeout', {
+					elapsedMs: Date.now() - observerStartedAt,
+				});
+				stopScheduledHighlighting();
+				return;
+			}
+
+			if (globalThis.__gewebAiPageMatchMutationTimer) {
+				globalThis.clearTimeout(globalThis.__gewebAiPageMatchMutationTimer);
+			}
+
+			globalThis.__gewebAiPageMatchMutationTimer = globalThis.setTimeout(() => {
+				globalThis.__gewebAiPageMatchMutationTimer = null;
+				logPageMatchDebug('observer-attempt', {
+					elapsedMs: Date.now() - observerStartedAt,
+				});
+				attemptHighlight();
+			}, PAGE_MATCH_MUTATION_DEBOUNCE_MS);
+		});
+
+		globalThis.__gewebAiPageMatchObserver.observe(document.body, {
+			childList: true,
+			subtree: true,
+			characterData: true,
+		});
+		logPageMatchDebug('observer-start');
+	}
+
 	globalThis.addEventListener('load', () => {
 		globalThis.setTimeout(() => {
-			highlightFirstPageMatch();
-			globalThis.__gewebAiPageMatchScheduled = false;
+			if (!globalThis.__gewebAiPageMatchScheduled) {
+				return;
+			}
+
+			logPageMatchDebug('load-attempt');
+			attemptHighlight();
 		}, 250);
 	}, { once: true });
+
+	globalThis.setTimeout(() => {
+		if (globalThis.__gewebAiPageMatchScheduled) {
+			logPageMatchDebug('schedule-hard-timeout');
+			stopScheduledHighlighting();
+		}
+	}, PAGE_MATCH_MAX_OBSERVE_MS + 1000);
 }
 
 jQuery(document).ready(($) => {
@@ -1752,6 +1915,7 @@ return;
 		    $messageInfoPopoverAnchor: null,
 		    historyNavIndex: -1,
 		    draftMessage: '',
+		    answerBoxWasNearBottom: true,
 
 		    init() {
 		        if (!this.$textarea.length) {
@@ -1811,6 +1975,33 @@ return;
 		                return;
 		            }
 		            this.setAnswerBoxScrollActive(false);
+		        });
+		        this.$answerBox.off('scroll.gewebAnswerStick').on('scroll.gewebAnswerStick', () => {
+		            this.answerBoxWasNearBottom = this.isAnswerBoxNearBottom(96);
+		        });
+		        if (typeof globalThis.ResizeObserver === 'function' && this.$answerBox.length) {
+		            const answerBoxElement = this.$answerBox.get(0);
+		            const observer = new globalThis.ResizeObserver(() => {
+		                if (!this.answerBoxWasNearBottom) {
+		                    return;
+		                }
+
+		                globalThis.requestAnimationFrame(() => {
+		                    this.scrollToBottom();
+		                });
+		            });
+		            if (answerBoxElement) {
+		                observer.observe(answerBoxElement);
+		            }
+		        }
+		        globalThis.addEventListener('resize', () => {
+		            if (!this.answerBoxWasNearBottom) {
+		                return;
+		            }
+
+		            globalThis.requestAnimationFrame(() => {
+		                this.scrollToBottom();
+		            });
 		        });
 		        this.$answerBox.closest('.geweb-ai-main-panel').off('click.gewebPaneActivate').on('click.gewebPaneActivate', (event) => {
 		            if (GewebModal.isMobileWorkspaceNavigationActive()) {
@@ -2920,6 +3111,7 @@ return;
 	        const rawMessage = String(message || '').trim();
 	        const fallback = String(fallbackMessage || '').trim() || t('answerError', 'Error: Unable to get response');
 	        const normalized = rawMessage || fallback;
+	        const formatted = this.formatAiErrorDisplayMessage(normalized);
 	        const lowerMessage = normalized.toLowerCase();
 	        const isTimeout = lowerMessage.includes('timed out')
 	            || lowerMessage.includes('curl error 28')
@@ -2942,7 +3134,7 @@ return;
 	        return [
 	            '<div class="geweb-ai-error-card geweb-ai-error-card--generic">',
 	            `<div class="geweb-ai-error-card-title">${this.escapeHtml(t('requestFailedTitle', 'The AI request did not complete'))}</div>`,
-	            `<div class="geweb-ai-error-card-body geweb-ai-error-card-body--preserve">${this.escapeHtml(normalized)}</div>`,
+	            `<div class="geweb-ai-error-card-body geweb-ai-error-card-body--preserve">${this.sanitizeAnswer(this.escapeHtml(formatted).replaceAll(/\n/g, '<br>'))}</div>`,
 	            '</div>',
 	        ].join('');
 	    },
@@ -3663,6 +3855,22 @@ return;
 		            this.bindFootnoteInteractions($content);
 		        }
 
+		        if ($thoughtProcess) {
+		            const $thoughtsButton = $('<button type="button" class="geweb-ai-icon-button geweb-ai-message-thoughts-toggle"></button>');
+		            $thoughtsButton.attr('aria-expanded', 'false');
+		            $thoughtsButton.attr('aria-label', t('showThoughtProcess', 'Show thought process'));
+		            $thoughtsButton.append($('<span class="geweb-ai-message-action-icon geweb-ai-message-action-icon--thoughts" aria-hidden="true">✦</span>'));
+		            $thoughtsButton.append($('<span class="geweb-ai-message-action-label"></span>').text(t('showThoughtProcess', 'Show thought process')));
+		            $thoughtsButton.on('click', () => {
+		                this.toggleThoughtProcess($container);
+		                const expanded = $thoughtProcess.hasClass('is-open');
+		                $thoughtsButton.attr('aria-expanded', expanded ? 'true' : 'false');
+		                $thoughtsButton.attr('aria-label', expanded ? t('hideThoughtProcess', 'Hide thought process') : t('showThoughtProcess', 'Show thought process'));
+		                $thoughtsButton.find('.geweb-ai-message-action-label').text(expanded ? t('hideThoughtProcess', 'Hide thought process') : t('showThoughtProcess', 'Show thought process'));
+		            });
+		            $messageActions.append($thoughtsButton);
+		        }
+
 		        if ($details) {
 		            $details.find('.geweb-ai-response-details-close').on('click', (event) => {
 		                event.preventDefault();
@@ -3893,22 +4101,11 @@ return;
 
 	        const supportsThoughtProcess = options?.supportsThoughtProcess === true;
 	        const label = String(options?.label || '').trim() || t('thinking', 'Thinking...');
-	        const thoughts = Array.isArray(options?.thoughts)
-	            ? options.thoughts.map((item) => String(item || '').trim()).filter(Boolean)
-	            : [];
 
 	        $loader.empty();
-	        if (!supportsThoughtProcess) {
-	            $loader.text(label);
-	            return;
-	        }
-
-	        const $block = $('<section class="geweb-ai-thought-process geweb-ai-thought-process--loading"></section>');
-	        $block.append($('<div class="geweb-ai-thought-process-title"></div>').text(t('thoughtProcess', 'Denkproces')));
-	        if (thoughts.length) {
-	            $block.append($('<div class="geweb-ai-thought-process-body"></div>').html(this.renderThoughtProcessHtml(thoughts)));
-	        }
-	        $loader.append($block);
+	        $loader
+	            .toggleClass('geweb-ai-thinking-indicator--thoughts', supportsThoughtProcess)
+	            .text(label);
 	    },
 
 	    updateLoaderFromJobProgress($loader, progress) {
@@ -3916,6 +4113,7 @@ return;
 	            return;
 	        }
 
+	        const shouldStickToBottom = this.isAnswerBoxNearBottom(96);
 	        const supportsThoughtProcess = progress.supports_thoughts === true || $loader.hasClass('geweb-ai-thinking-indicator--thoughts');
 	        const label = String(progress.label || '').trim()
 	            || (supportsThoughtProcess
@@ -3928,6 +4126,10 @@ return;
 	            label: label,
 	            thoughts: thoughts,
 	        });
+
+	        if (shouldStickToBottom) {
+	            this.scrollToBottom();
+	        }
 	    },
 
 	    getThoughtProcessItems(responseMeta) {
@@ -4004,10 +4206,21 @@ return;
 	            return null;
 	        }
 
-	        const $block = $('<section class="geweb-ai-thought-process" aria-live="polite"></section>');
+	        const $block = $('<section class="geweb-ai-thought-process" aria-live="polite" hidden></section>');
 	        $block.append($('<div class="geweb-ai-thought-process-title"></div>').text(t('thoughtProcess', 'Thought process')));
 	        $block.append($('<div class="geweb-ai-thought-process-body"></div>').html(this.renderThoughtProcessHtml(thoughts)));
 	        return $block;
+	    },
+
+	    toggleThoughtProcess($container) {
+	        const $thoughtProcess = $container?.find('.geweb-ai-thought-process').first();
+	        if (!$thoughtProcess?.length) {
+	            return;
+	        }
+
+	        const isOpen = $thoughtProcess.hasClass('is-open');
+	        $thoughtProcess.toggleClass('is-open', !isOpen);
+	        $thoughtProcess.prop('hidden', isOpen);
 	    },
 
 	    buildCopyButton(text) {
@@ -4304,6 +4517,17 @@ return;
 
 	    scrollToBottom() {
 	        this.$answerBox[0].scrollTop = this.$answerBox[0].scrollHeight;
+	        this.answerBoxWasNearBottom = true;
+	    },
+
+	    isAnswerBoxNearBottom(threshold = 64) {
+	        const element = this.$answerBox?.get(0);
+	        if (!element) {
+	            return false;
+	        }
+
+	        const remaining = element.scrollHeight - (element.scrollTop + element.clientHeight);
+	        return remaining <= Math.max(0, Number(threshold) || 0);
 	    },
 
 	    async persistConversation() {
@@ -4507,6 +4731,36 @@ return;
 	        const div = document.createElement('div');
 	        div.textContent = text;
 	        return div.innerHTML;
+	    },
+
+	    decodeHtmlEntities(text) {
+	        const div = document.createElement('div');
+	        div.innerHTML = String(text || '');
+	        return String(div.textContent || div.innerText || '');
+	    },
+
+	    formatAiErrorDisplayMessage(message) {
+	        const decoded = this.decodeHtmlEntities(String(message || ''))
+	            .replaceAll(/\r\n?/g, '\n')
+	            .trim();
+	        if (!decoded) {
+	            return '';
+	        }
+
+	        const structuredMatch = decoded.match(/^(.*?HTTP code\s+\d+\s*:)\s*(\{[\s\S]*\})$/i);
+	        if (!structuredMatch) {
+	            return decoded;
+	        }
+
+	        const summary = String(structuredMatch[1] || '').trim();
+	        const jsonText = String(structuredMatch[2] || '').trim();
+
+	        try {
+	            const parsed = JSON.parse(jsonText);
+	            return `${summary}\n\n${JSON.stringify(parsed, null, 2)}`;
+	        } catch (_) {
+	            return decoded;
+	        }
 	    },
 
 			sanitizeAnswer(html) {
