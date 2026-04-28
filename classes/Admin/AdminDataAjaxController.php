@@ -166,10 +166,7 @@ class AdminDataAjaxController {
             wp_send_json_error(['message' => self::MESSAGE_INSUFFICIENT_PERMISSIONS], 403);
         }
 
-        $fileHash = isset($_POST['file_hash']) ? sanitize_text_field(wp_unslash($_POST['file_hash'])) : '';
-        if ($fileHash === '') {
-            wp_send_json_error(['message' => 'Missing file hash.'], 400);
-        }
+        $fileHash = AdminReferencedDocumentAjaxSupport::requireRequestedFileHash();
 
         $cacheStore = new ReferencedDocumentMarkdownCacheStore();
         $markdown = $cacheStore->getMarkdown($fileHash);
@@ -220,7 +217,7 @@ class AdminDataAjaxController {
             $this->sendConflictResponse($e);
         }
 
-        $fileHash = isset($_POST['file_hash']) ? sanitize_text_field(wp_unslash($_POST['file_hash'])) : '';
+        $fileHash = AdminReferencedDocumentAjaxSupport::getRequestedFileHash();
         $actionName = isset($_POST['document_action']) ? sanitize_key(wp_unslash($_POST['document_action'])) : '';
 
         if ($fileHash === '' || !in_array($actionName, ['upload', 'remove'], true)) {
@@ -242,55 +239,23 @@ class AdminDataAjaxController {
 
         if (!$success) {
             $documentManager->saveReferencedDocumentOperationStatus($fileHash, 'error', 'The document action could not be completed.');
-            $items = $documentStore->getReferencedDocumentOverview(true);
-            $updatedItems = array_values(array_filter($items, static function ($item) use ($fileHash): bool {
-                return is_array($item) && (($item['file_hash'] ?? '') === $fileHash);
-            }));
-            $updatedItem = $updatedItems[0] ?? null;
-            $table = new ReferencedDocumentListTable();
+            $updatedItem = AdminReferencedDocumentAjaxSupport::getUpdatedItem($documentStore, $fileHash);
 
-            wp_send_json_error([
+            wp_send_json_error(array_merge([
                 'message' => 'The document action could not be completed.',
-                'row_exists' => is_array($updatedItem),
-                'row_html' => is_array($updatedItem) ? $table->renderRowHtml($updatedItem) : '',
-                'status_html' => is_array($updatedItem) ? $table->renderStatusCell($updatedItem) : '',
-                'actions_html' => is_array($updatedItem) ? $table->renderActionsCell($updatedItem) : '',
-                'markdown_cache_html' => is_array($updatedItem) ? $table->renderMarkdownCacheCell($updatedItem) : '',
-                'group_revision' => GroupDataRevision::touch(),
-                'cache_state' => (function (): array {
-                    AdminViewRevision::touchFiles();
-                    return AdminViewRevision::ensureCurrentState();
-                })(),
-            ], 500);
+            ], AdminReferencedDocumentAjaxSupport::buildRowPayload($updatedItem, true), AdminReferencedDocumentAjaxSupport::buildRevisionPayload()), 500);
         }
 
         $items = $documentStore->getReferencedDocumentOverview(true);
-        $updatedItems = array_values(array_filter($items, static function ($item) use ($fileHash): bool {
-            return is_array($item) && (($item['file_hash'] ?? '') === $fileHash);
-        }));
-        $updatedItem = $updatedItems[0] ?? null;
+        $updatedItem = AdminReferencedDocumentAjaxSupport::findItemByHash($items, $fileHash);
+        $html = AdminReferencedDocumentAjaxSupport::renderReferencedDocumentsTable($this->adminPageSections);
 
-        $table = new ReferencedDocumentListTable();
-
-        ob_start();
-        $this->adminPageSections->renderReferencedDocumentsTable();
-        $html = ob_get_clean();
-
-        wp_send_json_success([
+        wp_send_json_success(array_merge([
             'html' => $html,
             'refreshed_at' => DateDisplay::formatDateTime(time()),
             'count' => count($items),
             'message' => $actionName === 'upload' ? 'Document uploaded.' : 'Document removed from store.',
-            'row_exists' => is_array($updatedItem),
-            'status_html' => is_array($updatedItem) ? $table->renderStatusCell($updatedItem) : '',
-            'actions_html' => is_array($updatedItem) ? $table->renderActionsCell($updatedItem) : '',
-            'markdown_cache_html' => is_array($updatedItem) ? $table->renderMarkdownCacheCell($updatedItem) : '',
-            'group_revision' => GroupDataRevision::touch(),
-            'cache_state' => (function (): array {
-                AdminViewRevision::touchFiles();
-                return AdminViewRevision::ensureCurrentState();
-            })(),
-        ]);
+        ], AdminReferencedDocumentAjaxSupport::buildRowPayload($updatedItem), AdminReferencedDocumentAjaxSupport::buildRevisionPayload()));
     }
 
     public function ajaxToggleReferencedDocumentExclude(): void {
@@ -310,12 +275,8 @@ class AdminDataAjaxController {
             $this->sendConflictResponse($e);
         }
 
-        $fileHash = isset($_POST['file_hash']) ? sanitize_text_field(wp_unslash($_POST['file_hash'])) : '';
+        $fileHash = AdminReferencedDocumentAjaxSupport::requireRequestedFileHash();
         $exclude = !empty($_POST['exclude']);
-
-        if ($fileHash === '') {
-            wp_send_json_error(['message' => 'Missing file hash.'], 400);
-        }
 
         $documentStore = new DocumentStore();
         $documentManager = new ReferencedDocumentManager($documentStore);
@@ -324,29 +285,11 @@ class AdminDataAjaxController {
             $removed = $documentManager->removeReferencedDocumentByHash($fileHash);
             if (!$removed) {
                 $documentManager->saveReferencedDocumentOperationStatus($fileHash, 'error', 'Could not remove this source from the Gemini store. It is still included.');
-                $items = $documentStore->getReferencedDocumentOverview(true);
-                $updatedItem = null;
-                foreach ($items as $item) {
-                    if (is_array($item) && (($item['file_hash'] ?? '') === $fileHash)) {
-                        $updatedItem = $item;
-                        break;
-                    }
-                }
-                $table = new ReferencedDocumentListTable();
+                $updatedItem = AdminReferencedDocumentAjaxSupport::getUpdatedItem($documentStore, $fileHash);
 
-                wp_send_json_error([
+                wp_send_json_error(array_merge([
                     'message' => 'Could not remove this source from the Gemini store. It is still included.',
-                    'row_exists' => is_array($updatedItem),
-                    'row_html' => is_array($updatedItem) ? $table->renderRowHtml($updatedItem) : '',
-                    'status_html' => is_array($updatedItem) ? $table->renderStatusCell($updatedItem) : '',
-                    'actions_html' => is_array($updatedItem) ? $table->renderActionsCell($updatedItem) : '',
-                    'markdown_cache_html' => is_array($updatedItem) ? $table->renderMarkdownCacheCell($updatedItem) : '',
-                    'group_revision' => GroupDataRevision::touch(),
-                    'cache_state' => (function (): array {
-                        AdminViewRevision::touchFiles();
-                        return AdminViewRevision::ensureCurrentState();
-                    })(),
-                ], 500);
+                ], AdminReferencedDocumentAjaxSupport::buildRowPayload($updatedItem, true), AdminReferencedDocumentAjaxSupport::buildRevisionPayload()), 500);
             }
             $documentManager->saveReferencedDocumentSelectionTarget($fileHash, false);
             $documentManager->saveReferencedDocumentOperationStatus($fileHash, 'excluded');
@@ -355,33 +298,11 @@ class AdminDataAjaxController {
             $documentManager->saveReferencedDocumentOperationStatus($fileHash, 'not_indexed');
         }
 
-        $items = $documentStore->getReferencedDocumentOverview(true);
-        $updatedItem = null;
-        foreach ($items as $item) {
-            if (!is_array($item)) {
-                continue;
-            }
+        $updatedItem = AdminReferencedDocumentAjaxSupport::getUpdatedItem($documentStore, $fileHash);
 
-            if (($item['file_hash'] ?? '') === $fileHash) {
-                $updatedItem = $item;
-                break;
-            }
-        }
-
-        $table = new ReferencedDocumentListTable();
-
-        wp_send_json_success([
+        wp_send_json_success(array_merge([
             'message' => $exclude ? 'Excluded from indexing.' : 'Included for indexing.',
-            'row_exists' => is_array($updatedItem),
-            'status_html' => is_array($updatedItem) ? $table->renderStatusCell($updatedItem) : '',
-            'actions_html' => is_array($updatedItem) ? $table->renderActionsCell($updatedItem) : '',
-            'markdown_cache_html' => is_array($updatedItem) ? $table->renderMarkdownCacheCell($updatedItem) : '',
-            'group_revision' => GroupDataRevision::touch(),
-            'cache_state' => (function (): array {
-                AdminViewRevision::touchFiles();
-                return AdminViewRevision::ensureCurrentState();
-            })(),
-        ]);
+        ], AdminReferencedDocumentAjaxSupport::buildRowPayload($updatedItem), AdminReferencedDocumentAjaxSupport::buildRevisionPayload()));
     }
 
     public function ajaxSetReferencedDocumentImageProcessingMode(): void {
@@ -401,11 +322,8 @@ class AdminDataAjaxController {
             $this->sendConflictResponse($e);
         }
 
-        $fileHash = isset($_POST['file_hash']) ? sanitize_text_field(wp_unslash($_POST['file_hash'])) : '';
+        $fileHash = AdminReferencedDocumentAjaxSupport::requireRequestedFileHash();
         $mode = isset($_POST['mode']) ? sanitize_key(wp_unslash($_POST['mode'])) : ImageOcrService::MODE_NONE;
-        if ($fileHash === '') {
-            wp_send_json_error(['message' => 'Missing file hash.'], 400);
-        }
 
         $documentStore = new DocumentStore();
         $documentManager = new ReferencedDocumentManager($documentStore);
@@ -421,40 +339,13 @@ class AdminDataAjaxController {
             }
         }
 
-        $items = $documentStore->getReferencedDocumentOverview(true);
-        $updatedItem = null;
-        foreach ($items as $item) {
-            if (is_array($item) && (($item['file_hash'] ?? '') === $fileHash)) {
-                $updatedItem = $item;
-                break;
-            }
-        }
+        $updatedItem = AdminReferencedDocumentAjaxSupport::getUpdatedItem($documentStore, $fileHash);
+        $processingSubject = AdminReferencedDocumentAjaxSupport::getProcessingSubject($updatedItem);
+        $message = AdminReferencedDocumentAjaxSupport::buildImageProcessingMessage($mode, $processingSubject, $cacheWarning);
 
-        $table = new ReferencedDocumentListTable();
-        $processingSubject = is_array($updatedItem) && ((string) ($updatedItem['mime_type'] ?? '')) === 'application/pdf'
-            ? 'PDF'
-            : 'image';
-        $message = $mode === ImageOcrService::MODE_DESCRIBE
-            ? ($processingSubject === 'PDF' ? 'PDF description enabled.' : 'Image description enabled.')
-            : ($mode === ImageOcrService::MODE_OCR
-                ? ($processingSubject === 'PDF' ? 'OCR enabled for this PDF.' : 'OCR enabled for this image.')
-                : ($processingSubject === 'PDF' ? 'PDF processing disabled.' : 'Image processing disabled.'));
-        if ($cacheWarning !== '') {
-            $message .= ' Cache could not be generated yet: ' . $cacheWarning;
-        }
-
-        wp_send_json_success([
+        wp_send_json_success(array_merge([
             'message' => $message,
-            'row_exists' => is_array($updatedItem),
-            'actions_html' => is_array($updatedItem) ? $table->renderActionsCell($updatedItem) : '',
-            'pdf_analysis_html' => is_array($updatedItem) ? $table->renderPdfAnalysisCell($updatedItem) : '',
-            'markdown_cache_html' => is_array($updatedItem) ? $table->renderMarkdownCacheCell($updatedItem) : '',
-            'group_revision' => GroupDataRevision::touch(),
-            'cache_state' => (function (): array {
-                AdminViewRevision::touchFiles();
-                return AdminViewRevision::ensureCurrentState();
-            })(),
-        ]);
+        ], AdminReferencedDocumentAjaxSupport::buildImageProcessingRowPayload($updatedItem), AdminReferencedDocumentAjaxSupport::buildRevisionPayload()));
     }
 
     public function ajaxUpdateReferencedDocumentNiceName(): void {
@@ -489,37 +380,20 @@ class AdminDataAjaxController {
         }
 
         $items = $documentStore->getReferencedDocumentOverview(true);
-        $updatedItem = null;
-        foreach ($items as $item) {
-            if (!is_array($item)) {
-                continue;
-            }
-
-            if (($item['file_hash'] ?? '') === $fileHash) {
-                $updatedItem = $item;
-                break;
-            }
-        }
+        $updatedItem = AdminReferencedDocumentAjaxSupport::findItemByHash($items, $fileHash);
 
         $table = new ReferencedDocumentListTable();
 
-        ob_start();
-        $this->adminPageSections->renderReferencedDocumentsTable();
-        $html = ob_get_clean();
+        $html = AdminReferencedDocumentAjaxSupport::renderReferencedDocumentsTable($this->adminPageSections);
 
-        wp_send_json_success([
+        wp_send_json_success(array_merge([
             'html' => $html,
             'refreshed_at' => DateDisplay::formatDateTime(time()),
             'count' => count($items),
             'message' => 'Nice name updated.',
             'row_exists' => is_array($updatedItem),
             'nice_name_html' => is_array($updatedItem) ? $table->renderNiceNameCell($updatedItem) : '',
-            'group_revision' => GroupDataRevision::touch(),
-            'cache_state' => (function (): array {
-                AdminViewRevision::touchFiles();
-                return AdminViewRevision::ensureCurrentState();
-            })(),
-        ]);
+        ], AdminReferencedDocumentAjaxSupport::buildRevisionPayload()));
     }
 
     public function ajaxRemoveReferencedDocumentFromFileList(): void {
@@ -539,10 +413,7 @@ class AdminDataAjaxController {
             $this->sendConflictResponse($e);
         }
 
-        $fileHash = isset($_POST['file_hash']) ? sanitize_text_field(wp_unslash($_POST['file_hash'])) : '';
-        if ($fileHash === '') {
-            wp_send_json_error(['message' => 'Missing file hash.'], 400);
-        }
+        $fileHash = AdminReferencedDocumentAjaxSupport::requireRequestedFileHash();
 
         $documentStore = new DocumentStore();
         $documentManager = new ReferencedDocumentManager($documentStore);
@@ -551,31 +422,15 @@ class AdminDataAjaxController {
             wp_send_json_error(['message' => 'Only unreferenced File List items can be removed from Simple File List here.'], 500);
         }
 
-        $items = $documentStore->getReferencedDocumentOverview(true);
-        $updatedItem = null;
-        foreach ($items as $item) {
-            if (!is_array($item)) {
-                continue;
-            }
-
-            if (($item['file_hash'] ?? '') === $fileHash) {
-                $updatedItem = $item;
-                break;
-            }
-        }
+        $updatedItem = AdminReferencedDocumentAjaxSupport::getUpdatedItem($documentStore, $fileHash);
 
         $table = new ReferencedDocumentListTable();
 
-        wp_send_json_success([
+        wp_send_json_success(array_merge([
             'message' => 'Removed from Simple File List.',
             'row_exists' => is_array($updatedItem),
             'row_html' => is_array($updatedItem) ? $table->renderRowHtml($updatedItem) : '',
-            'group_revision' => GroupDataRevision::touch(),
-            'cache_state' => (function (): array {
-                AdminViewRevision::touchFiles();
-                return AdminViewRevision::ensureCurrentState();
-            })(),
-        ]);
+        ], AdminReferencedDocumentAjaxSupport::buildRevisionPayload()));
     }
 
     public function ajaxRefreshGeminiStores(): void {
@@ -597,8 +452,8 @@ class AdminDataAjaxController {
         if (!$provider instanceof Gemini) {
             error_log('geweb-ai-search: ajaxRefreshGeminiStores aborted because current provider is not Gemini.');
             if ($preloadJobId !== '') {
-                AdminPreloadProgress::markFailed($preloadJobId, 'stores', 'Gemini provider is not active');
-                AdminPreloadProgress::markFailed($preloadJobId, 'store_documents', 'Gemini provider is not active');
+                AdminPreloadProgress::markFailed($preloadJobId, 'stores', AdminGeminiStoreAjaxSupport::MESSAGE_GEMINI_PROVIDER_INACTIVE);
+                AdminPreloadProgress::markFailed($preloadJobId, 'store_documents', AdminGeminiStoreAjaxSupport::MESSAGE_GEMINI_PROVIDER_INACTIVE);
             }
             wp_send_json_error(['message' => 'Gemini store overview is only available for the Gemini provider.'], 400);
         }
@@ -615,7 +470,7 @@ class AdminDataAjaxController {
         error_log('geweb-ai-search: ajaxRefreshGeminiStores requesting ' . ($shouldForceRefresh ? 'fresh' : 'cached') . ' store overview.');
         $items = $provider->getStoreOverview($shouldForceRefresh);
         error_log('geweb-ai-search: ajaxRefreshGeminiStores received ' . count($items) . ' store(s).');
-        $this->syncLocalIndexedStatusWithActiveStore($items);
+        AdminGeminiStoreAjaxSupport::syncLocalIndexedStatusWithActiveStore($items);
         error_log('geweb-ai-search: ajaxRefreshGeminiStores finished local sync.');
 
         ob_start();
@@ -667,22 +522,8 @@ class AdminDataAjaxController {
             AdminPreloadProgress::markRunning($preloadJobId, 'store_documents', 'Refreshing store documents');
         }
 
-        $provider = ProviderFactory::make();
-        if (!$provider instanceof Gemini) {
-            if ($preloadJobId !== '') {
-                AdminPreloadProgress::markFailed($preloadJobId, 'store_documents', 'Gemini provider is not active');
-            }
-            wp_send_json_error(['message' => 'Gemini store overview is only available for the Gemini provider.'], 400);
-        }
-
-        $storeName = isset($_POST['store_name']) ? sanitize_text_field(wp_unslash($_POST['store_name'])) : '';
-        if ($storeName === '') {
-            if ($preloadJobId !== '') {
-                AdminPreloadProgress::markFailed($preloadJobId, 'store_documents', 'Missing store name');
-            }
-            wp_send_json_error(['message' => 'Missing store name.'], 400);
-        }
-
+        $provider = AdminGeminiStoreAjaxSupport::requireGeminiProviderForStoreDocuments($preloadJobId);
+        $storeName = AdminGeminiStoreAjaxSupport::requireStoreNameFromRequest($preloadJobId);
         $storeLabel = isset($_POST['store_label']) ? sanitize_text_field(wp_unslash($_POST['store_label'])) : $storeName;
 
         $forceRefresh = !empty($_POST['force_refresh']);
@@ -694,24 +535,8 @@ class AdminDataAjaxController {
             $forceRefresh = false;
         }
 
-        try {
-            $documents = $provider->getStoreDocuments($storeName, $forceRefresh);
-        } catch (\Exception $e) {
-            if ($preloadJobId !== '') {
-                AdminPreloadProgress::markFailed($preloadJobId, 'store_documents', $e->getMessage());
-            }
-            wp_send_json_error(['message' => $e->getMessage()], 500);
-        }
-
-        try {
-            $html = GeminiStoreListTable::renderDocumentList($documents);
-        } catch (\Throwable $e) {
-            error_log('geweb-ai-search: ajaxRefreshGeminiStoreDocuments render failed for ' . $storeName . ': ' . $e->getMessage());
-            if ($preloadJobId !== '') {
-                AdminPreloadProgress::markFailed($preloadJobId, 'store_documents', 'Could not render uploaded items list');
-            }
-            wp_send_json_error(['message' => 'Could not render the uploaded items list. Check the WordPress error log for details.'], 500);
-        }
+        $documents = AdminGeminiStoreAjaxSupport::getStoreDocumentsOrSendError($provider, $storeName, $forceRefresh, $preloadJobId);
+        $html = AdminGeminiStoreAjaxSupport::renderDocumentListOrSendError($documents, $storeName, $preloadJobId);
 
         if ($preloadJobId !== '') {
             AdminPreloadProgress::markCompleted($preloadJobId, 'store_documents', 'Store documents loaded');
@@ -764,7 +589,7 @@ class AdminDataAjaxController {
         }
 
         if ($wasActiveStore) {
-            $this->clearLocalIndexTracking();
+            AdminGeminiStoreAjaxSupport::clearLocalIndexTracking();
         }
 
         $items = $provider->getStoreOverview(true);
@@ -798,7 +623,7 @@ class AdminDataAjaxController {
         $provider = ProviderFactory::make();
         $connectionStatus = $provider->getConnectionStatus();
         $requestedForceRefresh = !empty($_POST['force_refresh']);
-        $shouldForceRefresh = $requestedForceRefresh || $this->shouldForceModelRefresh($connectionStatus);
+        $shouldForceRefresh = $requestedForceRefresh || AdminModelAjaxSupport::shouldForceModelRefresh($connectionStatus, self::MODEL_REFRESH_COOLDOWN_SECONDS);
         $models = $provider->getModels($shouldForceRefresh);
         $selectedModel = $provider->getModel();
         $modelStatuses = $provider->getModelStatuses();
@@ -879,159 +704,20 @@ class AdminDataAjaxController {
                 'pro_latest' => self::OFFICIAL_GEMINI_PRO_LATEST,
             ],
             'workingModelHints' => [
-                'flash' => $this->pickLatestWorkingModelByFamily($models, $modelStatuses, 'flash'),
-                'pro' => $this->pickLatestWorkingModelByFamily($models, $modelStatuses, 'pro'),
+                'flash' => AdminModelAjaxSupport::pickLatestWorkingModelByFamily($models, $modelStatuses, 'flash'),
+                'pro' => AdminModelAjaxSupport::pickLatestWorkingModelByFamily($models, $modelStatuses, 'pro'),
             ],
             'latestModelHints' => [
-                'flash' => $this->pickLatestModelByFamily($models, 'flash'),
-                'pro' => $this->pickLatestModelByFamily($models, 'pro'),
-                'stable_flash' => $this->pickLatestModelByFamily($models, 'flash', true),
-                'stable_pro' => $this->pickLatestModelByFamily($models, 'pro', true),
+                'flash' => AdminModelAjaxSupport::pickLatestModelByFamily($models, 'flash'),
+                'pro' => AdminModelAjaxSupport::pickLatestModelByFamily($models, 'pro'),
+                'stable_flash' => AdminModelAjaxSupport::pickLatestModelByFamily($models, 'flash', true),
+                'stable_pro' => AdminModelAjaxSupport::pickLatestModelByFamily($models, 'pro', true),
             ],
             'statusColorError' => '#d63638',
             'statusColorSuccess' => '#46b450',
         ]);
 
         return (string) ob_get_clean();
-    }
-
-    /**
-     * @param array<int,string> $models
-     * @param array<string,mixed> $modelStatuses
-     */
-    private function pickLatestWorkingModelByFamily(array $models, array $modelStatuses, string $family): string {
-        $workingModels = [];
-        foreach ($models as $model) {
-            $status = $modelStatuses[(string) $model] ?? null;
-            if (!is_array($status) || (($status['status'] ?? '') !== 'ok')) {
-                continue;
-            }
-
-            $resolvedModel = trim((string) ($status['resolved_model'] ?? ''));
-            $workingModels[] = $resolvedModel !== '' ? $resolvedModel : (string) $model;
-        }
-
-        $workingModels = array_values(array_unique(array_filter($workingModels, static function ($model): bool {
-            return is_string($model) && trim($model) !== '';
-        })));
-
-        return $this->pickLatestModelByFamily($workingModels, $family);
-    }
-
-    /**
-     * @param array<int,string> $models
-     */
-    private function pickLatestModelByFamily(array $models, string $family, bool $stableOnly = false): string {
-        $bestModel = '';
-        $bestRank = null;
-
-        foreach ($models as $model) {
-            $normalizedModel = strtolower(trim((string) $model));
-            if ($normalizedModel === '') {
-                continue;
-            }
-
-            if ($family === 'flash') {
-                if (!str_contains($normalizedModel, '-flash') || str_contains($normalizedModel, 'flash-lite')) {
-                    continue;
-                }
-            } elseif ($family === 'pro') {
-                if (!str_contains($normalizedModel, '-pro')) {
-                    continue;
-                }
-            } else {
-                continue;
-            }
-
-            if ($stableOnly && str_contains($normalizedModel, 'preview')) {
-                continue;
-            }
-
-            $rank = $this->rankModelName($normalizedModel);
-            if ($bestRank === null || $rank > $bestRank) {
-                $bestRank = $rank;
-                $bestModel = (string) $model;
-            }
-        }
-
-        return $bestModel;
-    }
-
-    /**
-     * @return array<int,int>
-     */
-    private function rankModelName(string $model): array {
-        $major = 0;
-        $minor = 0;
-        if (preg_match('/gemini-(\d+)(?:\.(\d+))?/i', $model, $matches)) {
-            $major = isset($matches[1]) ? (int) $matches[1] : 0;
-            $minor = isset($matches[2]) ? (int) $matches[2] : 0;
-        }
-
-        return [
-            $major,
-            $minor,
-            str_contains($model, 'preview') ? 0 : 1,
-            str_contains($model, 'lite') ? 0 : 1,
-        ];
-    }
-
-    /**
-     * @param array<string,mixed> $connectionStatus
-     */
-    private function shouldForceModelRefresh(array $connectionStatus): bool {
-        $timestamp = isset($connectionStatus['timestamp']) ? (int) $connectionStatus['timestamp'] : 0;
-        if ($timestamp <= 0) {
-            return true;
-        }
-
-        return (current_time('timestamp') - $timestamp) >= self::MODEL_REFRESH_COOLDOWN_SECONDS;
-    }
-
-    /**
-     * @param array<int,array<string,mixed>> $storeItems
-     * @return void
-     */
-    private function syncLocalIndexedStatusWithActiveStore(array $storeItems): void {
-        $activeStoreFound = false;
-        $activeStoreDocuments = [];
-        foreach ($storeItems as $storeItem) {
-            if (!is_array($storeItem) || empty($storeItem['is_active'])) {
-                continue;
-            }
-
-            $activeStoreFound = true;
-            if (!isset($storeItem['documents']) || !is_array($storeItem['documents'])) {
-                break;
-            }
-
-            foreach ($storeItem['documents'] as $document) {
-                if (!is_array($document) || empty($document['name'])) {
-                    continue;
-                }
-
-                $activeStoreDocuments[] = (string) $document['name'];
-            }
-
-            break;
-        }
-
-        if (!$activeStoreFound) {
-            return;
-        }
-
-        PostIndexManager::reconcileIndexedPostsWithRemoteDocuments($activeStoreDocuments);
-
-        $documentStore = new DocumentStore();
-        $documentManager = new ReferencedDocumentManager($documentStore);
-        $documentManager->reconcileSelectionTargetsWithRemote($activeStoreDocuments);
-        $documentManager->reconcileTrackedDocumentsWithRemote($activeStoreDocuments);
-    }
-
-    private function clearLocalIndexTracking(): void {
-        $documentManager = new ReferencedDocumentManager();
-        $documentManager->clearAllTrackedDocuments();
-        PostIndexManager::clearAllIndexedState();
     }
 
     private function sendConflictResponse(OptimisticLockException $e): void {

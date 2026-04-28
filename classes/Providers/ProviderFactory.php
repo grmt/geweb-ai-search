@@ -15,13 +15,7 @@ class ProviderFactory {
      * @return AIProviderInterface
      */
     public static function make(): AIProviderInterface {
-        $provider = self::getConfiguredProviderKey();
-
-        switch ($provider) {
-            case self::PROVIDER_GEMINI:
-            default:
-                return new Gemini();
-        }
+        return new Gemini();
     }
 
     /**

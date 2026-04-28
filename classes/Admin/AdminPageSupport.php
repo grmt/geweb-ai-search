@@ -103,21 +103,22 @@ class AdminPageSupport {
      * @return array{color:string,label:string,message:string}
      */
     public static function buildApiStatusDisplay($connectionStatus, string $successColor, string $neutralColor, string $errorColor): array {
+        $display = ['color' => '', 'label' => '', 'message' => ''];
         if (!is_array($connectionStatus) || empty($connectionStatus['status'])) {
-            return ['color' => '', 'label' => '', 'message' => ''];
+            return $display;
         }
 
         $apiStatus = (string) $connectionStatus['status'];
         $apiMessage = isset($connectionStatus['message']) ? (string) $connectionStatus['message'] : '';
         if ($apiStatus === 'ok') {
-            return ['color' => $successColor, 'label' => 'Valid', 'message' => $apiMessage];
+            $display = ['color' => $successColor, 'label' => 'Valid', 'message' => $apiMessage];
+        } elseif ($apiStatus === 'missing') {
+            $display = ['color' => $neutralColor, 'label' => 'Missing', 'message' => $apiMessage];
+        } else {
+            $display = ['color' => $errorColor, 'label' => 'Invalid', 'message' => $apiMessage];
         }
 
-        if ($apiStatus === 'missing') {
-            return ['color' => $neutralColor, 'label' => 'Missing', 'message' => $apiMessage];
-        }
-
-        return ['color' => $errorColor, 'label' => 'Invalid', 'message' => $apiMessage];
+        return $display;
     }
 
     /**

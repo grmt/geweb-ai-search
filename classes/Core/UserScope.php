@@ -21,31 +21,20 @@ class UserScope {
     }
 
     public static function getCurrentGroupScopeKey(): string {
+        $scopeKey = 'group_authenticated';
         if (is_string(self::$groupScopeOverride) && self::$groupScopeOverride !== '') {
-            return self::$groupScopeOverride;
+            $scopeKey = self::$groupScopeOverride;
+        } elseif (!is_user_logged_in()) {
+            $scopeKey = 'group_guests';
+        } elseif (current_user_can('manage_options')) {
+            $scopeKey = 'group_administrators';
+        } elseif (current_user_can('edit_others_posts') || current_user_can('publish_posts') || current_user_can('edit_posts')) {
+            $scopeKey = 'group_content_creators';
+        } elseif (current_user_can('read')) {
+            $scopeKey = 'group_readers';
         }
 
-        if (!is_user_logged_in()) {
-            return 'group_guests';
-        }
-
-        if (current_user_can('manage_options')) {
-            return 'group_administrators';
-        }
-
-        if (current_user_can('edit_others_posts') || current_user_can('publish_posts') || current_user_can('edit_posts')) {
-            return 'group_content_creators';
-        }
-
-        if (current_user_can('read')) {
-            return 'group_readers';
-        }
-
-        return 'group_authenticated';
-    }
-
-    public static function getCurrentScopeKey(): string {
-        return self::getCurrentGroupScopeKey();
+        return $scopeKey;
     }
 
     public static function getOptionNameForScope(string $baseOptionName, string $scopeKey): string {
@@ -58,10 +47,6 @@ class UserScope {
 
     public static function getGroupScopedOptionName(string $baseOptionName): string {
         return self::buildScopedOptionName($baseOptionName, self::getCurrentGroupScopeKey());
-    }
-
-    public static function getScopedOptionName(string $baseOptionName): string {
-        return self::getGroupScopedOptionName($baseOptionName);
     }
 
     /**
@@ -81,14 +66,6 @@ class UserScope {
     }
 
     /**
-     * @param mixed $default
-     * @return mixed
-     */
-    public static function getScopedOption(string $baseOptionName, $default = false) {
-        return self::getGroupScopedOption($baseOptionName, $default);
-    }
-
-    /**
      * @param mixed $value
      * @return bool
      */
@@ -104,14 +81,6 @@ class UserScope {
         return update_option(self::getGroupScopedOptionName($baseOptionName), $value, $autoload);
     }
 
-    /**
-     * @param mixed $value
-     * @return bool
-     */
-    public static function updateScopedOption(string $baseOptionName, $value, bool $autoload = false): bool {
-        return self::updateGroupScopedOption($baseOptionName, $value, $autoload);
-    }
-
     public static function deleteUserScopedOption(string $baseOptionName): void {
         delete_option(self::getUserScopedOptionName($baseOptionName));
     }
@@ -120,16 +89,8 @@ class UserScope {
         delete_option(self::getGroupScopedOptionName($baseOptionName));
     }
 
-    public static function deleteScopedOption(string $baseOptionName): void {
-        self::deleteGroupScopedOption($baseOptionName);
-    }
-
     public static function getCurrentUserScopeStorageKey(): string {
         return self::getUserScopedOptionName('scope');
-    }
-
-    public static function getCurrentScopeStorageKey(): string {
-        return self::getCurrentUserScopeStorageKey();
     }
 
     /**
@@ -153,7 +114,7 @@ class UserScope {
     }
 
     private static function buildScopedOptionName(string $baseOptionName, string $scopeKey): string {
-        $suffix = preg_replace('/[^a-zA-Z0-9_]/', '_', $scopeKey);
+        $suffix = preg_replace('/\W/', '_', $scopeKey);
         $suffix = is_string($suffix) ? trim($suffix, '_') : '';
 
         return $suffix !== ''
@@ -162,61 +123,6 @@ class UserScope {
     }
 
     private static function getGuestScopeId(): string {
-        $cookieValue = self::readGuestScopeCookie();
-        if ($cookieValue !== '') {
-            return $cookieValue;
-        }
-
-        $generated = wp_generate_password(20, false, false);
-        $generated = preg_replace('/[^a-zA-Z0-9_-]/', '', (string) $generated);
-        $generated = is_string($generated) ? $generated : '';
-        if ($generated === '') {
-            $generated = md5(uniqid('geweb_ai_scope', true));
-        }
-
-        self::persistGuestScopeCookie($generated);
-
-        return $generated;
-    }
-
-    private static function readGuestScopeCookie(): string {
-        $rawValue = isset($_COOKIE[self::COOKIE_NAME]) ? wp_unslash($_COOKIE[self::COOKIE_NAME]) : '';
-        $value = is_string($rawValue) ? trim($rawValue) : '';
-        if ($value === '' || !preg_match('/^[a-zA-Z0-9_-]{8,64}$/', $value)) {
-            return '';
-        }
-
-        return $value;
-    }
-
-    private static function persistGuestScopeCookie(string $value): void {
-        if ($value === '') {
-            return;
-        }
-
-        $_COOKIE[self::COOKIE_NAME] = $value;
-
-        if (headers_sent()) {
-            return;
-        }
-
-        $expires = time() + self::COOKIE_TTL;
-        $path = defined('COOKIEPATH') && is_string(COOKIEPATH) && COOKIEPATH !== '' ? COOKIEPATH : '/';
-        $domain = defined('COOKIE_DOMAIN') ? (string) COOKIE_DOMAIN : '';
-        $secure = is_ssl();
-
-        if (PHP_VERSION_ID >= 70300) {
-            setcookie(self::COOKIE_NAME, $value, [
-                'expires' => $expires,
-                'path' => $path,
-                'domain' => $domain,
-                'secure' => $secure,
-                'httponly' => false,
-                'samesite' => 'Lax',
-            ]);
-            return;
-        }
-
-        setcookie(self::COOKIE_NAME, $value, $expires, $path . '; samesite=Lax', $domain, $secure, false);
+        return UserScopeGuestCookie::resolve(self::COOKIE_NAME, self::COOKIE_TTL);
     }
 }

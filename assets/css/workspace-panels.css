@@ -427,6 +427,8 @@
     flex-direction: column !important;
     justify-content: center !important;
     gap: 8px !important;
+    width: 100%;
+    margin: 0 0 8px;
 }
 .geweb-ai-workspace.is-right-collapsed .geweb-ai-sources-panel .geweb-ai-panel-heading {
     display: flex !important;
@@ -460,10 +462,6 @@
     order: 1 !important;
     visibility: visible !important;
     opacity: 1 !important;
-}
-.geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-overview-header {
-    width: 100%;
-    margin: 0 0 8px;
 }
 .geweb-ai-workspace.is-left-collapsed .geweb-ai-sidebar .geweb-ai-panel-heading {
     width: 100%;
@@ -509,7 +507,7 @@
     min-width: auto !important;
     max-width: none !important;
     height: auto !important;
-    min-height: auto !important;
+    min-height: 0 !important;
     max-height: none !important;
     padding: 0 !important;
     background: transparent !important;
@@ -796,6 +794,13 @@
 }
 .geweb-ai-overview-role {
     display: none;
+    font-size: 11px;
+    line-height: 16px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #646970;
+    margin-bottom: 4px;
 }
 .geweb-ai-overview-timestamp {
     font-size: 12px;
@@ -832,15 +837,6 @@
     border-color: rgba(0, 0, 0, 0.28);
     box-shadow: 0 8px 18px rgba(0, 0, 0, 0.06);
 }
-.geweb-ai-overview-role {
-    font-size: 11px;
-    line-height: 16px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: #646970;
-    margin-bottom: 4px;
-}
 .geweb-ai-overview-preview {
     font-size: 13px;
     line-height: 18px;
@@ -872,6 +868,10 @@
     list-style: none;
     margin: 0;
     padding: 0;
+    border-collapse: separate;
+    border-spacing: 0 1px;
+    width: 100%;
+    table-layout: fixed;
 }
 .geweb-ai-overview-list,
 .geweb-ai-source-list {
@@ -906,35 +906,25 @@
 .geweb-ai-source-filter-reset {
     flex: 0 0 auto;
 }
-.geweb-ai-source-list {
-    border-collapse: separate;
-    border-spacing: 0 1px;
-    width: 100%;
-    table-layout: fixed;
-}
 .geweb-ai-source-list tbody tr {
     position: relative;
 }
 .geweb-ai-source-item-cell {
     background: transparent;
     border: 0;
-}
-.geweb-ai-source-item-cell--checkbox {
-    border-radius: 0;
-}
-.geweb-ai-source-item-cell--toggle {
-    border-radius: 0;
-}
-.geweb-ai-source-item-cell {
     padding: 3px 3px;
     vertical-align: middle;
 }
 .geweb-ai-source-item-cell--checkbox {
+    border-radius: 0;
     width: 20px;
     white-space: nowrap;
     padding-left: 1px;
     padding-right: 1px;
     text-align: center;
+}
+.geweb-ai-source-item-cell--toggle {
+    border-radius: 0;
 }
 .geweb-ai-source-item-cell--number {
     width: 18px;
@@ -986,6 +976,7 @@
     display: -webkit-box;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 3;
+    line-clamp: 3;
     color: #64748b;
     font-size: 11px;
     line-height: 1.45;
@@ -1026,10 +1017,6 @@
 .geweb-ai-source-meta-toggle:focus {
     color: #1d4ed8;
     outline: none;
-}
-.geweb-ai-source-link-icon {
-    font-size: 12px;
-    line-height: 1;
 }
 .geweb-ai-source-meta-tooltip {
     position: absolute;

@@ -4,20 +4,25 @@ namespace Geweb\AISearch;
 defined('ABSPATH') || exit;
 
 /**
+ * Spreadsheet conversion failure.
+ */
+class XlsxMarkdownExtractionException extends \RuntimeException {}
+
+/**
  * Extracts basic worksheet content from .xlsx files into Markdown without PHP ZIP/XML extensions.
  */
 class XlsxMarkdownExtractor {
     /**
-     * @throws \Exception
+     * @throws XlsxMarkdownExtractionException
      */
     public function extract(string $filePath, string $displayName = ''): string {
         if (!is_file($filePath)) {
-            throw new \Exception('Spreadsheet file does not exist.');
+            throw new XlsxMarkdownExtractionException('Spreadsheet file does not exist.');
         }
 
         $extension = strtolower((string) pathinfo($filePath, PATHINFO_EXTENSION));
         if ($extension !== 'xlsx') {
-            throw new \Exception('Spreadsheet extractor only supports .xlsx files.');
+            throw new XlsxMarkdownExtractionException('Spreadsheet extractor only supports .xlsx files.');
         }
 
         $archiveEntries = $this->listArchiveEntries($filePath);
@@ -25,7 +30,7 @@ class XlsxMarkdownExtractor {
             !in_array('xl/workbook.xml', $archiveEntries, true)
             || !in_array('xl/_rels/workbook.xml.rels', $archiveEntries, true)
         ) {
-            throw new \Exception('Spreadsheet does not look like a valid .xlsx workbook.');
+            throw new XlsxMarkdownExtractionException('Spreadsheet does not look like a valid .xlsx workbook.');
         }
 
         $workbookXml = $this->readArchiveEntry($filePath, 'xl/workbook.xml');
@@ -36,7 +41,7 @@ class XlsxMarkdownExtractor {
 
         $sheetDefinitions = $this->parseWorkbookSheets($workbookXml, $relsXml);
         if ($sheetDefinitions === []) {
-            throw new \Exception('No worksheets were found in the spreadsheet.');
+            throw new XlsxMarkdownExtractionException('No worksheets were found in the spreadsheet.');
         }
 
         $documentTitle = $displayName !== '' ? $displayName : basename($filePath);
@@ -71,7 +76,7 @@ class XlsxMarkdownExtractor {
 
     /**
      * @return string[]
-     * @throws \Exception
+     * @throws XlsxMarkdownExtractionException
      */
     private function listArchiveEntries(string $filePath): array {
         $command = sprintf('unzip -Z1 %s 2>/dev/null', escapeshellarg($filePath));
@@ -79,7 +84,7 @@ class XlsxMarkdownExtractor {
         $exitCode = 0;
         exec($command, $output, $exitCode);
         if ($exitCode !== 0) {
-            throw new \Exception('Could not inspect spreadsheet archive contents.');
+            throw new XlsxMarkdownExtractionException('Could not inspect spreadsheet archive contents.');
         }
 
         return array_values(array_filter(array_map('trim', $output), static function ($entry): bool {
@@ -88,13 +93,13 @@ class XlsxMarkdownExtractor {
     }
 
     /**
-     * @throws \Exception
+     * @throws XlsxMarkdownExtractionException
      */
     private function readArchiveEntry(string $filePath, string $entryPath): string {
         $command = sprintf('unzip -p %s %s 2>/dev/null', escapeshellarg($filePath), escapeshellarg($entryPath));
         $output = shell_exec($command);
         if (!is_string($output) || $output === '') {
-            throw new \Exception(sprintf('Could not read spreadsheet entry: %s', $entryPath));
+            throw new XlsxMarkdownExtractionException(sprintf('Could not read spreadsheet entry: %s', $entryPath));
         }
 
         return $output;
@@ -204,22 +209,7 @@ class XlsxMarkdownExtractor {
                 $rowNumber = count($rows) + 1;
             }
 
-            $rowCells = [];
-            if (preg_match_all('/<c\b([^>]*?)(?:\/>|>(.*?)<\/c>)/si', $rowMatch[2], $cellMatches, PREG_SET_ORDER)) {
-                foreach ($cellMatches as $cellMatch) {
-                    $attributes = $cellMatch[1];
-                    $cellBody = isset($cellMatch[2]) ? (string) $cellMatch[2] : '';
-                    $reference = $this->extractAttribute($attributes, 'r');
-                    $type = strtolower($this->extractAttribute($attributes, 't'));
-                    $columnIndex = $this->cellReferenceToColumnIndex($reference);
-                    if ($columnIndex <= 0) {
-                        $columnIndex = count($rowCells) + 1;
-                    }
-
-                    $rowCells[$columnIndex] = $this->extractCellValue($type, $cellBody, $sharedStrings);
-                }
-            }
-
+            $rowCells = $this->parseWorksheetRowCells((string) $rowMatch[2], $sharedStrings);
             if ($this->rowHasVisibleContent($rowCells)) {
                 ksort($rowCells);
                 $rows[$rowNumber] = $rowCells;
@@ -228,6 +218,33 @@ class XlsxMarkdownExtractor {
 
         ksort($rows);
         return $rows;
+    }
+
+    /**
+     * @return array<int,string>
+     */
+    private function parseWorksheetRowCells(string $rowXml, array $sharedStrings): array {
+        if (!preg_match_all('/<c\b([^>]*?)(?:\/>|>(.*?)<\/c>)/si', $rowXml, $cellMatches, PREG_SET_ORDER)) {
+            return [];
+        }
+
+        $rowCells = [];
+        foreach ($cellMatches as $cellMatch) {
+            $columnIndex = $this->extractCellColumnIndex((string) $cellMatch[1], $rowCells);
+            $type = strtolower($this->extractAttribute((string) $cellMatch[1], 't'));
+            $cellBody = isset($cellMatch[2]) ? (string) $cellMatch[2] : '';
+            $rowCells[$columnIndex] = $this->extractCellValue($type, $cellBody, $sharedStrings);
+        }
+
+        return $rowCells;
+    }
+
+    /**
+     * @param array<int,string> $rowCells
+     */
+    private function extractCellColumnIndex(string $attributes, array $rowCells): int {
+        $columnIndex = $this->cellReferenceToColumnIndex($this->extractAttribute($attributes, 'r'));
+        return $columnIndex > 0 ? $columnIndex : count($rowCells) + 1;
     }
 
     private function extractCellValue(string $type, string $cellXml, array $sharedStrings): string {

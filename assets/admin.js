@@ -1,491 +1,26 @@
 (function($) {
-
-function getAdminAjaxUrl() {
-		return globalThis.gewebAisearchAdmin?.ajaxUrl || globalThis.ajaxurl || '';
-}
-
-function escapeSelectorAttributeValue(value) {
-		const normalizedValue = String(value || '');
-		if (typeof globalThis.CSS?.escape === 'function') {
-				return globalThis.CSS.escape(normalizedValue);
-		}
-
-		return normalizedValue
-				.replaceAll('\\', String.raw`\\`)
-				.replaceAll('"', String.raw`\"`);
-}
-
-function decodeBase64Value(encodedValue) {
-		if (typeof encodedValue !== 'string' || encodedValue === '') {
-				return '';
-		}
-
-		if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encodedValue)) {
-				return '';
-		}
-
-		const binaryValue = globalThis.atob(encodedValue);
-		const binaryLength = binaryValue.length;
-		const bytes = new Uint8Array(binaryLength);
-
-		for (let index = 0; index < binaryLength; index++) {
-				bytes[index] = binaryValue.codePointAt(index) || 0;
-		}
-
-		if (typeof globalThis.TextDecoder === 'function') {
-				const utf8Value = new globalThis.TextDecoder('utf-8').decode(bytes);
-				if (!utf8Value.includes('\uFFFD')) {
-						return utf8Value;
-				}
-
-				return new globalThis.TextDecoder('windows-1252').decode(bytes);
-		}
-
-		let decodedValue = '';
-		for (let index = 0; index < binaryLength; index++) {
-				decodedValue += String.fromCodePoint(bytes[index]);
-		}
-
-		return decodedValue;
-}
-
-function escapeHtml(text) {
-		return String(text || '')
-				.replaceAll('&', '&amp;')
-				.replaceAll('<', '&lt;')
-				.replaceAll('>', '&gt;')
-				.replaceAll('"', '&quot;')
-				.replaceAll("'", '&#039;');
-}
-
-function decodeHtmlEntities(text) {
-		const textarea = globalThis.document.createElement('textarea');
-		textarea.innerHTML = String(text || '');
-		return textarea.value;
-}
-
-function getLastTruthyValue(values) {
-		return Array.isArray(values) ? values.findLast(Boolean) || '' : '';
-}
-
-function safeDecodeURIComponent(value) {
-		try {
-				return decodeURIComponent(String(value || ''));
-		} catch (error) {
-				return String(value || '');
-		}
-}
-
-function readLocalStorageString(key) {
-		try {
-				return String(globalThis.localStorage?.getItem(key) || '');
-		} catch (error) {
-				return '';
-		}
-}
-
-function writeLocalStorageString(key, value) {
-		try {
-				globalThis.localStorage?.setItem(key, String(value || ''));
-				return true;
-		} catch (error) {
-				return false;
-		}
-}
-
-function parseLocalSortSpecs($table) {
-		try {
-				const rawValue = String($table.attr('data-local-sort-specs') || '[]');
-				const parsedValue = JSON.parse(rawValue);
-				return Array.isArray(parsedValue)
-						? parsedValue.filter((spec) => {
-								return spec && typeof spec.column === 'string' && typeof spec.direction === 'string';
-						})
-						: [];
-		} catch (error) {
-				return [];
-		}
-}
-
-function cycleSortDirection(currentDirection) {
-		if (currentDirection === 'asc') {
-				return 'desc';
-		}
-
-		if (currentDirection === 'desc') {
-				return '';
-		}
-
-		return 'asc';
-}
-
-function getSortIndicator(isActive, direction) {
-		if (!isActive) {
-				return '';
-		}
-
-		return direction === 'desc' ? '↓' : '↑';
-}
-
-function getAriaSortValue(direction) {
-		if (direction === 'desc') {
-				return 'descending';
-		}
-
-		if (direction === 'asc') {
-				return 'ascending';
-		}
-
-		return 'none';
-}
-
-function ensureOriginalRowIndex($row, index) {
-		if ($row.attr('data-original-index') === undefined) {
-				$row.attr('data-original-index', String(index));
-		}
-}
-
-function getRegexMatch(text, pattern) {
-		const match = pattern.exec(String(text || ''));
-		pattern.lastIndex = 0;
-		return match;
-}
-
-function buildCountSuffix(count, singular, plural) {
-		if (typeof count !== 'number') {
-				return '';
-		}
-
-		const label = count === 1 ? singular : plural;
-		return ' (' + count + ' ' + label + ')';
-}
-
-function submitFormWithFallback(form) {
-		if (!form) {
-				return;
-		}
-
-		if (typeof form.requestSubmit === 'function') {
-				form.requestSubmit();
-				return;
-		}
-
-		form.submit();
-}
-
-function buildModelOption(value, selectedValue, statusEntry) {
-		const normalizedValue = String(value || '');
-		const isFailedModel = String(statusEntry?.status || '') === 'failed';
-		const option = new Option(normalizedValue, normalizedValue, false, normalizedValue === selectedValue);
-		option.dataset.modelStatus = isFailedModel ? 'failed' : 'ok';
-		if (isFailedModel) {
-				option.style.color = '#b32d2e';
-		}
-
-		return option;
-}
-
-function populateModelSelectOptions($select, responseData, remoteSelected) {
-		const sourceModels = responseData?.dropdown_models || responseData?.models || [];
-		$.each(sourceModels, (_, model) => {
-				const value = String(model || '');
-				if (!value) {
-						return;
-				}
-
-				$select.append(buildModelOption(value, remoteSelected, responseData?.model_statuses?.[value]));
-		});
-
-		if (!remoteSelected) {
-				return;
-		}
-
-		const hasSelectedOption = $select.find('option[value="' + escapeSelectorAttributeValue(remoteSelected) + '"]').length > 0;
-		if (hasSelectedOption) {
-				$select.val(remoteSelected);
-				return;
-		}
-
-		const statusEntry = responseData?.model_statuses?.[remoteSelected];
-		if (statusEntry?.permanent_unavailable) {
-				return;
-		}
-
-		$select.prepend(buildModelOption(remoteSelected, remoteSelected, statusEntry));
-}
-
-function getPreviewUrlLeaf(url) {
-		const normalizedUrl = String(url || '').trim();
-		if (!normalizedUrl) {
-				return '';
-		}
-
-		try {
-				const parsedUrl = new URL(normalizedUrl, globalThis.location?.origin || undefined);
-				const pathname = String(parsedUrl.pathname || '');
-				const leaf = getLastTruthyValue(pathname.split('/'));
-				return safeDecodeURIComponent(leaf || normalizedUrl);
-		} catch (error) {
-				const leaf = getLastTruthyValue(normalizedUrl.split('/')) || normalizedUrl;
-				return safeDecodeURIComponent(leaf);
-		}
-}
-
-function normalizeMarkdownPreviewBlocks(markdown) {
-		return String(markdown || '')
-				.replaceAll(/(!\[[^\]]*]\([^)]+\))/g, '\n$1\n')
-				.replaceAll(/<figcaption\b[^>]*>/gi, ': ')
-				.replaceAll(/<\/figcaption>/gi, '\n')
-				.replaceAll(/\n{3,}/g, '\n\n');
-}
-
-function sanitizePreviewHtml(html) {
-		const container = globalThis.document.createElement('div');
-		container.innerHTML = String(html || '');
-
-		Array.from(container.querySelectorAll('*')).forEach((element) => {
-				const tagName = String(element.tagName || '').toLowerCase();
-				if (!['a', 'p', 'ul', 'ol', 'li', 'strong', 'em', 'code', 'pre', 'blockquote', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'table', 'thead', 'tbody', 'tr', 'th', 'td'].includes(tagName)) {
-						element.replaceWith(...Array.from(element.childNodes));
-						return;
-				}
-
-				Array.from(element.attributes).forEach((attribute) => {
-						if (tagName === 'a' && attribute.name === 'href') {
-								if (!/^https?:\/\//i.test(attribute.value) && !/^#/i.test(attribute.value)) {
-										element.removeAttribute('href');
-								}
-								return;
-						}
-
-						if (tagName === 'a' && attribute.name === 'id') {
-								if (!/^[A-Za-z][A-Za-z0-9\-_:.]*$/.test(attribute.value)) {
-										element.removeAttribute('id');
-								}
-								return;
-						}
-
-						if (!['href', 'target', 'rel', 'title', 'id'].includes(attribute.name)) {
-								element.removeAttribute(attribute.name);
-						}
-				});
-
-				if (tagName === 'a') {
-						const href = String(element.getAttribute('href') || '');
-						if (/^https?:\/\//i.test(href)) {
-								element.setAttribute('target', '_blank');
-								element.setAttribute('rel', 'noopener noreferrer');
-						} else {
-								element.removeAttribute('target');
-								element.removeAttribute('rel');
-						}
-				}
-		});
-
-		return container.innerHTML;
-}
-
-function parseMarkdownTableCells(line) {
-		return String(line || '')
-				.trim()
-				.replace(/^\|/, '')
-				.replace(/\|$/, '')
-				.split('|')
-				.map((cell) => {
-						return String(cell || '').trim();
-				});
-}
-
-function isMarkdownTableSeparator(line) {
-		const cells = parseMarkdownTableCells(line);
-		if (!cells.length) {
-				return false;
-		}
-
-		return cells.every((cell) => {
-				return /^:?-{3,}:?$/.test(cell);
-		});
-}
-
-function isMarkdownTableStart(lines, index) {
-		const headerLine = String(lines?.[index] ?? '').trim();
-		const separatorLine = String(lines?.[index + 1] ?? '').trim();
-		if (!headerLine || !separatorLine || !headerLine.includes('|')) {
-				return false;
-		}
-
-		return isMarkdownTableSeparator(separatorLine);
-}
-
-function applyInlineMarkdown(text) {
-		return String(text || '')
-				.replaceAll(/!\[[^\]]*]\((https?:\/\/[^)]+)\)/g, (_, url) => {
-						const label = getPreviewUrlLeaf(url) || url;
-						return '<a href="' + escapeHtml(url) + '" title="' + escapeHtml(url) + '">' + escapeHtml(label) + '</a>';
-				})
-				.replaceAll(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-				.replaceAll(/__([^_]+)__/g, '<strong>$1</strong>')
-				.replaceAll(/(^|[\s(])\*([^*]+)\*(?=[\s).,!?;:]|$)/g, '$1<em>$2</em>')
-				.replaceAll(/(^|[\s(])_([^_]+)_(?=[\s).,!?;:]|$)/g, '$1<em>$2</em>')
-				.replaceAll(/`([^`]+)`/g, '<code>$1</code>')
-				.replaceAll(/\[([^\]]+)\]\((#[^)]+)\)/g, (_, label, href) => {
-						return '<a href="' + escapeHtml(href) + '" title="' + escapeHtml(href) + '">' + label + '</a>';
-				})
-				.replaceAll(/\[([^\]]+)\]\((https?:\/\/[^)\s]+#[^)]+)\)/g, (_, label, url) => {
-						return '<a href="' + escapeHtml(url) + '" title="' + escapeHtml(url) + '">' + label + '</a>';
-				})
-				.replaceAll(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, (_, label, url) => {
-						return '<a href="' + escapeHtml(url) + '" title="' + escapeHtml(url) + '">' + label + '</a>';
-				})
-				.replaceAll(/\\([\\`*_{}[\]()#+.!-])/g, '$1');
-}
-
-function buildMarkdownTableHtml(lines, startIndex) {
-		const headerCells = parseMarkdownTableCells(lines[startIndex]);
-		const separatorCells = parseMarkdownTableCells(lines[startIndex + 1]);
-		if (!headerCells.length || headerCells.length !== separatorCells.length) {
-				return null;
-		}
-
-		const rows = [];
-		let index = startIndex + 2;
-		while (index < (lines?.length ?? 0)) {
-				const trimmed = String(lines?.[index] ?? '').trim();
-				if (!trimmed.includes('|')) {
-						break;
-				}
-
-				const cells = parseMarkdownTableCells(trimmed);
-				if (!cells.length) {
-						break;
-				}
-
-				while (cells.length < headerCells.length) {
-						cells.push('');
-				}
-
-				rows.push(cells.slice(0, headerCells.length));
-				index += 1;
-		}
-
-		const headHtml = '<thead><tr>' + headerCells.map((cell) => {
-				return '<th>' + applyInlineMarkdown(cell) + '</th>';
-		}).join('') + '</tr></thead>';
-		const bodyHtml = rows.length
-				? '<tbody>' + rows.map((cells) => {
-						return '<tr>' + cells.map((cell) => {
-								return '<td>' + applyInlineMarkdown(cell) + '</td>';
-						}).join('') + '</tr>';
-				}).join('') + '</tbody>'
-				: '';
-
-		return {
-				html: '<table>' + headHtml + bodyHtml + '</table>',
-				nextIndex: index - 1
-		};
-}
-
-function renderMarkdownPreview(markdown) {
-		if (typeof globalThis.GewebAisearchMarkdown?.render === 'function') {
-				return globalThis.GewebAisearchMarkdown.render(markdown);
-		}
-
-		const normalizedMarkdown = normalizeMarkdownPreviewBlocks(
-				decodeHtmlEntities(String(markdown || '')).replaceAll(/\r\n?/g, '\n')
-		);
-		const escaped = escapeHtml(normalizedMarkdown);
-		const lines = escaped.split('\n');
-		const parts = [];
-		let listItems = [];
-
-		function flushList() {
-				if (!listItems.length) {
-						return;
-				}
-
-				parts.push('<ul>' + listItems.join('') + '</ul>');
-				listItems = [];
-		}
-
-		let lineIndex = 0;
-		while (lineIndex < lines.length) {
-				const line = lines[lineIndex];
-				const trimmed = line.trim();
-
-				if (!trimmed) {
-						flushList();
-						lineIndex += 1;
-						continue;
-				}
-
-				if (/^-{3,}$/.test(trimmed) && lineIndex === 0) {
-						flushList();
-						let frontmatterEnd = -1;
-						for (let i = lineIndex + 1; i < lines.length; i++) {
-								if (/^-{3,}$/.test(lines[i].trim())) {
-										frontmatterEnd = i;
-										break;
-								}
-						}
-						if (frontmatterEnd > lineIndex) {
-								const frontmatterLines = lines.slice(lineIndex + 1, frontmatterEnd);
-								parts.push('<pre style="background:#f5f5f5;padding:8px;border-left:3px solid #ccc;margin:0 0 1em 0;overflow-x:auto;">' + escapeHtml(frontmatterLines.join('\n')) + '</pre>');
-								lineIndex = frontmatterEnd + 1;
-								continue;
-						}
-				}
-
-				if (isMarkdownTableStart(lines, lineIndex)) {
-						flushList();
-						const table = buildMarkdownTableHtml(lines, lineIndex);
-						if (table) {
-								parts.push(table.html);
-								lineIndex = table.nextIndex + 1;
-								continue;
-						}
-				}
-
-				const headingMatch = getRegexMatch(trimmed, /^(#{1,6})\s+(.+)$/);
-				if (headingMatch) {
-						flushList();
-						const level = Math.min(6, headingMatch[1].length);
-						parts.push('<h' + level + '>' + applyInlineMarkdown(headingMatch[2]) + '</h' + level + '>');
-						lineIndex += 1;
-						continue;
-				}
-
-				if (/^-{3,}$/.test(trimmed)) {
-						flushList();
-						parts.push('<hr>');
-						lineIndex += 1;
-						continue;
-				}
-
-				const listMatch = getRegexMatch(trimmed, /^[-*]\s+(.+)$/);
-				if (listMatch) {
-						listItems.push('<li>' + applyInlineMarkdown(listMatch[1]) + '</li>');
-						lineIndex += 1;
-						continue;
-				}
-
-				flushList();
-				parts.push('<p>' + applyInlineMarkdown(trimmed) + '</p>');
-				lineIndex += 1;
-		}
-
-		flushList();
-		return sanitizePreviewHtml(parts.join(''));
-}
-
-function normalizePromptText(text) {
-		return String(text || '')
-				.replaceAll(/\r\n?/g, '\n')
-				.split('\n')
-				.map((line) => {
-						return line.replaceAll(/[ \t]+$/g, '');
-				})
-				.join('\n');
-}
+const {
+	buildCountSuffix,
+	cycleSortDirection,
+	decodeBase64Value,
+	ensureOriginalRowIndex,
+	escapeHtml,
+	escapeSelectorAttributeValue,
+	getAdminAjaxUrl,
+	getAriaSortValue,
+	getRegexMatch,
+	getSortIndicator,
+	parseLocalSortSpecs,
+	populateModelSelectOptions,
+	readLocalStorageString,
+	submitFormWithFallback,
+	writeLocalStorageString,
+} = globalThis.GewebAISearchAdminUtils || {};
+const {
+	getAdminMenuTargetTab = () => 'general',
+	normalizePromptText = (text) => String(text || ''),
+	renderMarkdownPreview = (markdown) => String(markdown || ''),
+} = globalThis.GewebAISearchAdminMarkdown || {};
 
 function compareSortableValues(leftValue, rightValue, sortType, direction) {
 		const normalizedDirection = direction === 'desc' ? -1 : 1;
@@ -878,7 +413,7 @@ function rowMatchesReferencedDocumentsFilters($row, filters) {
 }
 
 function applyReferencedDocumentsFilters($form) {
-		if (!$form || !$form.length) {
+		if (!$form?.length) {
 			return;
 		}
 
@@ -976,7 +511,7 @@ return;
 }
 
 function replaceReferencedDocumentRow($row, rowHtml) {
-		if (!$row || !$row.length || !rowHtml) {
+		if (!$row?.length || !rowHtml) {
 			return jQuery();
 		}
 
@@ -997,6 +532,128 @@ function renderMarkdownCacheModalMessage($modal, message) {
 		$modal.find('.geweb-ai-markdown-cache-modal-rendered').html('<p>' + escapeHtml(message) + '</p>');
 		$modal.find('.geweb-ai-markdown-cache-modal-body').text(message);
 		$modal.find('.geweb-ai-markdown-cache-modal-html').text(message);
+}
+
+function updateReferencedDocumentActionRow($row, responseData) {
+		if (!$row?.length || !responseData) {
+				return;
+		}
+
+		if (responseData.status_html) {
+				$row.find('td.column-status').html(responseData.status_html);
+		}
+		if (responseData.actions_html) {
+				$row.find('td.column-actions').html(responseData.actions_html);
+		}
+		if (responseData.markdown_cache_html) {
+				$row.find('td.column-markdown_cache').html(responseData.markdown_cache_html);
+		}
+		if (typeof responseData.pdf_analysis_html === 'string') {
+				$row.find('td.column-pdf_analysis').html(responseData.pdf_analysis_html);
+		}
+}
+
+function maybeReplaceReferencedDocumentRowFromResponse($row, $form, responseData) {
+		if (!responseData?.row_html || !$row?.length) {
+				return false;
+		}
+
+		replaceReferencedDocumentRow($row, responseData.row_html);
+		if ($form?.length) {
+				applyReferencedDocumentsFilters($form);
+		}
+
+		return true;
+}
+
+function getGeminiStoreDocumentFilterState($browser) {
+		const $filter = $browser.find('.geweb-gemini-store-documents-filter');
+		const $idFilter = $browser.find('.geweb-gemini-store-documents-id-filter');
+		const $slugFilter = $browser.find('.geweb-gemini-store-documents-slug-filter');
+		const $typeFilter = $browser.find('.geweb-gemini-store-documents-type-filter');
+		const $formatFilter = $browser.find('.geweb-gemini-store-documents-format-filter');
+		const sortValue = String($browser.attr('data-sort') || 'name-asc');
+		const [sortKey = 'name', rawDirection = 'asc'] = sortValue.split('-');
+
+		return {
+				filterValue: $.trim(String($filter.val() || '')).toLowerCase(),
+				idFilterValue: $.trim(String($idFilter.val() || '')).toLowerCase(),
+				slugFilterValue: $.trim(String($slugFilter.val() || '')).toLowerCase(),
+				typeValue: $.trim(String($typeFilter.val() || '')).toLowerCase(),
+				formatValue: $.trim(String($formatFilter.val() || '')).toLowerCase(),
+				sortKey,
+				sortDirection: rawDirection === 'desc' ? 'desc' : 'asc'
+		};
+}
+
+function sortGeminiStoreDocumentRows(rows, sortKey, sortDirection) {
+		const direction = sortDirection === 'desc' ? -1 : 1;
+		rows.sort((leftRow, rightRow) => {
+				const $leftRow = $(leftRow);
+				const $rightRow = $(rightRow);
+				const leftValue = String($leftRow.attr('data-' + sortKey) || '');
+				const rightValue = String($rightRow.attr('data-' + sortKey) || '');
+				return leftValue.localeCompare(rightValue, undefined, { sensitivity: 'base' }) * direction;
+		});
+}
+
+function updateGeminiStoreSortHeader($header, sortKey, sortDirection) {
+		const headerKey = String($header.data('sort-key') || '');
+		const headerLabel = String($header.data('sort-label') || $header.text() || '');
+		let suffix = ' ↕';
+		if (headerKey === sortKey) {
+				suffix = sortDirection === 'desc' ? ' ↓' : ' ↑';
+		}
+
+		$header.text(headerLabel + suffix);
+}
+
+function rowMatchesGeminiStoreFilters($row, filterState) {
+		const haystack = [
+				String($row.attr('data-name') || ''),
+				String($row.attr('data-id') || ''),
+				String($row.attr('data-slug') || ''),
+				String($row.attr('data-type') || ''),
+				String($row.attr('data-url') || '')
+		].join(' ');
+
+		return (!filterState.filterValue || haystack.includes(filterState.filterValue))
+				&& (!filterState.idFilterValue || csvValueIncludes($row.attr('data-id'), filterState.idFilterValue))
+				&& (!filterState.slugFilterValue || String($row.attr('data-slug') || '').includes(filterState.slugFilterValue))
+				&& (!filterState.typeValue || String($row.attr('data-type') || '') === filterState.typeValue)
+				&& (!filterState.formatValue || String($row.attr('data-format') || '') === filterState.formatValue);
+}
+
+function applyGeminiStoreDocumentBrowserState($browser) {
+		const $sortHeaders = $browser.find('.geweb-gemini-store-documents-sort-header');
+		const $status = $browser.find('.geweb-gemini-store-documents-filter-status');
+		const $tbody = $browser.find('tbody');
+		const $rows = $tbody.find('tr');
+		if (!$rows.length) {
+				$status.text('No uploaded items found.');
+				return;
+		}
+
+		const filterState = getGeminiStoreDocumentFilterState($browser);
+		const rows = $rows.get();
+		sortGeminiStoreDocumentRows(rows, filterState.sortKey, filterState.sortDirection);
+		$tbody.append(rows);
+
+		$sortHeaders.each(function() {
+				updateGeminiStoreSortHeader($(this), filterState.sortKey, filterState.sortDirection);
+		});
+
+		let visibleCount = 0;
+		$rows.each(function() {
+				const $row = $(this);
+				const visible = rowMatchesGeminiStoreFilters($row, filterState);
+				$row.toggle(visible);
+				if (visible) {
+						visibleCount += 1;
+				}
+		});
+
+		$status.text(visibleCount + ' item' + (visibleCount === 1 ? '' : 's') + ' shown');
 }
 
 function pollPostIndexStatus($trigger, postId, attempt) {
@@ -1132,7 +789,7 @@ function applyPendingReferencedDocumentTargets() {
 }
 
 function syncModelSelectTint($select) {
-		if (!$select || !$select.length) {
+		if (!$select?.length) {
 return;
 }
 
@@ -1179,7 +836,7 @@ return;
 
 		function buildGroupRevisionData(extraData) {
 				return {
-						...(extraData || {}),
+						...extraData,
 						group_revision: getGroupRevision()
 				};
 		}
@@ -1338,23 +995,8 @@ return;
 						prompts: 'Loading Prompts…',
 						general: 'Loading Settings…'
 				};
-				let title = 'Loading Settings…';
-
-				try {
-						const url = new URL(href, globalThis.location?.origin || globalThis.location?.href || undefined);
-						const tab = String(url.searchParams.get('geweb_tab') || 'general').trim();
-						title = titleMap[tab] || title;
-				} catch (error) {
-						if (href.includes('geweb_tab=documents')) {
-								title = titleMap.documents;
-						} else if (href.includes('geweb_tab=stores')) {
-								title = titleMap.stores;
-						} else if (href.includes('geweb_tab=conversations')) {
-								title = titleMap.conversations;
-						} else if (href.includes('geweb_tab=prompts')) {
-								title = titleMap.prompts;
-						}
-				}
+				const tab = getAdminMenuTargetTab(href);
+				const title = titleMap[tab] || titleMap.general;
 
 				showAdminLoadingOverlay(title);
 		});
@@ -1466,7 +1108,7 @@ return;
 				);
 		}
 
-		function refreshModelSelectorInBackground() {
+			function refreshModelSelectorInBackground() {
 				const $select = $('#geweb_ai_search_model');
 				const $status = $('#geweb-ai-model-refresh-status');
 				if (!$select.length) {
@@ -1500,16 +1142,14 @@ return;
 
 						syncModelSelectTint($select);
 
-						if ($status.length) {
-								const statusMessage = response?.data?.used_cached_models
-										? 'Model list loaded from cache.'
-										: 'Model list refreshed from Gemini.';
-								$status.text(statusMessage).css('color', '#46b450');
-								globalThis.setTimeout(() => {
-										clearStatusAfterFade($status);
-								}, 2000);
-						}
-				}).fail(() => {
+							if ($status.length) {
+									const statusMessage = response?.data?.used_cached_models
+											? 'Model list loaded from cache.'
+											: 'Model list refreshed from Gemini.';
+									$status.text(statusMessage).css('color', '#46b450');
+									globalThis.setTimeout(clearStatusAfterFade, 2000, $status);
+							}
+					}).fail(() => {
 						if ($status.length) {
 								$status.text('Could not refresh models. Showing cached or bundled list.').css('color', '#996800');
 						}
@@ -2778,126 +2418,84 @@ return;
 				});
 		}
 
-		function applyGeminiStoreDocumentsBrowserState() {
-				const $browser = $('.geweb-gemini-store-documents-browser');
-				if (!$browser.length) {
+			function applyGeminiStoreDocumentsBrowserState() {
+					const $browser = $('.geweb-gemini-store-documents-browser');
+					if (!$browser.length) {
 return;
 }
 
-				$browser.each(function() {
-						const $currentBrowser = $(this);
-						const $filter = $currentBrowser.find('.geweb-gemini-store-documents-filter');
-						const $idFilter = $currentBrowser.find('.geweb-gemini-store-documents-id-filter');
-						const $slugFilter = $currentBrowser.find('.geweb-gemini-store-documents-slug-filter');
-						const $typeFilter = $currentBrowser.find('.geweb-gemini-store-documents-type-filter');
-						const $formatFilter = $currentBrowser.find('.geweb-gemini-store-documents-format-filter');
-						const $sortHeaders = $currentBrowser.find('.geweb-gemini-store-documents-sort-header');
-						const $status = $currentBrowser.find('.geweb-gemini-store-documents-filter-status');
-						const $tbody = $currentBrowser.find('tbody');
-						const $rows = $tbody.find('tr');
-						if (!$rows.length) {
-								$status.text('No uploaded items found.');
-								return;
-						}
+					$browser.each(function() {
+							applyGeminiStoreDocumentBrowserState($(this));
+					});
+			}
 
-						const filterValue = $.trim(String($filter.val() || '')).toLowerCase();
-						const idFilterValue = $.trim(String($idFilter.val() || '')).toLowerCase();
-						const slugFilterValue = $.trim(String($slugFilter.val() || '')).toLowerCase();
-						const typeValue = $.trim(String($typeFilter.val() || '')).toLowerCase();
-						const formatValue = $.trim(String($formatFilter.val() || '')).toLowerCase();
-						const sortValue = String($currentBrowser.attr('data-sort') || 'name-asc');
-						const sortParts = sortValue.split('-');
-						const sortKey = sortParts[0] || 'name';
-						const sortDirection = sortParts[1] === 'desc' ? 'desc' : 'asc';
+			function stopAdminPreloadProgressPolling() {
+					if (adminPreloadPollTimer) {
+							globalThis.clearInterval(adminPreloadPollTimer);
+							adminPreloadPollTimer = 0;
+					}
+			}
 
-						const rows = $rows.get();
-						rows.sort((a, b) => {
-								const $a = $(a);
-								const $b = $(b);
-								const direction = sortDirection === 'desc' ? -1 : 1;
-								const aValue = String($a.attr('data-' + sortKey) || '');
-								const bValue = String($b.attr('data-' + sortKey) || '');
-								return aValue.localeCompare(bValue, undefined, { sensitivity: 'base' }) * direction;
-						});
-						$tbody.append(rows);
+			function completeAdminPanelPreload() {
+					stopAdminPreloadProgressPolling();
+					updateAdminLoadingOverlayProgress('Loading Settings…', 100, 'Ready');
+					globalThis.setTimeout(hideAdminLoadingOverlay, 250);
+			}
 
-						$sortHeaders.each(function() {
-								const $header = $(this);
-								const headerKey = String($header.data('sort-key') || '');
-								const headerLabel = String($header.data('sort-label') || $header.text() || '');
-								let suffix = ' ↕';
-								if (headerKey === sortKey) {
-										suffix = sortDirection === 'desc' ? ' ↓' : ' ↑';
-								}
-								$header.text(headerLabel + suffix);
-						});
+			function finalizeAdminPanelPreload($state) {
+					globalThis.setTimeout(() => {
+							$state.attr('data-needs-preload', '0');
+					}, 0);
 
-						let visibleCount = 0;
-						$rows.each(function() {
-								const $row = $(this);
-								const haystack = [
-										String($row.attr('data-name') || ''),
-										String($row.attr('data-id') || ''),
-										String($row.attr('data-slug') || ''),
-										String($row.attr('data-type') || ''),
-										String($row.attr('data-url') || '')
-								].join(' ');
-								const matchesFilter = !filterValue || haystack.includes(filterValue);
-								const matchesId = !idFilterValue || csvValueIncludes($row.attr('data-id'), idFilterValue);
-								const matchesSlug = !slugFilterValue || String($row.attr('data-slug') || '').includes(slugFilterValue);
-								const matchesType = !typeValue || String($row.attr('data-type') || '') === typeValue;
-								const matchesFormat = !formatValue || String($row.attr('data-format') || '') === formatValue;
-								const visible = matchesFilter && matchesId && matchesSlug && matchesType && matchesFormat;
-								$row.toggle(visible);
-								if (visible) {
-visibleCount += 1;
-}
-						});
+					const finishCheck = globalThis.setInterval(() => {
+							const preloadStillRunning = isRefreshingReferencedDocuments
+									|| isRefreshingGeminiStores
+									|| isRefreshingGeminiStoreDocuments
+									|| isRefreshingConversations;
+							if (preloadStillRunning) {
+									return;
+							}
 
-						$status.text(visibleCount + ' item' + (visibleCount === 1 ? '' : 's') + ' shown');
-				});
-		}
+							globalThis.clearInterval(finishCheck);
+							globalThis.setTimeout(completeAdminPanelPreload, 200);
+					}, 200);
+			}
 
-		function stopAdminPreloadProgressPolling() {
-				if (adminPreloadPollTimer) {
-						globalThis.clearInterval(adminPreloadPollTimer);
-						adminPreloadPollTimer = 0;
-				}
-		}
+			function pollAdminPreloadProgress(jobId) {
+					if (!jobId) {
+							return;
+					}
 
-		function pollAdminPreloadProgress(jobId) {
-				if (!jobId) {
-						return;
-				}
+					function handlePreloadProgressResponse(response) {
+							if (!response?.success || !response?.data) {
+									return;
+							}
 
-				stopAdminPreloadProgressPolling();
-				adminPreloadPollTimer = globalThis.setInterval(() => {
-						$.ajax({
-								url: getAdminAjaxUrl(),
+							const progress = response.data;
+							const title = String(progress.current_label || (progress.finished ? 'Loading Settings…' : 'Loading…'));
+							const subtitle = typeof progress.total_steps === 'number'
+									? String((progress.completed_steps || 0) + (progress.failed_steps || 0)) + ' / ' + String(progress.total_steps) + ' steps'
+									: '';
+							updateAdminLoadingOverlayProgress(title, Number(progress.percent || 0), subtitle);
+							if (progress.finished) {
+									stopAdminPreloadProgressPolling();
+							}
+					}
+
+					stopAdminPreloadProgressPolling();
+					adminPreloadPollTimer = globalThis.setInterval(() => {
+							$.ajax({
+									url: getAdminAjaxUrl(),
 								type: 'POST',
 								dataType: 'json',
 								data: {
-										action: 'geweb_get_admin_preload_progress',
-										nonce: gewebAisearchAdmin.adminActionNonce,
-										job_id: jobId
-								}
-						}).done((response) => {
-								if (!response?.success || !response?.data) {
-										return;
-								}
-
-								const progress = response.data;
-								const title = String(progress.current_label || (progress.finished ? 'Loading Settings…' : 'Loading…'));
-								const subtitle = typeof progress.total_steps === 'number'
-										? String((progress.completed_steps || 0) + (progress.failed_steps || 0)) + ' / ' + String(progress.total_steps) + ' steps'
-										: '';
-								updateAdminLoadingOverlayProgress(title, Number(progress.percent || 0), subtitle);
-								if (progress.finished) {
-										stopAdminPreloadProgressPolling();
-								}
-						});
-				}, 350);
-		}
+											action: 'geweb_get_admin_preload_progress',
+											nonce: gewebAisearchAdmin.adminActionNonce,
+											job_id: jobId
+									}
+							}).done(handlePreloadProgressResponse);
+					}, 350);
+			}
 
 		function startAdminPanelPreload() {
 				const $state = $('#geweb-ai-admin-preload-state');
@@ -2924,31 +2522,13 @@ visibleCount += 1;
 						adminPreloadProgressJobId = String(response.data.job_id || '');
 						pollAdminPreloadProgress(adminPreloadProgressJobId);
 
-						refreshReferencedDocuments(adminPreloadProgressJobId, { keepOverlay: true });
-						refreshGeminiStores(adminPreloadProgressJobId, { keepOverlay: true, preload: true });
-						refreshConversations(adminPreloadProgressJobId, { keepOverlay: true });
-
-						globalThis.setTimeout(() => {
-								$state.attr('data-needs-preload', '0');
-						}, 0);
-
-						const finishCheck = globalThis.setInterval(() => {
-								if (isRefreshingReferencedDocuments || isRefreshingGeminiStores || isRefreshingGeminiStoreDocuments || isRefreshingConversations) {
-										return;
-								}
-
-								globalThis.clearInterval(finishCheck);
-								globalThis.setTimeout(() => {
-										stopAdminPreloadProgressPolling();
-										updateAdminLoadingOverlayProgress('Loading Settings…', 100, 'Ready');
-										globalThis.setTimeout(() => {
-												hideAdminLoadingOverlay();
-										}, 250);
-								}, 200);
-						}, 200);
-				}).fail(() => {
-						hideAdminLoadingOverlay();
-				});
+							refreshReferencedDocuments(adminPreloadProgressJobId, { keepOverlay: true });
+							refreshGeminiStores(adminPreloadProgressJobId, { keepOverlay: true, preload: true });
+							refreshConversations(adminPreloadProgressJobId, { keepOverlay: true });
+							finalizeAdminPanelPreload($state);
+					}).fail(() => {
+							hideAdminLoadingOverlay();
+					});
 		}
 
 		$('#geweb-refresh-referenced-documents').on('click', () => {
@@ -2988,52 +2568,32 @@ return;
 								file_hash: fileHash,
 								nonce: gewebAisearchAdmin.adminActionNonce
 						})
-				}).done((response) => {
-						syncGroupRevisionFromPayload(response?.data);
-						syncAdminViewCacheState(response?.data, ['files']);
-						if (!response?.success || !response?.data) {
-								const message = response?.data?.message || 'The document upload could not be completed.';
-								if (response?.data?.row_html && $row.length) {
-										replaceReferencedDocumentRow($row, response.data.row_html);
-										if ($form.length) {
-												applyReferencedDocumentsFilters($form);
-										}
-								}
-								showCellFeedback($cell, message, true);
-								$button.prop('disabled', false).text('Upload');
-								if ($status.length) {
+					}).done((response) => {
+							syncGroupRevisionFromPayload(response?.data);
+							syncAdminViewCacheState(response?.data, ['files']);
+							if (!response?.success || !response?.data) {
+									const message = response?.data?.message || 'The document upload could not be completed.';
+									maybeReplaceReferencedDocumentRowFromResponse($row, $form, response?.data);
+									showCellFeedback($cell, message, true);
+									$button.prop('disabled', false).text('Upload');
+									if ($status.length) {
 										$status.text(message);
 								}
 								return;
 						}
 
-						const $row = $button.closest('tr');
-						if ($row.length) {
-								if (response.data.status_html) {
-										$row.find('td.column-status').html(response.data.status_html);
-								}
-								if (response.data.actions_html) {
-										$row.find('td.column-actions').html(response.data.actions_html);
-								}
-								if (response.data.markdown_cache_html) {
-										$row.find('td.column-markdown_cache').html(response.data.markdown_cache_html);
-								}
-						}
-						// Do not refresh the whole Gemini stores list here; local row update is enough.
-				}).fail((xhr) => {
-						const message = getAjaxErrorMessage(xhr, 'The document upload could not be completed.');
-						const responseData = xhr?.responseJSON?.data;
-						syncGroupRevisionFromPayload(responseData);
-						syncAdminViewCacheState(responseData, ['files']);
-						if (responseData?.row_html && $row.length) {
-								replaceReferencedDocumentRow($row, responseData.row_html);
-								if ($form.length) {
-										applyReferencedDocumentsFilters($form);
-								}
-						}
-						showCellFeedback($cell, message, true);
-						$button.prop('disabled', false).text('Upload');
-						if ($status.length) {
+							const $row = $button.closest('tr');
+							updateReferencedDocumentActionRow($row, response.data);
+							// Do not refresh the whole Gemini stores list here; local row update is enough.
+					}).fail((xhr) => {
+							const message = getAjaxErrorMessage(xhr, 'The document upload could not be completed.');
+							const responseData = xhr?.responseJSON?.data;
+							syncGroupRevisionFromPayload(responseData);
+							syncAdminViewCacheState(responseData, ['files']);
+							maybeReplaceReferencedDocumentRowFromResponse($row, $form, responseData);
+							showCellFeedback($cell, message, true);
+							$button.prop('disabled', false).text('Upload');
+							if ($status.length) {
 								$status.text(message);
 						}
 				});
@@ -3064,34 +2624,22 @@ return;
 								exclude: exclude,
 								nonce: gewebAisearchAdmin.adminActionNonce
 						})
-				}).done((response) => {
-						syncGroupRevisionFromPayload(response?.data);
-						syncAdminViewCacheState(response?.data, ['files']);
-						if (!response?.success || !response?.data) {
-								const message = response?.data?.message || 'Could not update exclusion.';
-								if (response?.data?.row_html && $row.length) {
-										replaceReferencedDocumentRow($row, response.data.row_html);
-										if ($form.length) {
-												applyReferencedDocumentsFilters($form);
-										}
-								}
-								showCellFeedback($cell, message, true);
-								$checkbox.prop('disabled', false).prop('checked', !exclude);
-								if ($status.length) {
+					}).done((response) => {
+							syncGroupRevisionFromPayload(response?.data);
+							syncAdminViewCacheState(response?.data, ['files']);
+							if (!response?.success || !response?.data) {
+									const message = response?.data?.message || 'Could not update exclusion.';
+									maybeReplaceReferencedDocumentRowFromResponse($row, $form, response?.data);
+									showCellFeedback($cell, message, true);
+									$checkbox.prop('disabled', false).prop('checked', !exclude);
+									if ($status.length) {
 										$status.text(message);
 								}
 								return;
 						}
 
-						const $row = $checkbox.closest('tr');
-						if ($row.length) {
-								if (response.data.actions_html) {
-										$row.find('td.column-actions').html(response.data.actions_html);
-								}
-								if (response.data.markdown_cache_html) {
-										$row.find('td.column-markdown_cache').html(response.data.markdown_cache_html);
-								}
-						}
+							const $row = $checkbox.closest('tr');
+							updateReferencedDocumentActionRow($row, response.data);
 
 						if ($status.length) {
 								$status.text(response.data.message || (exclude ? 'Excluded from indexing.' : 'Included for indexing.'));
@@ -3565,12 +3113,10 @@ return;
 								$error.hide().text('');
 						}
 
-						if (response.data.deleted_store_name && $container.find('.geweb-delete-gemini-store[data-store-name="' + escapeSelectorAttributeValue(response.data.deleted_store_name) + '"]').length) {
-								$status.text('Delete requested. Refreshing the Gemini stores list again...');
-								globalThis.setTimeout(() => {
-										refreshGeminiStores();
-								}, 1500);
-						}
+							if (response.data.deleted_store_name && $container.find('.geweb-delete-gemini-store[data-store-name="' + escapeSelectorAttributeValue(response.data.deleted_store_name) + '"]').length) {
+									$status.text('Delete requested. Refreshing the Gemini stores list again...');
+									globalThis.setTimeout(refreshGeminiStores, 1500);
+							}
 				}).fail((xhr) => {
 						const message = getAjaxErrorMessage(xhr, 'Could not delete the Gemini store.');
 						$status.text(message);

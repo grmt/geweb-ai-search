@@ -82,6 +82,7 @@ class Encryption {
      * @return string|null Decrypted API key or null if not found
      */
     public function getApiKey(): string {
-        return $this->decrypt(get_option(self::API_KEY, ''));
+        $encryptedApiKey = get_option(self::API_KEY, '');
+        return is_string($encryptedApiKey) ? $this->decrypt($encryptedApiKey) : '';
     }
 }

@@ -93,12 +93,6 @@ class AdminPreloadProgress {
 
             if ($status === 'failed') {
                 $failedSteps++;
-                if ($currentStepKey === '') {
-                    $currentStepKey = (string) $stepKey;
-                    $currentStepLabel = (string) ($step['label'] ?? $stepKey);
-                    $currentStepMessage = (string) ($step['message'] ?? '');
-                }
-                continue;
             }
 
             if ($currentStepKey === '') {

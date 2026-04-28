@@ -25,6 +25,8 @@ class ReferencedDocumentOverviewBuilder {
     private DocumentStore $documentStore;
     private SimpleFileListSupport $simpleFileListSupport;
     private PdfClassificationService $pdfClassificationService;
+    private bool $uploadsEnabled = false;
+    private string $connectionState = '';
 
     public function __construct(DocumentStore $documentStore, ?SimpleFileListSupport $simpleFileListSupport = null) {
         $this->documentStore = $documentStore;
@@ -38,10 +40,10 @@ class ReferencedDocumentOverviewBuilder {
     public function build(): array {
         DocumentStore::init();
 
-        $uploadsEnabled = get_option('geweb_aisearch_include_referenced_documents', '0') === '1';
+        $this->uploadsEnabled = get_option('geweb_aisearch_include_referenced_documents', '0') === '1';
         $postTypes = $this->getPostTypesForReferencedDocumentOverview();
         $connectionStatus = get_option(self::OPTION_CONNECTION_STATUS, []);
-        $connectionState = is_array($connectionStatus) ? (string) ($connectionStatus['status'] ?? '') : '';
+        $this->connectionState = is_array($connectionStatus) ? (string) ($connectionStatus['status'] ?? '') : '';
         $uploadedByHash = $this->indexUploadedDocumentsByHash();
 
         $posts = get_posts([
@@ -58,7 +60,7 @@ class ReferencedDocumentOverviewBuilder {
 
         $overview = [];
         foreach ($posts as $post) {
-            $this->collectPostReferencedDocuments($post, $overview, $uploadedByHash, $uploadsEnabled, $connectionState, $debug);
+            $this->collectPostReferencedDocuments($post, $overview, $uploadedByHash, $debug);
         }
 
         $simpleFileListModifiedMap = $this->simpleFileListSupport->getSimpleFileListModifiedMap(array_values(array_unique(array_filter(array_map(static function (array $item): string {
@@ -70,8 +72,6 @@ class ReferencedDocumentOverviewBuilder {
         $this->simpleFileListSupport->mergeSimpleFileListOptionEntries(
             $overview,
             $uploadedByHash,
-            $uploadsEnabled,
-            $connectionState,
             \Closure::fromCallable([$this, 'buildOverviewEntry'])
         );
 
@@ -118,7 +118,7 @@ class ReferencedDocumentOverviewBuilder {
      * @param array<string,array<string,mixed>> $uploadedByHash
      * @param array<string,int> $debug
      */
-    private function collectPostReferencedDocuments($post, array &$overview, array $uploadedByHash, bool $uploadsEnabled, string $connectionState, array &$debug): void {
+    private function collectPostReferencedDocuments($post, array &$overview, array $uploadedByHash, array &$debug): void {
         if (!$post instanceof \WP_Post) {
             return;
         }
@@ -133,16 +133,7 @@ class ReferencedDocumentOverviewBuilder {
         }
 
         foreach ($references as $reference) {
-            $this->collectReferencedOverviewItem(
-                $reference,
-                $post,
-                $isSimpleFileListPage,
-                $overview,
-                $uploadedByHash,
-                $uploadsEnabled,
-                $connectionState,
-                $debug
-            );
+            $this->collectReferencedOverviewItem($reference, $post, $isSimpleFileListPage, $overview, $uploadedByHash, $debug);
         }
     }
 
@@ -152,7 +143,7 @@ class ReferencedDocumentOverviewBuilder {
      * @param array<string,array<string,mixed>> $uploadedByHash
      * @param array<string,int> $debug
      */
-    private function collectReferencedOverviewItem(array $reference, \WP_Post $post, bool $isSimpleFileListPage, array &$overview, array $uploadedByHash, bool $uploadsEnabled, string $connectionState, array &$debug): void {
+    private function collectReferencedOverviewItem(array $reference, \WP_Post $post, bool $isSimpleFileListPage, array &$overview, array $uploadedByHash, array &$debug): void {
         $filePath = isset($reference['file_path']) ? (string) $reference['file_path'] : '';
         $fileUrl = isset($reference['file_url']) ? (string) $reference['file_url'] : '';
         $isBrokenReference = !empty($reference['broken_reference']);
@@ -168,7 +159,7 @@ class ReferencedDocumentOverviewBuilder {
         }
 
         $debug['accepted_documents']++;
-        $this->ensureOverviewItemExists($overview, $hash, $reference, $filePath, $fileUrl, $uploadedByHash, $uploadsEnabled, $connectionState, $isBrokenReference);
+        $this->ensureOverviewItemExists($overview, $hash, $reference, $filePath, $fileUrl, $uploadedByHash, $isBrokenReference);
 
         if ($isSimpleFileListPage) {
             $overview[$hash]['managed_by_simple_file_list'] = true;
@@ -188,17 +179,14 @@ class ReferencedDocumentOverviewBuilder {
      * @param array<string,mixed> $reference
      * @param array<string,array<string,mixed>> $uploadedByHash
      */
-    private function ensureOverviewItemExists(array &$overview, string $hash, array $reference, string $filePath, string $fileUrl, array $uploadedByHash, bool $uploadsEnabled, string $connectionState, bool $isBrokenReference): void {
+    private function ensureOverviewItemExists(array &$overview, string $hash, array $reference, string $filePath, string $fileUrl, array $uploadedByHash, bool $isBrokenReference): void {
         if (!isset($overview[$hash])) {
-            $uploaded = $uploadedByHash[$hash] ?? null;
             $overview[$hash] = $this->buildOverviewEntry(
                 $hash,
                 $filePath,
                 $fileUrl,
                 $this->simpleFileListSupport->resolveOverviewDisplayName($reference, $filePath),
-                $uploaded,
-                $uploadsEnabled,
-                $connectionState,
+                $uploadedByHash[$hash] ?? null,
                 false,
                 $isBrokenReference
             );
@@ -329,8 +317,8 @@ class ReferencedDocumentOverviewBuilder {
      * @param mixed $uploaded
      * @return array<string,mixed>
      */
-    private function buildOverviewEntry(string $hash, string $filePath, string $fileUrl, string $niceName, $uploaded, bool $uploadsEnabled, string $connectionState, bool $managedBySimpleFileList, bool $isBrokenReference = false): array {
-        $statusMeta = $this->resolveOverviewStatus($uploaded, $uploadsEnabled, $connectionState, $isBrokenReference);
+    private function buildOverviewEntry(string $hash, string $filePath, string $fileUrl, string $niceName, $uploaded, bool $managedBySimpleFileList, bool $isBrokenReference = false): array {
+        $statusMeta = $this->resolveOverviewStatus($uploaded, $this->uploadsEnabled, $this->connectionState, $isBrokenReference);
 
         return [
             'file_hash' => $hash,

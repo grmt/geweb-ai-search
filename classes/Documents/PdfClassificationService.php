@@ -28,8 +28,7 @@ class PdfClassificationService {
         $cache = $this->getCache();
         if (isset($cache[$normalizedPath]['signature'], $cache[$normalizedPath]['result']) && $cache[$normalizedPath]['signature'] === $signature) {
             /** @var array{key:string,label:string,details:string} $result */
-            $result = $cache[$normalizedPath]['result'];
-            return $result;
+            return $cache[$normalizedPath]['result'];
         }
 
         $result = $this->classifyFresh($normalizedPath);
@@ -85,35 +84,34 @@ class PdfClassificationService {
 
         $details = sprintf('fonts=%d, text_ops=%d, images=%d', $fontCount, $textOpCount, $imageCount);
 
-        if (($fontCount + $textOpCount) >= 8 && $imageCount <= 2) {
-            return [
-                'key' => 'text',
-                'label' => 'Text PDF',
-                'details' => $details,
-            ];
-        }
-
-        if (($fontCount + $textOpCount) >= 5 && $imageCount >= 2) {
-            return [
-                'key' => 'mixed',
-                'label' => 'Mixed PDF',
-                'details' => $details,
-            ];
-        }
-
-        if (($fontCount + $textOpCount) <= 2 && $imageCount >= 2) {
-            return [
-                'key' => 'scanned',
-                'label' => 'Scanned PDF',
-                'details' => $details,
-            ];
-        }
-
+        $classification = $this->classifyFromCounts($fontCount, $textOpCount, $imageCount);
         return [
-            'key' => 'unknown',
-            'label' => 'Unknown PDF',
+            'key' => $classification['key'],
+            'label' => $classification['label'],
             'details' => $details,
         ];
+    }
+
+    /**
+     * @return array{key:string,label:string}
+     */
+    private function classifyFromCounts(int $fontCount, int $textOpCount, int $imageCount): array {
+        $textSignalCount = $fontCount + $textOpCount;
+        $key = 'unknown';
+        $label = 'Unknown PDF';
+
+        if ($textSignalCount >= 8 && $imageCount <= 2) {
+            $key = 'text';
+            $label = 'Text PDF';
+        } elseif ($textSignalCount >= 5 && $imageCount >= 2) {
+            $key = 'mixed';
+            $label = 'Mixed PDF';
+        } elseif ($textSignalCount <= 2 && $imageCount >= 2) {
+            $key = 'scanned';
+            $label = 'Scanned PDF';
+        }
+
+        return ['key' => $key, 'label' => $label];
     }
 
     /**

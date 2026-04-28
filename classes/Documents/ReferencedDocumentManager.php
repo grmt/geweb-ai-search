@@ -4,13 +4,11 @@ namespace Geweb\AISearch;
 defined('ABSPATH') || exit;
 
 class ReferencedDocumentManager {
+    use ReferencedDocumentManagerOptionsTrait;
+
     private const OPTION_REFERENCED_SELECTION_TARGETS = 'geweb_aisearch_referenced_document_selection_targets';
-    private const OPTION_REFERENCED_OPERATION_STATUSES = 'geweb_aisearch_referenced_document_operation_statuses';
     private const OPTION_REFERENCED_IMAGE_PROCESSING_MODES = 'geweb_aisearch_referenced_document_image_processing_modes';
-    private const OPERATION_TIMEOUT_SECONDS = 300;
     private const SQL_SELECT_ALL_FROM = 'SELECT * FROM ';
-    private const SQL_DELETE_FROM = 'DELETE FROM ';
-    private const SQL_WHERE_FILE_HASH = ' WHERE file_hash = %s';
 
     private DocumentStore $documentStore;
     private string $documentsTable;
@@ -155,37 +153,41 @@ class ReferencedDocumentManager {
 
     public function updateReferencedDocumentNiceNameByHash(string $fileHash, string $niceName): bool {
         global $wpdb;
-        $niceNameUpdater = new SimpleFileListNiceNameUpdater();
-        $updatedNiceName = false;
-
         $niceName = trim($niceName);
-        if ($fileHash !== '' && $niceName !== '') {
-            $filePath = $this->resolveNiceNameFilePath($fileHash);
-            $rows = $filePath !== ''
-                ? $wpdb->get_results(
-                    "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE 'eeSFL\\_FileList\\_%'",
-                    ARRAY_A
-                )
-                : [];
-
-            if (is_array($rows) && !empty($rows)) {
-                foreach ($rows as $row) {
-                    $updatedOption = $niceNameUpdater->buildUpdatedOption($row, $filePath, $niceName);
-                    if ($updatedOption === null) {
-                        continue;
-                    }
-
-                    $saved = update_option((string) $row['option_name'], $updatedOption, false);
-                    if ($saved || get_option((string) $row['option_name']) === $updatedOption) {
-                        $this->documentStore->clearReferencedDocumentOverviewCache();
-                        $updatedNiceName = true;
-                        break;
-                    }
-                }
-            }
+        if ($fileHash === '' || $niceName === '') {
+            return false;
         }
 
-        return $updatedNiceName;
+        $filePath = $this->resolveNiceNameFilePath($fileHash);
+        $rows = $filePath !== ''
+            ? $wpdb->get_results(
+                "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE 'eeSFL\\_FileList\\_%'",
+                ARRAY_A
+            )
+            : [];
+
+        if (!is_array($rows) || empty($rows)) {
+            return false;
+        }
+
+        return $this->applyNiceNameToRows($rows, $filePath, $niceName);
+    }
+
+    private function applyNiceNameToRows(array $rows, string $filePath, string $niceName): bool {
+        $niceNameUpdater = new SimpleFileListNiceNameUpdater();
+        foreach ($rows as $row) {
+            $updatedOption = $niceNameUpdater->buildUpdatedOption($row, $filePath, $niceName);
+            if ($updatedOption === null) {
+                continue;
+            }
+
+            $saved = update_option((string) $row['option_name'], $updatedOption, false);
+            if ($saved || get_option((string) $row['option_name']) === $updatedOption) {
+                $this->documentStore->clearReferencedDocumentOverviewCache();
+                return true;
+            }
+        }
+        return false;
     }
 
     public function removeReferencedDocumentFromFileListByHash(string $fileHash): bool {
@@ -259,228 +261,29 @@ class ReferencedDocumentManager {
         $this->documentStore->clearReferencedDocumentOverviewCache();
     }
 
-    /**
-     * @return array<string,bool>
-     */
-    public function getReferencedDocumentSelectionTargets(): array {
-        $stored = UserScope::getGroupScopedOption(self::OPTION_REFERENCED_SELECTION_TARGETS, []);
-        if (!is_array($stored)) {
-            return [];
-        }
-
-        $targets = [];
-        foreach ($stored as $fileHash => $target) {
-            if (!is_string($fileHash) || $fileHash === '') {
-                continue;
-            }
-
-            $targets[$fileHash] = (bool) $target;
-        }
-
-        return $targets;
-    }
-
-    /**
-     * @param array<string,bool> $targets
-     * @return void
-     */
-    public function saveReferencedDocumentSelectionTargets(array $targets): void {
-        $normalized = [];
-        foreach ($targets as $fileHash => $target) {
-            if (!is_string($fileHash) || $fileHash === '') {
-                continue;
-            }
-
-            $normalized[sanitize_text_field($fileHash)] = (bool) $target;
-        }
-
-        UserScope::updateGroupScopedOption(self::OPTION_REFERENCED_SELECTION_TARGETS, $normalized, false);
-        $this->documentStore->clearReferencedDocumentOverviewCache();
-    }
-
-    public function saveReferencedDocumentSelectionTarget(string $fileHash, bool $include): void {
-        $targets = $this->getReferencedDocumentSelectionTargets();
-        $targets[sanitize_text_field($fileHash)] = $include;
-        UserScope::updateGroupScopedOption(self::OPTION_REFERENCED_SELECTION_TARGETS, $targets, false);
-        $this->documentStore->clearReferencedDocumentOverviewCache();
-    }
-
-    /**
-     * @return array<string,string>
-     */
-    public function getReferencedDocumentImageProcessingModes(): array {
-        $stored = UserScope::getGroupScopedOption(self::OPTION_REFERENCED_IMAGE_PROCESSING_MODES, []);
-        if (!is_array($stored)) {
-            return [];
-        }
-
-        $normalized = [];
-        foreach ($stored as $fileHash => $mode) {
-            if (!is_string($fileHash) || $fileHash === '') {
-                continue;
-            }
-
-            $normalizedMode = $this->normalizeReferencedDocumentImageProcessingMode((string) $mode);
-            if ($normalizedMode === ImageOcrService::MODE_NONE) {
-                continue;
-            }
-
-            $normalized[sanitize_text_field($fileHash)] = $normalizedMode;
-        }
-
-        return $normalized;
-    }
-
-    public function getReferencedDocumentImageProcessingMode(string $fileHash): string {
-        $fileHash = sanitize_text_field($fileHash);
-        if ($fileHash === '') {
-            return ImageOcrService::MODE_NONE;
-        }
-
-        $modes = $this->getReferencedDocumentImageProcessingModes();
-        return $modes[$fileHash] ?? ImageOcrService::MODE_NONE;
-    }
-
-    public function saveReferencedDocumentImageProcessingMode(string $fileHash, string $mode): void {
-        $fileHash = sanitize_text_field($fileHash);
-        if ($fileHash === '') {
-            return;
-        }
-
-        $modes = $this->getReferencedDocumentImageProcessingModes();
-        $normalizedMode = $this->normalizeReferencedDocumentImageProcessingMode($mode);
-        if ($normalizedMode === ImageOcrService::MODE_NONE) {
-            unset($modes[$fileHash]);
-        } else {
-            $modes[$fileHash] = $normalizedMode;
-        }
-
-        UserScope::updateGroupScopedOption(self::OPTION_REFERENCED_IMAGE_PROCESSING_MODES, $modes, false);
-        $this->documentStore->clearReferencedDocumentOverviewCache();
-    }
-
     public function refreshReferencedDocumentImageMarkdownCache(string $fileHash): void {
         $fileHash = sanitize_text_field($fileHash);
         if ($fileHash === '') {
-            throw new \Exception('Missing file hash.');
+            throw new ReferencedDocumentException('Missing file hash.');
         }
 
         $reference = $this->findReferenceByHash($fileHash);
         if (!is_array($reference) || empty($reference['file_path'])) {
-            throw new \Exception('Could not resolve the referenced document.');
+            throw new ReferencedDocumentException('Could not resolve the referenced document.');
         }
 
         $mode = $this->getReferencedDocumentImageProcessingMode($fileHash);
         if (!in_array($mode, [ImageOcrService::MODE_OCR, ImageOcrService::MODE_DESCRIBE], true)) {
-            throw new \Exception('Document processing is disabled for this file.');
+            throw new ReferencedDocumentException('Document processing is disabled for this file.');
         }
 
         $this->documentStore->refreshReferencedImageMarkdownCache(
             $fileHash,
             (string) $reference['file_path'],
-            (string) ($reference['display_name'] ?? basename((string) $reference['file_path'])),
             (string) ($reference['mime_type'] ?? ''),
             $mode
         );
         $this->documentStore->clearReferencedDocumentOverviewCache();
-    }
-
-    /**
-     * @return array<string,array{status:string,error:string,updated_at:int}>
-     */
-    public function getReferencedDocumentOperationStatuses(): array {
-        $stored = UserScope::getGroupScopedOption(self::OPTION_REFERENCED_OPERATION_STATUSES, []);
-        $statuses = is_array($stored) ? $stored : [];
-        $normalized = [];
-        $changed = false;
-        $now = time();
-
-        foreach ($statuses as $fileHash => $payload) {
-            if (!is_string($fileHash) || $fileHash === '' || !is_array($payload)) {
-                $changed = true;
-                continue;
-            }
-
-            $status = sanitize_key((string) ($payload['status'] ?? ''));
-            $error = sanitize_text_field((string) ($payload['error'] ?? ''));
-            $updatedAt = (int) ($payload['updated_at'] ?? 0);
-            if ($status === '') {
-                $changed = true;
-                continue;
-            }
-
-            if (in_array($status, ['uploading', 'excluding'], true) && $updatedAt > 0 && ($now - $updatedAt) > self::OPERATION_TIMEOUT_SECONDS) {
-                $status = 'error';
-                $error = $error !== '' ? $error : 'The document operation timed out. Please retry.';
-                $updatedAt = $now;
-                $changed = true;
-            }
-
-            $normalized[$fileHash] = [
-                'status' => $status,
-                'error' => $error,
-                'updated_at' => $updatedAt,
-            ];
-        }
-
-        if ($changed) {
-            UserScope::updateGroupScopedOption(self::OPTION_REFERENCED_OPERATION_STATUSES, $normalized, false);
-        }
-
-        return $normalized;
-    }
-
-    /**
-     * @return array{status:string,error:string,updated_at:int}|null
-     */
-    public function getReferencedDocumentOperationStatus(string $fileHash): ?array {
-        $fileHash = sanitize_text_field($fileHash);
-        if ($fileHash === '') {
-            return null;
-        }
-
-        $statuses = $this->getReferencedDocumentOperationStatuses();
-        return $statuses[$fileHash] ?? null;
-    }
-
-    public function saveReferencedDocumentOperationStatus(string $fileHash, string $status, string $error = ''): void {
-        $fileHash = sanitize_text_field($fileHash);
-        $status = sanitize_key($status);
-        if ($fileHash === '' || $status === '') {
-            return;
-        }
-
-        $statuses = $this->getReferencedDocumentOperationStatuses();
-        $statuses[$fileHash] = [
-            'status' => $status,
-            'error' => sanitize_text_field($error),
-            'updated_at' => time(),
-        ];
-
-        UserScope::updateGroupScopedOption(self::OPTION_REFERENCED_OPERATION_STATUSES, $statuses, false);
-        $this->documentStore->clearReferencedDocumentOverviewCache();
-    }
-
-    public function clearReferencedDocumentOperationStatus(string $fileHash): void {
-        $fileHash = sanitize_text_field($fileHash);
-        if ($fileHash === '') {
-            return;
-        }
-
-        $statuses = $this->getReferencedDocumentOperationStatuses();
-        if (!array_key_exists($fileHash, $statuses)) {
-            return;
-        }
-
-        unset($statuses[$fileHash]);
-        UserScope::updateGroupScopedOption(self::OPTION_REFERENCED_OPERATION_STATUSES, $statuses, false);
-        $this->documentStore->clearReferencedDocumentOverviewCache();
-    }
-
-    private function normalizeReferencedDocumentImageProcessingMode(string $mode): string {
-        return in_array($mode, [ImageOcrService::MODE_OCR, ImageOcrService::MODE_DESCRIBE], true)
-            ? $mode
-            : ImageOcrService::MODE_NONE;
     }
 
     /**

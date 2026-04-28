@@ -6,7 +6,7 @@ defined('ABSPATH') || exit;
 /**
  * Shared interface for AI provider integrations.
  */
-interface AIProviderInterface {
+interface AIProviderInterface extends AIVisionProviderInterface, AIStoreProviderInterface {
     /**
      * @return string
      */
@@ -16,11 +16,6 @@ interface AIProviderInterface {
      * @return string
      */
     public function getProviderLabel(): string;
-
-    /**
-     * @return string
-     */
-    public function getStoreData(): string;
 
     /**
      * @param bool $forceRefresh
@@ -84,17 +79,6 @@ interface AIProviderInterface {
     public function testModel(string $model): array;
 
     /**
-     * @param string $name
-     * @return bool
-     */
-    public function createStore(string $name = 'WebsiteSearch'): bool;
-
-    /**
-     * @return void
-     */
-    public function deleteStore(): void;
-
-    /**
      * @param string $content
      * @param int $postId
      * @return string
@@ -108,20 +92,6 @@ interface AIProviderInterface {
      * @return string
      */
     public function uploadLocalFile(string $filePath, string $displayName, string $mimeType): string;
-
-    /**
-     * @param string $filePath
-     * @param string $mimeType
-     * @return string
-     */
-    public function extractImageText(string $filePath, string $mimeType): string;
-
-    /**
-     * @param string $filePath
-     * @param string $mimeType
-     * @return string
-     */
-    public function describeImage(string $filePath, string $mimeType): string;
 
     /**
      * @param string $documentName

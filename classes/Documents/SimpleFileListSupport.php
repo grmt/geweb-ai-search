@@ -7,7 +7,7 @@ defined('ABSPATH') || exit;
  * Simple File List discovery and metadata helpers.
  */
 class SimpleFileListSupport {
-    private const SQL_SHOW_TABLES_LIKE = 'SHOW TABLES LIKE %s';
+    use SimpleFileListSupportHelpersTrait;
 
     /**
      * Determine whether a post is rendering a Simple File List shortcode.
@@ -31,22 +31,8 @@ class SimpleFileListSupport {
         $directories = [];
 
         foreach ($references as $reference) {
-            if (!is_array($reference)) {
-                continue;
-            }
-
-            $filePath = isset($reference['file_path']) ? (string) $reference['file_path'] : '';
-            $fileUrl = isset($reference['file_url']) ? (string) $reference['file_url'] : '';
-            if ($filePath === '' || $fileUrl === '' || !is_readable($filePath)) {
-                continue;
-            }
-
-            $expanded[$filePath] = $reference;
-            $directory = wp_normalize_path((string) dirname($filePath));
-            if ($directory !== '') {
-                $directories[$directory] = [
-                    'dir_url' => untrailingslashit((string) dirname($fileUrl)),
-                ];
+            if (is_array($reference)) {
+                $this->collectReferenceForExpansion($reference, $expanded, $directories);
             }
         }
 
@@ -60,30 +46,51 @@ class SimpleFileListSupport {
 
         foreach ($directories as $directory => $data) {
             foreach ($this->getSupportedFilesInDirectory($directory) as $filePath) {
-                $baseName = basename($filePath);
-                $dirUrl = isset($data['dir_url']) ? (string) $data['dir_url'] : '';
-                $fileUrl = $dirUrl !== '' ? $dirUrl . '/' . rawurlencode($baseName) : '';
-                if ($fileUrl === '') {
-                    continue;
-                }
-
-                $niceName = $niceNameMap[$filePath] ?? $this->prettifyFileName($baseName);
-                if (isset($expanded[$filePath])) {
-                    if ($niceName !== '') {
-                        $expanded[$filePath]['display_name'] = $niceName;
-                    }
-                    continue;
-                }
-
-                $expanded[$filePath] = [
-                    'file_path' => $filePath,
-                    'file_url' => $fileUrl,
-                    'display_name' => $niceName,
-                ];
+                $this->expandDirectoryFile($filePath, $data, $niceNameMap, $expanded);
             }
         }
 
         return array_values($expanded);
+    }
+
+    /**
+     * @param array<string,string> $niceNameMap
+     * @param array<string,array<string,string>> $expanded
+     * @param array<string,mixed> $data
+     */
+    private function expandDirectoryFile(string $filePath, array $data, array $niceNameMap, array &$expanded): void {
+        $baseName = basename($filePath);
+        $dirUrl = isset($data['dir_url']) ? (string) $data['dir_url'] : '';
+        $fileUrl = $dirUrl !== '' ? $dirUrl . '/' . rawurlencode($baseName) : '';
+        if ($fileUrl === '') {
+            return;
+        }
+        $niceName = $niceNameMap[$filePath] ?? $this->prettifyFileName($baseName);
+        if (isset($expanded[$filePath])) {
+            if ($niceName !== '') {
+                $expanded[$filePath]['display_name'] = $niceName;
+            }
+            return;
+        }
+        $expanded[$filePath] = ['file_path' => $filePath, 'file_url' => $fileUrl, 'display_name' => $niceName];
+    }
+
+    /**
+     * @param array<string,string> $reference
+     * @param array<string,array<string,string>> $expanded
+     * @param array<string,array<string,string>> $directories
+     */
+    private function collectReferenceForExpansion(array $reference, array &$expanded, array &$directories): void {
+        $filePath = isset($reference['file_path']) ? (string) $reference['file_path'] : '';
+        $fileUrl = isset($reference['file_url']) ? (string) $reference['file_url'] : '';
+        if ($filePath === '' || $fileUrl === '' || !is_readable($filePath)) {
+            return;
+        }
+        $expanded[$filePath] = $reference;
+        $directory = wp_normalize_path((string) dirname($filePath));
+        if ($directory !== '') {
+            $directories[$directory] = ['dir_url' => untrailingslashit((string) dirname($fileUrl))];
+        }
     }
 
     /**
@@ -92,44 +99,39 @@ class SimpleFileListSupport {
      * @param array<string,array<string,mixed>> $overview
      * @param array<string,array<string,mixed>> $uploadedByHash
      */
-    public function mergeSimpleFileListOptionEntries(array &$overview, array $uploadedByHash, bool $uploadsEnabled, string $connectionState, callable $buildOverviewEntry): void {
+    public function mergeSimpleFileListOptionEntries(array &$overview, array $uploadedByHash, callable $buildOverviewEntry): void {
         foreach ($this->getSimpleFileListEntries() as $entry) {
             if (!is_array($entry)) {
                 continue;
             }
-
-            $filePath = isset($entry['file_path']) ? (string) $entry['file_path'] : '';
-            $fileUrl = isset($entry['file_url']) ? (string) $entry['file_url'] : '';
-            if ($filePath === '' || $fileUrl === '' || !is_readable($filePath)) {
-                continue;
-            }
-
-            $hash = hash_file('sha256', $filePath);
-            if (!$hash) {
-                continue;
-            }
-
-            $displayName = isset($entry['display_name']) ? trim((string) $entry['display_name']) : basename($filePath);
-            if (isset($overview[$hash])) {
-                $overview[$hash]['managed_by_simple_file_list'] = true;
-                if ($displayName !== '' && (empty($overview[$hash]['nice_name']) || $overview[$hash]['nice_name'] === basename($filePath))) {
-                    $overview[$hash]['nice_name'] = $displayName;
-                }
-                continue;
-            }
-
-            $uploaded = $uploadedByHash[$hash] ?? null;
-            $overview[$hash] = $buildOverviewEntry(
-                $hash,
-                $filePath,
-                $fileUrl,
-                $displayName,
-                $uploaded,
-                $uploadsEnabled,
-                $connectionState,
-                true
-            );
+            $this->mergeEntryIntoOverview($entry, $overview, $uploadedByHash, $buildOverviewEntry);
         }
+    }
+
+    /**
+     * @param array<string,string> $entry
+     * @param array<string,array<string,mixed>> $overview
+     * @param array<string,array<string,mixed>> $uploadedByHash
+     */
+    private function mergeEntryIntoOverview(array $entry, array &$overview, array $uploadedByHash, callable $buildOverviewEntry): void {
+        $filePath = isset($entry['file_path']) ? (string) $entry['file_path'] : '';
+        $fileUrl = isset($entry['file_url']) ? (string) $entry['file_url'] : '';
+        if ($filePath === '' || $fileUrl === '' || !is_readable($filePath)) {
+            return;
+        }
+        $hash = hash_file('sha256', $filePath);
+        if (!$hash) {
+            return;
+        }
+        $displayName = isset($entry['display_name']) ? trim((string) $entry['display_name']) : basename($filePath);
+        if (isset($overview[$hash])) {
+            $overview[$hash]['managed_by_simple_file_list'] = true;
+            if ($displayName !== '' && (empty($overview[$hash]['nice_name']) || $overview[$hash]['nice_name'] === basename($filePath))) {
+                $overview[$hash]['nice_name'] = $displayName;
+            }
+            return;
+        }
+        $overview[$hash] = $buildOverviewEntry($hash, $filePath, $fileUrl, $displayName, $uploadedByHash[$hash] ?? null, true);
     }
 
     /**
@@ -151,45 +153,37 @@ class SimpleFileListSupport {
 
         $entries = [];
         foreach ($rows as $row) {
-            if (!is_array($row) || !isset($row['option_value'])) {
-                continue;
-            }
-
-            $optionName = isset($row['option_name']) ? (string) $row['option_name'] : 'unknown-option';
-            $value = maybe_unserialize($row['option_value']);
-            if (!is_array($value)) {
-                error_log('geweb-ai-search: SFL option ' . $optionName . ' did not unserialize to an array.');
-                continue;
-            }
-
-            foreach ($value as $record) {
-                if (!is_array($record)) {
-                    continue;
-                }
-
-                $filePathValue = isset($record['FilePath']) ? trim((string) $record['FilePath']) : '';
-                if ($filePathValue === '') {
-                    continue;
-                }
-
-                $resolved = $this->resolveSimpleFileListRecordPath($filePathValue);
-                if ($resolved === null) {
-                    continue;
-                }
-
-                $entries[$resolved['file_path']] = [
-                    'file_path' => $resolved['file_path'],
-                    'file_url' => $resolved['file_url'],
-                    'display_name' => isset($record['FileNiceName']) && trim((string) $record['FileNiceName']) !== ''
-                        ? trim((string) $record['FileNiceName'])
-                        : $this->prettifyFileName(basename($resolved['file_path'])),
-                ];
-            }
+            $this->processSimpleFileListEntryRow($row, $entries);
         }
 
         error_log('geweb-ai-search: SFL entry lookup resolved ' . count($entries) . ' file(s).');
 
         return array_values($entries);
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     * @param array<string,array<string,string>> $entries
+     */
+    private function processSimpleFileListEntryRow(array $row, array &$entries): void {
+        if (!is_array($row) || !isset($row['option_value'])) {
+            return;
+        }
+        $optionName = isset($row['option_name']) ? (string) $row['option_name'] : 'unknown-option';
+        $value = maybe_unserialize($row['option_value']);
+        if (!is_array($value)) {
+            error_log('geweb-ai-search: SFL option ' . $optionName . ' did not unserialize to an array.');
+            return;
+        }
+        foreach ($value as $record) {
+            if (!is_array($record)) {
+                continue;
+            }
+            $entry = $this->buildEntryFromRecord($record);
+            if ($entry !== null) {
+                $entries[$entry['file_path']] = $entry;
+            }
+        }
     }
 
     public function buildSimpleFileListAdminUrl(string $filePath): string {
@@ -210,11 +204,9 @@ class SimpleFileListSupport {
         global $wpdb;
 
         $normalizedPath = wp_normalize_path($filePath);
-        if ($normalizedPath === '' || !is_readable($normalizedPath)) {
-            return false;
-        }
-
-        $targets = $this->buildSimpleFileListTargets([$normalizedPath]);
+        $targets = $normalizedPath !== '' && is_readable($normalizedPath)
+            ? $this->buildSimpleFileListTargets([$normalizedPath])
+            : [];
         if (empty($targets)) {
             return false;
         }
@@ -229,103 +221,10 @@ class SimpleFileListSupport {
 
         $removedAny = false;
         foreach ($rows as $row) {
-            if (!is_array($row) || !isset($row['option_name'], $row['option_value'])) {
-                continue;
-            }
-
-            $value = maybe_unserialize($row['option_value']);
-            if (!is_array($value)) {
-                continue;
-            }
-
-            $updatedValue = [];
-            $removedFromOption = false;
-
-            foreach ($value as $record) {
-                if (!is_array($record)) {
-                    $updatedValue[] = $record;
-                    continue;
-                }
-
-                $recordPath = isset($record['FilePath']) ? trim((string) $record['FilePath']) : '';
-                $matchedPath = $recordPath !== ''
-                    ? $this->matchSimpleFileListRecordPath($recordPath, $targets)
-                    : null;
-
-                if ($matchedPath === $normalizedPath) {
-                    $removedFromOption = true;
-                    $removedAny = true;
-                    continue;
-                }
-
-                $updatedValue[] = $record;
-            }
-
-            if (!$removedFromOption) {
-                continue;
-            }
-
-            update_option((string) $row['option_name'], array_values($updatedValue), false);
+            $this->processRemoveRow($row, $normalizedPath, $targets, $removedAny);
         }
 
         return $removedAny;
-    }
-
-    /**
-     * @return array<int,string>
-     */
-    public function getSupportedFilesInDirectory(string $directory): array {
-        if ($directory === '' || !is_dir($directory) || !is_readable($directory)) {
-            return [];
-        }
-
-        $files = [];
-        $entries = @scandir($directory);
-        if (!is_array($entries)) {
-            return [];
-        }
-
-        foreach ($entries as $entry) {
-            if ($entry === '.' || $entry === '..') {
-                continue;
-            }
-
-            $filePath = wp_normalize_path(trailingslashit($directory) . $entry);
-            if (!is_file($filePath) || !is_readable($filePath)) {
-                continue;
-            }
-
-            $files[] = $filePath;
-        }
-
-        sort($files, SORT_NATURAL | SORT_FLAG_CASE);
-
-        return $files;
-    }
-
-    /**
-     * @param array<string,mixed> $reference
-     */
-    public function resolveOverviewDisplayName(array $reference, string $filePath): string {
-        $displayName = isset($reference['display_name']) ? trim((string) $reference['display_name']) : '';
-        if ($displayName !== '') {
-            return $displayName;
-        }
-
-        return $this->prettifyFileName(basename($filePath));
-    }
-
-    public function prettifyFileName(string $fileName): string {
-        $name = pathinfo($fileName, PATHINFO_FILENAME);
-        if ($name === '') {
-            return $fileName;
-        }
-
-        $name = str_replace(['_', '-'], ' ', $name);
-        $name = preg_replace('/\s+/', ' ', $name);
-        $name = trim((string) $name);
-
-        return $name !== '' ? $name : $fileName;
     }
 
     /**
@@ -335,22 +234,7 @@ class SimpleFileListSupport {
     public function getSimpleFileListNiceNameMap(array $directories): array {
         global $wpdb;
 
-        $targets = [];
-        $uploads = wp_get_upload_dir();
-        $baseDir = wp_normalize_path((string) ($uploads['basedir'] ?? ''));
-
-        foreach ($directories as $directory) {
-            foreach ($this->getSupportedFilesInDirectory($directory) as $filePath) {
-                $normalizedPath = wp_normalize_path($filePath);
-                $targets[$normalizedPath] = [
-                    'basename' => basename($normalizedPath),
-                    'relative_path' => $baseDir !== '' && strpos($normalizedPath, $baseDir) === 0
-                        ? ltrim(substr($normalizedPath, strlen($baseDir)), '/')
-                        : basename($normalizedPath),
-                ];
-            }
-        }
-
+        $targets = $this->buildDirectoryFileTargets($directories);
         if (empty($targets)) {
             return [];
         }
@@ -366,31 +250,16 @@ class SimpleFileListSupport {
                 if (!is_array($row) || !isset($row['option_value'])) {
                     continue;
                 }
-
-                $value = maybe_unserialize($row['option_value']);
-                $this->scanSimpleFileListMetadata($value, $targets, $niceNames);
+                $this->scanSimpleFileListMetadata(maybe_unserialize($row['option_value']), $targets, $niceNames);
             }
         }
 
-        $candidateTables = array_unique(array_filter(array_merge(
-            $wpdb->get_col($wpdb->prepare(self::SQL_SHOW_TABLES_LIKE, $wpdb->esc_like($wpdb->prefix . 'eeSFL') . '%')),
-            $wpdb->get_col($wpdb->prepare(self::SQL_SHOW_TABLES_LIKE, $wpdb->esc_like($wpdb->prefix . 'simple_file_list') . '%')),
-            $wpdb->get_col($wpdb->prepare(self::SQL_SHOW_TABLES_LIKE, $wpdb->esc_like($wpdb->prefix . 'eesfl') . '%'))
-        )));
-
-        foreach ($candidateTables as $tableName) {
-            $tableName = (string) $tableName;
-            if ($tableName === '') {
-                continue;
-            }
-
+        foreach ($this->getSflCandidateTableNames() as $tableName) {
             $rows = $wpdb->get_results('SELECT * FROM ' . $tableName, ARRAY_A);
-            if (!is_array($rows)) {
-                continue;
-            }
-
-            foreach ($rows as $row) {
-                $this->scanSimpleFileListMetadata($row, $targets, $niceNames);
+            if (is_array($rows)) {
+                foreach ($rows as $row) {
+                    $this->scanSimpleFileListMetadata($row, $targets, $niceNames);
+                }
             }
         }
 
@@ -404,22 +273,7 @@ class SimpleFileListSupport {
     public function getSimpleFileListModifiedMap(array $directories): array {
         global $wpdb;
 
-        $targets = [];
-        $uploads = wp_get_upload_dir();
-        $baseDir = wp_normalize_path((string) ($uploads['basedir'] ?? ''));
-
-        foreach ($directories as $directory) {
-            foreach ($this->getSupportedFilesInDirectory($directory) as $filePath) {
-                $normalizedPath = wp_normalize_path($filePath);
-                $targets[$normalizedPath] = [
-                    'basename' => basename($normalizedPath),
-                    'relative_path' => $baseDir !== '' && strpos($normalizedPath, $baseDir) === 0
-                        ? ltrim(substr($normalizedPath, strlen($baseDir)), '/')
-                        : basename($normalizedPath),
-                ];
-            }
-        }
-
+        $targets = $this->buildDirectoryFileTargets($directories);
         if (empty($targets)) {
             return [];
         }
@@ -435,31 +289,16 @@ class SimpleFileListSupport {
                 if (!is_array($row) || !isset($row['option_value'])) {
                     continue;
                 }
-
-                $value = maybe_unserialize($row['option_value']);
-                $this->scanSimpleFileListModifiedMetadata($value, $targets, $modifiedMap);
+                $this->scanSimpleFileListModifiedMetadata(maybe_unserialize($row['option_value']), $targets, $modifiedMap);
             }
         }
 
-        $candidateTables = array_unique(array_filter(array_merge(
-            $wpdb->get_col($wpdb->prepare(self::SQL_SHOW_TABLES_LIKE, $wpdb->esc_like($wpdb->prefix . 'eeSFL') . '%')),
-            $wpdb->get_col($wpdb->prepare(self::SQL_SHOW_TABLES_LIKE, $wpdb->esc_like($wpdb->prefix . 'simple_file_list') . '%')),
-            $wpdb->get_col($wpdb->prepare(self::SQL_SHOW_TABLES_LIKE, $wpdb->esc_like($wpdb->prefix . 'eesfl') . '%'))
-        )));
-
-        foreach ($candidateTables as $tableName) {
-            $tableName = (string) $tableName;
-            if ($tableName === '') {
-                continue;
-            }
-
+        foreach ($this->getSflCandidateTableNames() as $tableName) {
             $rows = $wpdb->get_results('SELECT * FROM ' . $tableName, ARRAY_A);
-            if (!is_array($rows)) {
-                continue;
-            }
-
-            foreach ($rows as $row) {
-                $this->scanSimpleFileListModifiedMetadata($row, $targets, $modifiedMap);
+            if (is_array($rows)) {
+                foreach ($rows as $row) {
+                    $this->scanSimpleFileListModifiedMetadata($row, $targets, $modifiedMap);
+                }
             }
         }
 
@@ -485,116 +324,11 @@ class SimpleFileListSupport {
         error_log('geweb-ai-search: SFL nice-name lookup scanning ' . count($rows) . ' eeSFL_FileList_* option row(s) for ' . count($targets) . ' target file(s).');
         $niceNames = [];
         foreach ($rows as $row) {
-            if (!is_array($row) || !isset($row['option_value'])) {
-                continue;
-            }
-
-            $optionName = isset($row['option_name']) ? (string) $row['option_name'] : 'unknown-option';
-            $value = maybe_unserialize($row['option_value']);
-            if (!is_array($value)) {
-                error_log('geweb-ai-search: SFL option ' . $optionName . ' did not unserialize to an array.');
-                continue;
-            }
-
-            foreach ($value as $record) {
-                if (!is_array($record)) {
-                    continue;
-                }
-
-                $filePathValue = isset($record['FilePath']) ? trim((string) $record['FilePath']) : '';
-                $niceName = isset($record['FileNiceName']) ? trim((string) $record['FileNiceName']) : '';
-                if ($filePathValue === '' || $niceName === '') {
-                    continue;
-                }
-
-                $matchedPath = $this->matchSimpleFileListRecordPath($filePathValue, $targets);
-                if ($matchedPath === null || isset($niceNames[$matchedPath])) {
-                    continue;
-                }
-
-                $niceNames[$matchedPath] = $niceName;
-                error_log('geweb-ai-search: SFL nice-name match from ' . $optionName . ' for ' . basename($matchedPath) . ' => ' . $niceName);
-            }
+            $this->processNiceNameFileListRow($row, $targets, $niceNames);
         }
 
         error_log('geweb-ai-search: SFL nice-name lookup resolved ' . count($niceNames) . ' file(s).');
         return $niceNames;
-    }
-
-    /**
-     * @return array<string,string>|null
-     */
-    public function resolveSimpleFileListRecordPath(string $filePathValue): ?array {
-        $uploads = wp_get_upload_dir();
-        $baseDir = wp_normalize_path((string) ($uploads['basedir'] ?? ''));
-        $baseUrl = (string) ($uploads['baseurl'] ?? '');
-        if ($baseDir === '' || $baseUrl === '') {
-            return null;
-        }
-
-        $normalizedValue = wp_normalize_path(ltrim(trim($filePathValue), '/'));
-        $candidates = [];
-
-        if ($normalizedValue !== '') {
-            $candidates[] = wp_normalize_path(trailingslashit($baseDir) . $normalizedValue);
-        }
-
-        $baseName = basename($normalizedValue);
-        if ($baseName !== '') {
-            $searched = $this->findFileInUploadsByBasename($baseName, $baseDir);
-            if ($searched !== null) {
-                $candidates[] = $searched;
-            }
-        }
-
-        foreach (array_unique($candidates) as $candidate) {
-            if ($candidate === '' || !is_file($candidate) || !is_readable($candidate)) {
-                continue;
-            }
-
-            if (strpos($candidate, $baseDir) !== 0) {
-                continue;
-            }
-
-            $relativePath = ltrim(substr($candidate, strlen($baseDir)), '/');
-            return [
-                'file_path' => $candidate,
-                'file_url' => trailingslashit($baseUrl) . str_replace('%2F', '/', rawurlencode($relativePath)),
-            ];
-        }
-
-        return null;
-    }
-
-    public function findFileInUploadsByBasename(string $baseName, string $baseDir): ?string {
-        static $indexedFiles = null;
-
-        if ($indexedFiles === null) {
-            $indexedFiles = [];
-            if (is_dir($baseDir) && is_readable($baseDir)) {
-                try {
-                    $iterator = new \RecursiveIteratorIterator(
-                        new \RecursiveDirectoryIterator($baseDir, \FilesystemIterator::SKIP_DOTS)
-                    );
-
-                    foreach ($iterator as $fileInfo) {
-                        if (!$fileInfo instanceof \SplFileInfo || !$fileInfo->isFile()) {
-                            continue;
-                        }
-
-                        $indexedFiles[$fileInfo->getBasename()][] = wp_normalize_path($fileInfo->getPathname());
-                    }
-                } catch (\Throwable $e) {
-                    return null;
-                }
-            }
-        }
-
-        if (empty($indexedFiles[$baseName])) {
-            return null;
-        }
-
-        return (string) $indexedFiles[$baseName][0];
     }
 
     /**
@@ -625,128 +359,6 @@ class SimpleFileListSupport {
                 $this->scanSimpleFileListMetadata($nested, $targets, $niceNames);
             }
         }
-    }
-
-    /**
-     * @param array<string,mixed> $record
-     * @param array<string,array<string,string>> $targets
-     * @return array<string,string>|null
-     */
-    public function extractSimpleFileListRecordMatch(array $record, array $targets): ?array {
-        $stringFields = [];
-        foreach ($record as $key => $value) {
-            if (!is_scalar($value)) {
-                continue;
-            }
-
-            $stringValue = trim((string) $value);
-            if ($stringValue === '') {
-                continue;
-            }
-
-            $stringFields[(string) $key] = $stringValue;
-        }
-
-        if (empty($stringFields)) {
-            return null;
-        }
-
-        foreach ($targets as $filePath => $target) {
-            $basename = $target['basename'];
-            $relativePath = $target['relative_path'];
-            $matched = false;
-
-            foreach ($stringFields as $fieldValue) {
-                $normalizedField = wp_normalize_path($fieldValue);
-                if (
-                    $fieldValue === $basename ||
-                    $normalizedField === wp_normalize_path($relativePath) ||
-                    str_ends_with($normalizedField, '/' . $basename) ||
-                    strpos($normalizedField, $basename) !== false
-                ) {
-                    $matched = true;
-                    break;
-                }
-            }
-
-            if (!$matched) {
-                continue;
-            }
-
-            foreach ($stringFields as $fieldKey => $fieldValue) {
-                if (!preg_match('/nice|display|title|label/i', $fieldKey)) {
-                    continue;
-                }
-
-                $niceName = trim($fieldValue);
-                if ($this->isUsableSimpleFileListNiceName($niceName, $basename)) {
-                    return [
-                        'file_path' => $filePath,
-                        'nice_name' => $niceName,
-                    ];
-                }
-            }
-
-            foreach ($stringFields as $fieldKey => $fieldValue) {
-                if (!preg_match('/name/i', $fieldKey) || preg_match('/file|path|url|ext|type/i', $fieldKey)) {
-                    continue;
-                }
-
-                $niceName = trim($fieldValue);
-                if ($this->isUsableSimpleFileListNiceName($niceName, $basename)) {
-                    return [
-                        'file_path' => $filePath,
-                        'nice_name' => $niceName,
-                    ];
-                }
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * @param array<string,array<string,string>> $targets
-     */
-    public function matchSimpleFileListRecordPath(string $filePathValue, array $targets): ?string {
-        $normalizedValue = wp_normalize_path(ltrim(trim($filePathValue), '/'));
-
-        foreach ($targets as $filePath => $target) {
-            $basename = wp_normalize_path((string) ($target['basename'] ?? basename($filePath)));
-            $relativePath = wp_normalize_path(ltrim((string) ($target['relative_path'] ?? ''), '/'));
-
-            if ($normalizedValue === $basename || $normalizedValue === $relativePath || str_ends_with($relativePath, '/' . $normalizedValue)) {
-                return $filePath;
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * @param array<int,string> $filePaths
-     * @return array<string,array<string,string>>
-     */
-    private function buildSimpleFileListTargets(array $filePaths): array {
-        $targets = [];
-        $uploads = wp_get_upload_dir();
-        $baseDir = wp_normalize_path((string) ($uploads['basedir'] ?? ''));
-
-        foreach ($filePaths as $filePath) {
-            $normalizedPath = wp_normalize_path($filePath);
-            if ($normalizedPath === '') {
-                continue;
-            }
-
-            $targets[$normalizedPath] = [
-                'basename' => basename($normalizedPath),
-                'relative_path' => $baseDir !== '' && strpos($normalizedPath, $baseDir) === 0
-                    ? ltrim(substr($normalizedPath, strlen($baseDir)), '/')
-                    : basename($normalizedPath),
-            ];
-        }
-
-        return $targets;
     }
 
     /**
@@ -785,90 +397,21 @@ class SimpleFileListSupport {
      * @return array{file_path:string,modified_at:int}|null
      */
     public function extractSimpleFileListRecordModifiedMatch(array $record, array $targets): ?array {
-        $stringFields = [];
-        foreach ($record as $key => $value) {
-            if (!is_scalar($value)) {
-                continue;
-            }
-
-            $stringValue = trim((string) $value);
-            if ($stringValue === '') {
-                continue;
-            }
-
-            $stringFields[(string) $key] = $stringValue;
-        }
-
+        $stringFields = $this->buildStringFields($record);
         if (empty($stringFields)) {
             return null;
         }
 
         foreach ($targets as $filePath => $target) {
-            $basename = $target['basename'];
-            $relativePath = $target['relative_path'];
-            $matched = false;
-
-            foreach ($stringFields as $fieldValue) {
-                $normalizedField = wp_normalize_path($fieldValue);
-                if (
-                    $fieldValue === $basename ||
-                    $normalizedField === wp_normalize_path($relativePath) ||
-                    str_ends_with($normalizedField, '/' . $basename) ||
-                    strpos($normalizedField, $basename) !== false
-                ) {
-                    $matched = true;
-                    break;
-                }
-            }
-
-            if (!$matched) {
+            if (!$this->isTargetMatchedByFields($stringFields, $target['basename'], $target['relative_path'])) {
                 continue;
             }
-
-            foreach ($stringFields as $fieldKey => $fieldValue) {
-                if (!preg_match('/modified|updated|changed|date|time|timestamp/i', $fieldKey)) {
-                    continue;
-                }
-
-                $parsed = $this->parseSimpleFileListTimestamp($fieldValue);
-                if ($parsed > 0) {
-                    return [
-                        'file_path' => $filePath,
-                        'modified_at' => $parsed,
-                    ];
-                }
+            $modifiedAt = $this->findModifiedTimestampFromFields($stringFields);
+            if ($modifiedAt !== null) {
+                return ['file_path' => $filePath, 'modified_at' => $modifiedAt];
             }
         }
 
         return null;
-    }
-
-    private function parseSimpleFileListTimestamp(string $value): int {
-        $value = trim($value);
-        if ($value === '') {
-            return 0;
-        }
-
-        if (ctype_digit($value)) {
-            $timestamp = (int) $value;
-            if ($timestamp > 1000000000) {
-                return $timestamp;
-            }
-        }
-
-        $parsed = strtotime($value);
-        return $parsed !== false ? (int) $parsed : 0;
-    }
-
-    public function isUsableSimpleFileListNiceName(string $niceName, string $basename): bool {
-        if ($niceName === '' || $niceName === $basename) {
-            return false;
-        }
-
-        if (strpos($niceName, '/') !== false || strpos($niceName, '\\') !== false) {
-            return false;
-        }
-
-        return true;
     }
 }

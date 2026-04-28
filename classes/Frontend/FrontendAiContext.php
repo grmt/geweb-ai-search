@@ -7,21 +7,23 @@ defined('ABSPATH') || exit;
  * Shared frontend AI workspace context and URL helpers.
  */
 class FrontendAiContext {
+    use FrontendAiLimitsTrait;
+
     private const OPTION_FRONTEND_AI_INTERFACE = 'geweb_aisearch_frontend_ai_interface';
     private const OPTION_FRONTEND_AI_PAGE_ID = 'geweb_aisearch_frontend_ai_page_id';
-    private const OPTION_CONVERSATION_TRIM_MESSAGE_LIMIT = 'geweb_aisearch_conversation_trim_message_limit';
-    private const OPTION_CONVERSATION_TRIM_CHAR_LIMIT = 'geweb_aisearch_conversation_trim_char_limit';
-    private const OPTION_LOCAL_CONVERSATION_ARCHIVE_LIMIT = 'geweb_aisearch_local_conversation_archive_limit';
-    private const OPTION_STORED_CONTEXT_MESSAGE_LIMIT = 'geweb_aisearch_stored_context_message_limit';
-    private const OPTION_STORED_CONTEXT_CHAR_LIMIT = 'geweb_aisearch_stored_context_char_limit';
+    private const FRONTEND_AI_REWRITE_SLUG = 'ai-search-workspace';
+    public const OPTION_CONVERSATION_TRIM_MESSAGE_LIMIT = 'geweb_aisearch_conversation_trim_message_limit';
+    public const OPTION_CONVERSATION_TRIM_CHAR_LIMIT = 'geweb_aisearch_conversation_trim_char_limit';
+    public const OPTION_LOCAL_CONVERSATION_ARCHIVE_LIMIT = 'geweb_aisearch_local_conversation_archive_limit';
+    public const OPTION_STORED_CONTEXT_MESSAGE_LIMIT = 'geweb_aisearch_stored_context_message_limit';
+    public const OPTION_STORED_CONTEXT_CHAR_LIMIT = 'geweb_aisearch_stored_context_char_limit';
     private const FRONTEND_AI_QUERY_VAR = 'geweb_ai_query';
     private const DEFAULT_FRONTEND_AI_INTERFACE = 'fullscreen';
-    private const DEFAULT_CONVERSATION_TRIM_MESSAGE_LIMIT = 12;
-    private const DEFAULT_CONVERSATION_TRIM_CHAR_LIMIT = 12000;
-    private const DEFAULT_LOCAL_CONVERSATION_ARCHIVE_LIMIT = 12;
-    private const DEFAULT_STORED_CONTEXT_MESSAGE_LIMIT = 120;
-    private const DEFAULT_STORED_CONTEXT_CHAR_LIMIT = 60000;
-    private const REGEX_WHITESPACE = '/\s+/';
+    public const DEFAULT_CONVERSATION_TRIM_MESSAGE_LIMIT = 12;
+    public const DEFAULT_CONVERSATION_TRIM_CHAR_LIMIT = 12000;
+    public const DEFAULT_LOCAL_CONVERSATION_ARCHIVE_LIMIT = 12;
+    public const DEFAULT_STORED_CONTEXT_MESSAGE_LIMIT = 120;
+    public const DEFAULT_STORED_CONTEXT_CHAR_LIMIT = 60000;
 
     public static function getFrontendAiPageUrl(): string {
         $pageId = self::getFrontendAiPageId();
@@ -38,16 +40,15 @@ class FrontendAiContext {
             }
         }
 
-        $args = [
-            'geweb_ai_chat' => '1',
-        ];
+        $baseUrl = home_url('/' . self::FRONTEND_AI_REWRITE_SLUG . '/');
+        $args = [];
 
         $query = self::getRequestedFrontendQuery();
         if ($query !== '') {
             $args[self::FRONTEND_AI_QUERY_VAR] = $query;
         }
 
-        return add_query_arg($args, home_url('/'));
+        return !empty($args) ? add_query_arg($args, $baseUrl) : $baseUrl;
     }
 
     public static function getCurrentFrontendAiPageUrl(): string {
@@ -90,7 +91,8 @@ class FrontendAiContext {
             }
         }
 
-        return add_query_arg($args, home_url('/'));
+        $baseUrl = home_url('/' . self::FRONTEND_AI_REWRITE_SLUG . '/');
+        return !empty($args) ? add_query_arg($args, $baseUrl) : $baseUrl;
     }
 
     public static function getFrontendAiExitUrl(): string {
@@ -189,51 +191,6 @@ class FrontendAiContext {
         return self::normalizeFrontendAiInterface((string) get_option(self::OPTION_FRONTEND_AI_INTERFACE, self::DEFAULT_FRONTEND_AI_INTERFACE));
     }
 
-    public static function getConversationTrimMessageLimit(): int {
-        return self::sanitizePositiveIntOption(
-            get_option(self::OPTION_CONVERSATION_TRIM_MESSAGE_LIMIT, self::DEFAULT_CONVERSATION_TRIM_MESSAGE_LIMIT),
-            self::DEFAULT_CONVERSATION_TRIM_MESSAGE_LIMIT,
-            2,
-            200
-        );
-    }
-
-    public static function getConversationTrimCharLimit(): int {
-        return self::sanitizePositiveIntOption(
-            get_option(self::OPTION_CONVERSATION_TRIM_CHAR_LIMIT, self::DEFAULT_CONVERSATION_TRIM_CHAR_LIMIT),
-            self::DEFAULT_CONVERSATION_TRIM_CHAR_LIMIT,
-            500,
-            200000
-        );
-    }
-
-    public static function getLocalConversationArchiveLimit(): int {
-        return self::sanitizePositiveIntOption(
-            get_option(self::OPTION_LOCAL_CONVERSATION_ARCHIVE_LIMIT, self::DEFAULT_LOCAL_CONVERSATION_ARCHIVE_LIMIT),
-            self::DEFAULT_LOCAL_CONVERSATION_ARCHIVE_LIMIT,
-            1,
-            200
-        );
-    }
-
-    public static function getStoredContextMessageLimit(): int {
-        return self::sanitizePositiveIntOption(
-            get_option(self::OPTION_STORED_CONTEXT_MESSAGE_LIMIT, self::DEFAULT_STORED_CONTEXT_MESSAGE_LIMIT),
-            self::DEFAULT_STORED_CONTEXT_MESSAGE_LIMIT,
-            10,
-            500
-        );
-    }
-
-    public static function getStoredContextCharLimit(): int {
-        return self::sanitizePositiveIntOption(
-            get_option(self::OPTION_STORED_CONTEXT_CHAR_LIMIT, self::DEFAULT_STORED_CONTEXT_CHAR_LIMIT),
-            self::DEFAULT_STORED_CONTEXT_CHAR_LIMIT,
-            5000,
-            500000
-        );
-    }
-
     /**
      * @param array<int,string> $classes
      * @return array<int,string>
@@ -245,21 +202,7 @@ class FrontendAiContext {
     }
 
     public static function buildFrontendSearchResultExcerpt(int $postId): string {
-        $content = get_post_field('post_content', $postId);
-        $content = is_string($content) ? wp_strip_all_tags($content) : '';
-        $content = trim(preg_replace(self::REGEX_WHITESPACE, ' ', $content) ?? '');
-
-        if ($content === '') {
-            $content = wp_strip_all_tags((string) get_the_excerpt($postId));
-            $content = trim(preg_replace(self::REGEX_WHITESPACE, ' ', $content) ?? '');
-        }
-
-        $content = ltrim($content, ". \t\n\r\0\x0B");
-        if ($content === '') {
-            return __('No preview text available for this result.', 'geweb-ai-search');
-        }
-
-        return wp_trim_words($content, 42);
+        return FrontendSearchResultExcerptBuilder::build($postId);
     }
 
     /**

@@ -23,18 +23,8 @@ class FileDuplicateHashIndex {
      */
     public function getAttachmentDuplicateMatches(int $attachmentId): array {
         $attachmentId = (int) $attachmentId;
-        if ($attachmentId <= 0) {
-            return [];
-        }
-
-        $filePath = get_attached_file($attachmentId);
-        $filePath = is_string($filePath) ? wp_normalize_path($filePath) : '';
-        if ($filePath === '' || !is_readable($filePath)) {
-            return [];
-        }
-
-        $hash = hash_file('sha256', $filePath);
-        if (!is_string($hash) || $hash === '') {
+        $hash = $attachmentId > 0 ? $this->getAttachmentFileHash($attachmentId) : '';
+        if ($hash === '') {
             return [];
         }
 
@@ -157,24 +147,14 @@ class FileDuplicateHashIndex {
             return '';
         }
 
-        $attachmentCount = 0;
-        $fileCount = 0;
-        $labels = [];
+        [$attachmentCount, $fileCount, $labels] = $this->summarizeDuplicateMatches($matches);
+        $summary = $this->formatDuplicateSummary($attachmentCount, $fileCount);
+        $labels = array_values(array_unique($labels));
 
-        foreach ($matches as $match) {
-            $kind = (string) ($match['kind'] ?? '');
-            if ($kind === 'attachment') {
-                $attachmentCount++;
-            } elseif ($kind === 'file') {
-                $fileCount++;
-            }
+        return $this->appendDuplicateLabels($summary, $labels);
+    }
 
-            $label = trim((string) ($match['label'] ?? ''));
-            if ($label !== '') {
-                $labels[] = $label;
-            }
-        }
-
+    private function formatDuplicateSummary(int $attachmentCount, int $fileCount): string {
         $parts = [];
         if ($attachmentCount > 0) {
             $parts[] = $attachmentCount === 1 ? '1 other media item' : ($attachmentCount . ' other media items');
@@ -183,8 +163,13 @@ class FileDuplicateHashIndex {
             $parts[] = $fileCount === 1 ? '1 file-list item' : ($fileCount . ' file-list items');
         }
 
-        $summary = empty($parts) ? 'Duplicate file hash detected' : ('Same file as ' . implode(' and ', $parts));
-        $labels = array_values(array_unique($labels));
+        return empty($parts) ? 'Duplicate file hash detected' : ('Same file as ' . implode(' and ', $parts));
+    }
+
+    /**
+     * @param array<int,string> $labels
+     */
+    private function appendDuplicateLabels(string $summary, array $labels): string {
         if (!empty($labels)) {
             $summary .= ': ' . implode(', ', array_slice($labels, 0, 3));
             if (count($labels) > 3) {
@@ -193,6 +178,40 @@ class FileDuplicateHashIndex {
         }
 
         return $summary;
+    }
+
+    /**
+     * @param array<int,array<string,string>> $matches
+     * @return array{0:int,1:int,2:array<int,string>}
+     */
+    private function summarizeDuplicateMatches(array $matches): array {
+        $attachmentCount = 0;
+        $fileCount = 0;
+        $labels = [];
+
+        foreach ($matches as $match) {
+            $kind = (string) ($match['kind'] ?? '');
+            $attachmentCount += $kind === 'attachment' ? 1 : 0;
+            $fileCount += $kind === 'file' ? 1 : 0;
+
+            $label = trim((string) ($match['label'] ?? ''));
+            if ($label !== '') {
+                $labels[] = $label;
+            }
+        }
+
+        return [$attachmentCount, $fileCount, $labels];
+    }
+
+    private function getAttachmentFileHash(int $attachmentId): string {
+        $filePath = get_attached_file($attachmentId);
+        $filePath = is_string($filePath) ? wp_normalize_path($filePath) : '';
+        if ($filePath === '' || !is_readable($filePath)) {
+            return '';
+        }
+
+        $hash = hash_file('sha256', $filePath);
+        return is_string($hash) ? $hash : '';
     }
 
     private function ensureBuilt(): void {

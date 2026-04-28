@@ -84,6 +84,11 @@ body.geweb-ai-page h1 {
 body.geweb-ai-page #wpadminbar #wp-admin-bar-search {
     display: none !important;
 }
+body.geweb-ai-page .search-box:not(.geweb-ai-inline-search-form),
+body.geweb-ai-page form.search-form:not(.geweb-ai-inline-search-form),
+body.geweb-ai-page .wp-block-search:not(.geweb-ai-inline-search-form) {
+    display: none !important;
+}
 body.geweb-ai-page.geweb-ai-page-hide-adminbar #wpadminbar {
     display: none !important;
 }
@@ -324,6 +329,18 @@ body.geweb-ai-page-resizing {
 }
 
 @media only screen and (max-width: 767px) {
+    body.geweb-ai-page,
+    body.geweb-ai-page .site,
+    body.geweb-ai-page #page,
+    body.geweb-ai-page main,
+    body.geweb-ai-page article,
+    body.geweb-ai-page .entry-content,
+    body.geweb-ai-page .inside-article {
+        padding-left: 2px !important;
+        padding-right: 2px !important;
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+    }
     .geweb-ai-page-root,
     body.geweb-ai-page .entry-content > #geweb-ai-page-root,
     body.geweb-ai-page .entry-content > section.geweb-aisearch-modal-window--page,
@@ -333,6 +350,8 @@ body.geweb-ai-page-resizing {
         max-width: 100% !important;
         margin-left: 0 !important;
         margin-right: 0 !important;
+        padding-left: 2px !important;
+        padding-right: 2px !important;
     }
 }
 
@@ -375,7 +394,6 @@ body.geweb-ai-page.geweb-ai-page-pseudo-fullscreen .geweb-aisearch-modal-window-
     display: flex;
     justify-content: space-between;
     align-items: center;
-    -moz-column-gap: 8px;
     column-gap: 8px;
     border-bottom: 1px solid rgba(0, 0, 0, 0.2);
     padding: 0 0 8px;
@@ -392,7 +410,6 @@ body.geweb-ai-page.geweb-ai-page-pseudo-fullscreen .geweb-aisearch-modal-window-
     display: flex;
     align-items: center;
     justify-content: center;
-    -moz-column-gap: 8px;
     column-gap: 8px;
     color: #fff;
     font-size: 16px;
@@ -439,7 +456,6 @@ body.geweb-ai-page.geweb-ai-page-pseudo-fullscreen .geweb-aisearch-modal-window-
 .geweb-aisearch-modal-window .modal-header .ai-assistant-title {
     display: flex;
     align-items: center;
-    -moz-column-gap: 4px;
     column-gap: 4px;
     font-size: 20px;
     line-height: 30px;

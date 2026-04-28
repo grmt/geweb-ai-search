@@ -49,6 +49,28 @@ class FrontendAiWorkspaceController {
             AssetVersion::forRelativePath('assets/css/page-shell.css')
         );
 
+        wp_enqueue_script(
+            'geweb-ai-search-shared',
+            GEWEB_AI_SEARCH_URL . 'assets/js/ai-shared.js',
+            ['jquery'],
+            AssetVersion::forRelativePath('assets/js/ai-shared.js'),
+            true
+        );
+
+        wp_localize_script('geweb-ai-search-shared', 'geweb_aisearch', array_merge($this->buildFrontendLauncherConfig($searchWithAiLabel), [
+            'ajax_url' => admin_url('admin-ajax.php'),
+            'site_url' => home_url('/'),
+            'search_nonce' => wp_create_nonce('geweb_ai_search_nonce'),
+        ]));
+
+        wp_enqueue_script(
+            'geweb-ai-search-page-match',
+            GEWEB_AI_SEARCH_URL . 'assets/js/ai-page-match.js',
+            ['geweb-ai-search-shared'],
+            AssetVersion::forRelativePath('assets/js/ai-page-match.js'),
+            true
+        );
+
         if (!$this->shouldLoadFullFrontendWorkspace()) {
             wp_enqueue_script(
                 'geweb-ai-search-launcher',
@@ -80,9 +102,33 @@ class FrontendAiWorkspaceController {
         );
 
         wp_enqueue_script(
+            'geweb-ai-search-modal',
+            GEWEB_AI_SEARCH_URL . 'assets/js/ai-modal.js',
+            ['jquery', 'geweb-ai-search-shared'],
+            AssetVersion::forRelativePath('assets/js/ai-modal.js'),
+            true
+        );
+
+        wp_enqueue_script(
+            'geweb-ai-search-sources-utils',
+            GEWEB_AI_SEARCH_URL . 'assets/js/ai-sources-utils.js',
+            ['geweb-ai-search-shared'],
+            AssetVersion::forRelativePath('assets/js/ai-sources-utils.js'),
+            true
+        );
+
+        wp_enqueue_script(
+            'geweb-ai-search-sources-details',
+            GEWEB_AI_SEARCH_URL . 'assets/js/ai-sources-details.js',
+            ['jquery', 'geweb-ai-search-shared', 'geweb-ai-search-sources-utils'],
+            AssetVersion::forRelativePath('assets/js/ai-sources-details.js'),
+            true
+        );
+
+        wp_enqueue_script(
             'geweb-ai-search-sources',
             GEWEB_AI_SEARCH_URL . 'assets/js/ai-sources.js',
-            ['jquery', 'geweb-ai-search-markdown-renderer'],
+            ['jquery', 'geweb-ai-search-markdown-renderer', 'geweb-ai-search-shared', 'geweb-ai-search-sources-utils', 'geweb-ai-search-sources-details'],
             AssetVersion::forRelativePath('assets/js/ai-sources.js'),
             true
         );
@@ -90,7 +136,7 @@ class FrontendAiWorkspaceController {
         wp_enqueue_script(
             'geweb-ai-search',
             GEWEB_AI_SEARCH_URL . 'assets/script.js',
-            ['jquery', 'geweb-ai-search-sources'],
+            ['jquery', 'geweb-ai-search-shared', 'geweb-ai-search-page-match', 'geweb-ai-search-modal', 'geweb-ai-search-sources'],
             AssetVersion::forRelativePath('assets/script.js'),
             true
         );
@@ -201,9 +247,10 @@ class FrontendAiWorkspaceController {
                 'closeSourceContext' => __('Close source context', 'geweb-ai-search'),
                 'showResults' => __('Show results', 'geweb-ai-search'),
                 'hideResults' => __('Hide results', 'geweb-ai-search'),
-                'modelLabel' => __('Model', 'geweb-ai-search'),
                 'manageConversations' => __('Manage chats', 'geweb-ai-search'),
-                'searchResultsIntro' => __('Use your normal site search above to update these WordPress results without leaving the AI workspace.', 'geweb-ai-search'),
+                'modelLabel' => __('Model', 'geweb-ai-search'),
+                'searchResultsIntro' => __('Search this site here to show regular WordPress results without leaving the AI workspace.', 'geweb-ai-search'),
+                'searchResultsLabel' => __('Search results', 'geweb-ai-search'),
                 'mobileChatsTab' => __('History', 'geweb-ai-search'),
                 'mobileChatTab' => __('AI chat', 'geweb-ai-search'),
                 'mobileSourcesTab' => __('Sources', 'geweb-ai-search'),
@@ -235,13 +282,13 @@ class FrontendAiWorkspaceController {
         $atts = shortcode_atts([
             'title' => '',
             'search_results' => 'show',
-            'search_results_height' => '70',
+            'search_results_height' => '0',
             'manage_link' => 'show',
         ], $atts, 'geweb_ai_search');
 
         $searchResults = sanitize_key((string) $atts['search_results']);
         $manageLink = sanitize_key((string) $atts['manage_link']);
-        $initialHeight = is_numeric($atts['search_results_height']) ? (int) $atts['search_results_height'] : 70;
+        $initialHeight = is_numeric($atts['search_results_height']) ? (int) $atts['search_results_height'] : 0;
         $initialHeight = max(0, min(100, $initialHeight));
 
         if ($searchResults === 'hide') {
@@ -512,18 +559,6 @@ class FrontendAiWorkspaceController {
                 </button>
                 <button
                     type="button"
-                    class="geweb-ai-icon-button geweb-ai-page-toolbar-button geweb-ai-page-toolbar-button--toggle-search"
-                    id="geweb-ai-toggle-search-panel"
-                    data-panel-toggle="search"
-                    aria-label="<?php echo esc_attr__('Toggle classic search results', 'geweb-ai-search'); ?>"
-                    title="<?php echo esc_attr__('Toggle classic search results', 'geweb-ai-search'); ?>"
-                    aria-expanded="true"
-                >
-                    <span class="geweb-ai-page-toolbar-button-icon" aria-hidden="true">🔎</span>
-                    <span class="geweb-ai-page-toolbar-button-label"><?php echo esc_html__('Search', 'geweb-ai-search'); ?></span>
-                </button>
-                <button
-                    type="button"
                     class="geweb-ai-icon-button geweb-ai-page-toolbar-button geweb-ai-page-toolbar-button--fullscreen"
                     id="geweb-ai-toggle-fullscreen"
                     aria-label="<?php echo esc_attr__('Enter fullscreen', 'geweb-ai-search'); ?>"
@@ -569,19 +604,38 @@ class FrontendAiWorkspaceController {
 
     private function renderFrontendAiSearchResultsPanel(): void {
         $query = FrontendAiContext::getRequestedFrontendQuery();
-        $emptyStateHint = __('Use your normal site search above to update these WordPress results without leaving the AI workspace.', 'geweb-ai-search');
+        $emptyStateHint = __('Search this site here to show regular WordPress results without leaving the AI workspace.', 'geweb-ai-search');
         $resultsInfoText = $query !== ''
             ? __('These are the regular WordPress search results for the current query.', 'geweb-ai-search')
             : $emptyStateHint;
+        $conversationId = FrontendAiContext::getRequestedFrontendConversationId();
         $initialHeight = isset($this->renderOverrides['search_results_initial_height'])
             ? (int) $this->renderOverrides['search_results_initial_height']
-            : 70;
+            : ($query !== '' ? 70 : 0);
         $initialHeight = max(0, min(100, $initialHeight));
+        $isCollapsed = $initialHeight <= 0;
         ?>
-        <section class="geweb-ai-search-results-panel<?php echo $query === '' ? ' geweb-ai-search-results-panel--empty' : ''; ?>"<?php echo $query === '' ? ' title="' . esc_attr($emptyStateHint) . '"' : ''; ?>>
+        <section class="geweb-ai-search-results-panel<?php echo $query === '' ? ' geweb-ai-search-results-panel--empty' : ''; ?><?php echo $isCollapsed ? ' is-collapsed' : ''; ?>"<?php echo $query === '' ? ' title="' . esc_attr($emptyStateHint) . '"' : ''; ?>>
             <div class="geweb-ai-search-results-header"<?php echo $query === '' ? ' title="' . esc_attr($emptyStateHint) . '"' : ''; ?>>
                 <div class="geweb-ai-panel-heading geweb-ai-panel-heading--search-results">
-                    <div class="geweb-ai-panel-title geweb-ai-panel-title--inline"><?php echo esc_html__('Search Results', 'geweb-ai-search'); ?></div>
+                    <form class="geweb-ai-search-form geweb-ai-inline-search-form" role="search" action="<?php echo esc_url(FrontendAiContext::getCurrentFrontendAiPageUrl()); ?>" method="get">
+                        <label class="screen-reader-text" for="geweb-ai-inline-search"><?php echo esc_html__('Search this site', 'geweb-ai-search'); ?></label>
+                        <input
+                            type="search"
+                            id="geweb-ai-inline-search"
+                            name="s"
+                            class="geweb-ai-search-input"
+                            value="<?php echo esc_attr($query); ?>"
+                            placeholder="<?php echo esc_attr__('Search results', 'geweb-ai-search'); ?>"
+                            autocomplete="off"
+                        >
+                        <?php if ($conversationId !== ''): ?>
+                            <input type="hidden" name="geweb_ai_conversation" value="<?php echo esc_attr($conversationId); ?>">
+                        <?php endif; ?>
+                        <button type="submit" class="geweb-ai-icon-button geweb-ai-inline-search-submit" aria-label="<?php echo esc_attr__('Search this site', 'geweb-ai-search'); ?>">
+                            <span aria-hidden="true">🔎</span>
+                        </button>
+                    </form>
                     <button
                         type="button"
                         class="geweb-ai-search-results-info"
@@ -590,29 +644,12 @@ class FrontendAiWorkspaceController {
                     >
                         <span class="geweb-ai-search-results-info-icon" aria-hidden="true">i</span>
                     </button>
-                    <button type="button" class="geweb-ai-icon-button geweb-ai-panel-collapse" data-panel-toggle="search" aria-expanded="<?php echo $initialHeight > 0 ? 'true' : 'false'; ?>" aria-label="<?php echo esc_attr($initialHeight > 0 ? __('Collapse classic search results', 'geweb-ai-search') : __('Expand classic search results', 'geweb-ai-search')); ?>" title="<?php echo esc_attr($initialHeight > 0 ? __('Collapse classic search results', 'geweb-ai-search') : __('Expand classic search results', 'geweb-ai-search')); ?>">
-                        <span class="geweb-ai-panel-collapse-icon" aria-hidden="true"><?php echo $initialHeight > 0 ? '▴' : '▾'; ?></span>
+                    <button type="button" class="geweb-ai-icon-button geweb-ai-panel-collapse" data-panel-toggle="search" aria-expanded="<?php echo !$isCollapsed ? 'true' : 'false'; ?>" aria-label="<?php echo esc_attr(!$isCollapsed ? __('Collapse search results', 'geweb-ai-search') : __('Expand search results', 'geweb-ai-search')); ?>" title="<?php echo esc_attr(!$isCollapsed ? __('Collapse search results', 'geweb-ai-search') : __('Expand search results', 'geweb-ai-search')); ?>">
+                        <span class="geweb-ai-panel-collapse-icon" aria-hidden="true"><?php echo !$isCollapsed ? '▴' : '🔎'; ?></span>
                     </button>
                 </div>
             </div>
             <div class="geweb-ai-search-results-content">
-                <form class="geweb-ai-search-form geweb-ai-inline-search-form" role="search" action="<?php echo esc_url(FrontendAiContext::getCurrentFrontendAiPageUrl()); ?>" method="get">
-                    <label class="screen-reader-text" for="geweb-ai-inline-search"><?php echo esc_html__('Search this site', 'geweb-ai-search'); ?></label>
-                    <input
-                        type="search"
-                        id="geweb-ai-inline-search"
-                        name="s"
-                        class="geweb-ai-search-input"
-                        value="<?php echo esc_attr($query); ?>"
-                        placeholder="<?php echo esc_attr__('Search this site...', 'geweb-ai-search'); ?>"
-                        autocomplete="off"
-                    >
-                    <?php $conversationId = FrontendAiContext::getRequestedFrontendConversationId(); ?>
-                    <?php if ($conversationId !== ''): ?>
-                        <input type="hidden" name="geweb_ai_conversation" value="<?php echo esc_attr($conversationId); ?>">
-                    <?php endif; ?>
-                    <button type="submit" class="geweb-ai-icon-button geweb-ai-inline-search-submit"><?php echo esc_html__('Search', 'geweb-ai-search'); ?></button>
-                </form>
                 <?php if ($query !== ''): ?>
                     <?php
                     $postTypes = get_option('geweb_aisearch_post_types', ['post']);

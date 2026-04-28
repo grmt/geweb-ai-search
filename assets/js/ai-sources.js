@@ -1,60 +1,24 @@
 (function($) {
-	let nonceRequest = null;
 	const MANAGED_TITLE_URL_REGEX_SUFFIX = String.raw`[^\n]*?(https?:\/\/[^\s<>"']+)`;
 	const TRAILING_SLASH_REGEX = /\/?$/;
-
-	function getAiSearchConfig() {
-		return globalThis.geweb_aisearch ?? {};
-	}
+	const {
+		ensureSearchNonce = () => Promise.reject(new Error('AI search shared helpers are not available.')),
+		getAiSearchConfig = () => (globalThis.geweb_aisearch ?? {}),
+		t: translate = (_key, fallback) => fallback,
+	} = globalThis.GewebAISearchShared || {};
+	const {
+		appendGroundingPlacementEntries = () => {},
+		normalizeManagedHost = (hostname) => String(hostname || '').trim().toLowerCase().replace(/^www\./, ''),
+		normalizeObject = (value) => (value && typeof value === 'object' ? value : {}),
+		safeParseUrl = () => null,
+	} = globalThis.GewebAISearchSourceUtils || {};
 
 	function getI18nValue(key) {
 		return getAiSearchConfig().i18n?.[key];
 	}
 
-	function normalizeObject(value) {
-		return value && typeof value === 'object' ? value : {};
-	}
-
-	function pushLabeledEntry(entries, label, value) {
-		const text = String(value || '').trim();
-		if (!text) {
-			return;
-		}
-
-		entries.push({ label, value: text });
-	}
-
-	function appendGroundingPlacementEntries(existing, indices, insertionOffset, sourceFootnoteMap) {
-		indices.forEach((index) => {
-			const localFootnote = index + 1;
-			const footnote = Number(sourceFootnoteMap?.[localFootnote]) || localFootnote;
-			if (!existing.some((entry) => entry.footnote === footnote && entry.offset === insertionOffset)) {
-				existing.push({
-					footnote,
-					offset: insertionOffset,
-				});
-			}
-		});
-	}
-
-	function safeParseUrl(url, base) {
-		try {
-			return new URL(url, base);
-		} catch (error) {
-			console.debug('URL parsing failed.', error);
-			return null;
-		}
-	}
-
-	function normalizeManagedHost(hostname) {
-		return String(hostname || '')
-			.trim()
-			.toLowerCase()
-			.replace(/^www\./, '');
-	}
-
 	function t(key, fallback) {
-		const translated = getI18nValue(key);
+		const translated = getI18nValue(key) || translate(key, fallback);
 		if (typeof translated === 'string' && translated.trim() !== '') {
 			return translated;
 		}
@@ -62,34 +26,8 @@
 		return fallback;
 	}
 
-	function fetchSearchNonce() {
-		return $.post(getAiSearchConfig().ajax_url, {
-			action: 'geweb_get_nonce'
-		}).then((response) => {
-			if (response?.data?.nonce && response?.success) {
-				geweb_aisearch.search_nonce = response.data.nonce;
-				return geweb_aisearch.search_nonce;
-			}
-
-			throw new Error('Could not get a fresh AI search nonce.');
-		});
-	}
-
-	function ensureSearchNonce() {
-		if (geweb_aisearch.search_nonce) {
-			return Promise.resolve(geweb_aisearch.search_nonce);
-		}
-
-		if (!nonceRequest) {
-			nonceRequest = Promise.resolve(fetchSearchNonce()).finally(() => {
-				nonceRequest = null;
-			});
-		}
-
-		return nonceRequest;
-	}
-
-	globalThis.GewebAISearchSourceMethods = {
+	globalThis.GewebAISearchSourceMethods = globalThis.GewebAISearchSourceMethods || {};
+	Object.assign(globalThis.GewebAISearchSourceMethods, {
 		sourceReferenceCache: {},
 
 		getSourceDestination(url, matchPhrase) {
@@ -121,14 +59,6 @@
 				};
 			}
 
-			if (parsed.hash) {
-				parsed.searchParams.delete('geweb_ai_match');
-				return {
-					url: parsed.toString(),
-					target: '_self',
-				};
-			}
-
 			if (phrase) {
 				parsed.searchParams.set('geweb_ai_match', phrase);
 			} else {
@@ -148,408 +78,6 @@
 			}
 
 			globalThis.open(destination.url, destination.target, destination.target === '_blank' ? 'noopener,noreferrer' : undefined);
-		},
-
-		buildResponseDetails(meta) {
-			const normalizedMeta = normalizeObject(meta);
-			if (!Object.keys(normalizedMeta).length) {
-				return null;
-			}
-
-			const $details = $('<div class="geweb-ai-response-details"></div>');
-			const $header = $('<div class="geweb-ai-response-details-header"></div>');
-			$header.append($('<div class="geweb-ai-response-details-title"></div>').text(t('responseDetails', 'Response details')));
-			$header.append(
-				$('<button type="button" class="geweb-ai-response-details-close" aria-label="Close details" title="Close details"></button>')
-					.append($('<span aria-hidden="true">×</span>'))
-			);
-			$details.append($header);
-			let hasContentSection = false;
-
-			const summaryEntries = this.buildCompactResponseMetaEntries(normalizedMeta);
-			if (summaryEntries.length) {
-				$details.append(this.buildResponseDetailsSection(
-					t('responseMetaTitle', 'Response metadata'),
-					this.buildResponseDetailsList(summaryEntries),
-					true
-				));
-				hasContentSection = true;
-			}
-
-			const $requestSection = this.buildRequestContextDetails(normalizedMeta);
-			if ($requestSection) {
-				$details.append(this.buildResponseDetailsSection(
-					t('requestMetaTitle', 'Request context'),
-					$requestSection,
-					true
-				));
-				hasContentSection = true;
-			}
-
-			const $thoughtHistorySection = this.buildThoughtHistoryDetails(normalizedMeta);
-			if ($thoughtHistorySection) {
-				$details.append(this.buildResponseDetailsSection(
-					t('thoughtHistoryTitle', 'Denkprocesverloop'),
-					$thoughtHistorySection,
-					true
-				));
-				hasContentSection = true;
-			}
-
-			const grounding = this.getGroundingMetadata(normalizedMeta);
-			const groundingChunks = this.getGroundingChunks(grounding);
-			if (groundingChunks.length) {
-				const $section = $('<div class="geweb-ai-grounding-section"></div>');
-				const $chunkList = $('<ol class="geweb-ai-grounding-chunk-list"></ol>');
-				groundingChunks.forEach((chunk) => {
-					const $item = $('<li></li>');
-					const matchPhrase = this.extractContextMatchPhrase(chunk.rawText || chunk.text || '');
-					const $label = $('<div class="geweb-ai-grounding-chunk-label"></div>').text(
-						this.getPreferredSourceLabel(chunk.title, chunk.url || '')
-					);
-					$item.append($label);
-					if (chunk.text) {
-						const $text = $('<div class="geweb-ai-grounding-chunk-text"></div>').html(
-							this.highlightMatchPhraseInHtml(
-								this.renderFormattedChunkHtml(chunk.rawText || chunk.text),
-								matchPhrase
-							)
-						);
-						if (chunk.url) {
-							$item.addClass('geweb-ai-grounding-chunk-item--link');
-							$item.attr('tabindex', '0');
-							$item.attr('role', 'link');
-							$item.attr('title', matchPhrase ? `Open at first match: ${matchPhrase}` : 'Open source');
-							$item.on('click', () => this.openSourceDestination(chunk.url, matchPhrase));
-							$item.on('keydown', (event) => {
-								if (event.key === 'Enter' || event.key === ' ') {
-									event.preventDefault();
-									this.openSourceDestination(chunk.url, matchPhrase);
-								}
-							});
-						}
-						$item.append($text);
-					}
-					$chunkList.append($item);
-				});
-				$section.append($chunkList);
-				$details.append(this.buildResponseDetailsSection(
-					`${t('groundingChunksTitle', 'Grounding chunks')} (${groundingChunks.length})`,
-					$section,
-					true
-				));
-				hasContentSection = true;
-			}
-
-			if (!hasContentSection) {
-				const entries = this.flattenResponseMeta(normalizedMeta);
-				if (!entries.length) {
-					return null;
-				}
-				$details.append(this.buildResponseDetailsSection(
-					t('responseMetaTitle', 'Response metadata'),
-					this.buildResponseDetailsList(entries),
-					true
-				));
-			}
-
-			return $details;
-		},
-
-		buildRequestContextDetails(meta) {
-			const requestMeta = normalizeObject(meta?.request);
-			if (!Object.keys(requestMeta).length) {
-				return null;
-			}
-
-			const entries = [];
-			pushLabeledEntry(entries, 'Compacted', requestMeta.compacted ? 'yes' : 'no');
-			pushLabeledEntry(entries, 'Model', requestMeta.model);
-			pushLabeledEntry(entries, 'Temporary prompt', requestMeta.temporary_prompt_active ? 'yes' : 'no');
-			if (Number(requestMeta.context_message_count || 0) > 0) {
-				pushLabeledEntry(entries, 'Context messages sent', `${Number(requestMeta.context_message_count)}`);
-			}
-			if (Number(requestMeta.excluded_source_count || 0) > 0) {
-				pushLabeledEntry(entries, 'Excluded sources', `${Number(requestMeta.excluded_source_count)}`);
-			}
-			if (Number(requestMeta.thought_history_updates || 0) > 0) {
-				pushLabeledEntry(entries, 'Denkupdates', `${Number(requestMeta.thought_history_updates)}`);
-			}
-			pushLabeledEntry(entries, 'Context summary', requestMeta.context_summary);
-
-			const $wrapper = $('<div class="geweb-ai-request-details"></div>');
-			if (entries.length) {
-				$wrapper.append(this.buildResponseDetailsList(entries));
-			}
-
-			const requestAttempts = Array.isArray(meta?.request_attempts)
-				? meta.request_attempts.filter((item) => item && typeof item === 'object')
-				: [];
-			if (requestAttempts.length) {
-				const $attemptList = $('<ol class="geweb-ai-response-details-inline-list"></ol>');
-				const toTimestampMs = (value) => {
-					const numeric = Number(value || 0);
-					return numeric > 0 && numeric < 1000000000000 ? numeric * 1000 : numeric;
-				};
-				requestAttempts.forEach((attempt) => {
-					const startedAt = this.formatThoughtHistoryTimestamp(toTimestampMs(attempt.started_at));
-					const finishedAt = this.formatThoughtHistoryTimestamp(toTimestampMs(attempt.finished_at));
-					const model = String(attempt.model || requestMeta.model || meta.model_version || meta.model || '').trim();
-					const httpCode = Number(attempt.http_code || 0);
-					const status = String(attempt.status || '').replaceAll('_', ' ').trim();
-					const elapsedMs = Number(attempt.elapsed_ms || 0);
-					const retryTriplet = String(attempt.retry_triplet || '').trim();
-					const bits = [];
-
-					if (startedAt) {
-						bits.push(`started ${startedAt}`);
-					}
-					if (finishedAt) {
-						bits.push(`finished ${finishedAt}`);
-					}
-					if (elapsedMs > 0) {
-						bits.push(`${elapsedMs} ms`);
-					}
-					if (httpCode > 0) {
-						bits.push(`HTTP ${httpCode}`);
-					}
-					if (status) {
-						bits.push(status);
-					}
-					if (model) {
-						bits.push(`model ${model}`);
-					}
-
-					const label = retryTriplet
-						? `Attempt ${retryTriplet}`
-						: `Attempt ${Number(attempt.attempt || 0) || $attemptList.children().length + 1}`;
-					const $line = $('<li></li>');
-					$line.append($('<strong></strong>').text(`${label}: `));
-					$line.append(document.createTextNode(bits.join(' · ')));
-					$attemptList.append($line);
-				});
-
-				$wrapper.append(this.buildResponseDetailsSection(
-					'Request attempts',
-					$('<div></div>').append($attemptList),
-					true
-				));
-			}
-
-			const excludedSources = Array.isArray(requestMeta.excluded_sources)
-				? requestMeta.excluded_sources.map((item) => String(item || '').trim()).filter(Boolean)
-				: [];
-			if (excludedSources.length) {
-				const $excludedList = $('<ul class="geweb-ai-response-details-inline-list"></ul>');
-				excludedSources.forEach((item) => {
-					$excludedList.append($('<li></li>').text(item));
-				});
-				$wrapper.append(this.buildResponseDetailsSection(
-					'Excluded source labels',
-					$('<div></div>').append($excludedList),
-					false
-				));
-			}
-
-			const messagePreview = Array.isArray(requestMeta.messages_preview)
-				? requestMeta.messages_preview.filter((item) => item && typeof item === 'object')
-				: [];
-			if (messagePreview.length) {
-				const $previewList = $('<ol class="geweb-ai-response-details-inline-list"></ol>');
-				messagePreview.forEach((item) => {
-					const role = String(item.role || 'user').trim() || 'user';
-					const content = String(item.content || '').trim();
-					if (!content) {
-						return;
-					}
-
-					const $line = $('<li></li>');
-					$line.append($('<strong></strong>').text(`${role}: `));
-					$line.append(document.createTextNode(content));
-					$previewList.append($line);
-				});
-
-				if ($previewList.children().length) {
-					$wrapper.append(this.buildResponseDetailsSection(
-						'Messages sent (preview)',
-						$('<div></div>').append($previewList),
-						false
-					));
-				}
-			}
-
-			return $wrapper;
-		},
-
-		buildThoughtHistoryDetails(meta) {
-			const history = Array.isArray(meta?.thought_history)
-				? meta.thought_history.filter((entry) => entry && typeof entry === 'object')
-				: [];
-			if (!history.length) {
-				return null;
-			}
-
-			const $list = $('<ol class="geweb-ai-thought-history-list"></ol>');
-			let previousChangedAtMs = 0;
-			history.forEach((entry, index) => {
-				const thoughts = Array.isArray(entry.thoughts)
-					? entry.thoughts.map((item) => String(item || '').trim()).filter(Boolean)
-					: [];
-				if (!thoughts.length) {
-					return;
-				}
-
-				const $item = $('<li class="geweb-ai-thought-history-item"></li>');
-				const timingBits = [];
-				const elapsedMs = Number(entry.elapsed_ms || 0);
-				const changedAtMs = Number(entry.changed_at_ms || 0);
-				if (elapsedMs > 0) {
-					timingBits.push(`T+${this.formatElapsedMilliseconds(elapsedMs)}`);
-				}
-				if (changedAtMs > 0 && previousChangedAtMs > 0) {
-					const deltaMs = changedAtMs - previousChangedAtMs;
-					if (deltaMs > 0) {
-						timingBits.push(`+${this.formatElapsedMilliseconds(deltaMs)}`);
-					}
-				}
-				if (changedAtMs > 0) {
-					timingBits.push(this.formatThoughtHistoryTimestamp(changedAtMs));
-				}
-				previousChangedAtMs = changedAtMs > 0 ? changedAtMs : previousChangedAtMs;
-
-				const label = String(entry.label || '').trim();
-				const headerText = label || `Wijziging ${index + 1}`;
-				$item.append($('<div class="geweb-ai-thought-history-item-title"></div>').text(headerText));
-				if (timingBits.length) {
-					$item.append($('<div class="geweb-ai-thought-history-item-meta"></div>').text(timingBits.join(' | ')));
-				}
-				$item.append(
-					$('<div class="geweb-ai-thought-history-item-body"></div>').html(
-						thoughts.map((thought) => this.renderFormattedChunkHtml(thought)).join('')
-					)
-				);
-				$list.append($item);
-			});
-
-			return $list.children().length ? $list : null;
-		},
-
-		formatElapsedMilliseconds(value) {
-			const elapsedMs = Number(value || 0);
-			if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) {
-				return '';
-			}
-
-			if (elapsedMs >= 1000) {
-				return `${(elapsedMs / 1000).toFixed(1)}s`;
-			}
-
-			return `${Math.round(elapsedMs)}ms`;
-		},
-
-		formatThoughtHistoryTimestamp(value) {
-			const timestampMs = Number(value || 0);
-			if (!Number.isFinite(timestampMs) || timestampMs <= 0) {
-				return '';
-			}
-
-			try {
-				return new Intl.DateTimeFormat(undefined, {
-					hour: '2-digit',
-					minute: '2-digit',
-					second: '2-digit',
-				}).format(new Date(timestampMs));
-			} catch (error) {
-				console.debug('Formatting thought-history timestamp failed.', error);
-				return '';
-			}
-		},
-
-		buildResponseDetailsSection(title, $content, isOpen) {
-			const $section = $('<details class="geweb-ai-response-details-section"></details>');
-			if (isOpen) {
-				$section.attr('open', 'open');
-			}
-
-			const $summary = $('<summary class="geweb-ai-response-details-section-summary"></summary>');
-			$summary.append($('<span class="geweb-ai-response-details-section-title"></span>').text(title));
-			$section.append($summary);
-			$section.append($('<div class="geweb-ai-response-details-section-body"></div>').append($content));
-			return $section;
-		},
-
-		buildResponseDetailsList(entries) {
-			const $list = $('<dl class="geweb-ai-response-details-list"></dl>');
-			entries.forEach((entry) => {
-				const explanation = this.getResponseDetailsExplanation(entry.label);
-				const $row = $('<div class="geweb-ai-response-details-row"></div>');
-				const $term = $('<dt></dt>').text(entry.label);
-				const $value = $('<dd></dd>').text(entry.value);
-				if (explanation) {
-					$term.attr('title', explanation);
-					$value.attr('title', explanation);
-				}
-				$row.append($term, $value);
-				$list.append($row);
-			});
-			return $list;
-		},
-
-		getResponseDetailsExplanation(label) {
-			const explanations = {
-				'Provider': 'The AI service that produced this answer, for example Google Gemini. This helps explain which backend handled the request and where provider-specific response metadata comes from.',
-				'Model': 'The exact model variant that generated the answer. Different models can behave differently in speed, style, context handling, and citation quality, so this tells you which one was actually used.',
-				'Prompt name': 'The human-readable name of the prompt configuration that was active for this answer. If you used a one-off override in the chat settings, this may describe that temporary override instead of a saved default prompt.',
-				'Prompt': 'The effective instruction text that was sent along with your question. This is the prompt the model actually received after prompt selection and any temporary override were applied.',
-				'Prompt scope': 'Where the effective prompt came from. For example, it may be a global default prompt, a model-specific prompt, or a temporary prompt override for just this one question.',
-				'Prompt mode': 'How the selected prompt was applied. For example, a base/default mode means the normal prompt variant was used, while an override mode means a temporary or replacement instruction took precedence.',
-				'Response ID': 'The provider-specific identifier for this generated response. This can be useful for debugging, tracing provider logs, or comparing repeated runs of the same question.',
-				'Finish': 'Why the model stopped generating text. A normal value such as STOP usually means the answer finished naturally, while other values can hint at truncation, limits, or provider-side interruption.',
-				'Tokens': 'The total token usage reported for this answer. This is a rough measure of how much prompt and response text the model processed, and it often correlates with cost and context size.',
-				'Estimated cost': 'A best-effort estimate of the cost of this response based on the reported model usage. Treat it as approximate rather than exact billing.',
-				'Grounding chunks': 'How many retrieved source chunks were attached to the answer generation step. More chunks usually means the model had more candidate evidence available from your indexed content.',
-				'Grounding supports': 'How many provider support references linked parts of the answer back to retrieved grounding chunks. This can help indicate how much of the answer was explicitly tied to retrieved evidence.'
-			};
-
-			return explanations[String(label || '').trim()] || '';
-		},
-
-		buildCompactResponseMetaEntries(meta) {
-			const entries = [];
-			const usage = normalizeObject(meta.usage);
-			const candidate = normalizeObject(meta.candidate);
-			const prompt = normalizeObject(meta.prompt);
-			const grounding = this.getGroundingMetadata(meta);
-
-			pushLabeledEntry(entries, 'Provider', meta.provider);
-			pushLabeledEntry(entries, 'Model', meta.model_version || meta.model);
-			pushLabeledEntry(entries, 'Prompt name', prompt.name || prompt.scope);
-			pushLabeledEntry(entries, 'Prompt', prompt.text || prompt.preview);
-			pushLabeledEntry(entries, 'Prompt scope', prompt.scope);
-			pushLabeledEntry(entries, 'Prompt mode', prompt.mode);
-			pushLabeledEntry(entries, 'Response ID', meta.response_id);
-			pushLabeledEntry(entries, 'Finish', candidate.finish_reason || candidate.finish_message);
-			if (usage.total_tokens) {
-				pushLabeledEntry(entries, 'Tokens', `${usage.total_tokens}`);
-			}
-			if (meta.estimated_cost_usd !== undefined) {
-				pushLabeledEntry(entries, 'Estimated cost', `$${Number(meta.estimated_cost_usd).toFixed(6)}`);
-			}
-			if (Array.isArray(meta.request_attempts) && meta.request_attempts.length) {
-				pushLabeledEntry(entries, 'Request attempts', `${meta.request_attempts.length}`);
-			}
-
-			const chunks = this.getGroundingChunks(grounding);
-			if (chunks.length) {
-				pushLabeledEntry(entries, 'Grounding chunks', `${chunks.length}`);
-			}
-
-			const supports = Array.isArray(grounding?.groundingSupports) ? grounding.groundingSupports : [];
-			if (supports.length) {
-				pushLabeledEntry(entries, 'Grounding supports', `${supports.length}`);
-			}
-
-			return entries;
 		},
 
 		getGroundingMetadata(meta) {
@@ -604,8 +132,57 @@
 				.trim();
 		},
 
+		normalizeContextCandidateLine(text) {
+			return this.stripHtmlAndMarkdown(String(text || ''))
+				.replaceAll(/\s+/g, ' ')
+				.trim();
+		},
+
+		isMetadataContextLine(text) {
+			const normalized = String(text || '').trim();
+			if (!normalized) {
+				return true;
+			}
+
+			return /^---+$/.test(normalized)
+				|| /^(url|title|page_id)\s*:/i.test(normalized)
+				|| /^[\w.-]+\.(md|json|txt)$/i.test(normalized)
+				|| /^#\s+/.test(normalized)
+				|| /^pagina\s+\d+\b/i.test(normalized)
+				|| /^\((?:https?:\/\/|www\.)/i.test(normalized)
+				|| /^(https?:\/\/|www\.)/i.test(normalized);
+		},
+
+		extractMeaningfulContextLine(text) {
+			const decoded = this.decodeHtmlEntities(String(text || '')).replaceAll(/\r\n?/g, '\n');
+			if (!decoded.trim()) {
+				return '';
+			}
+
+			const lines = decoded
+				.replace(/^---\s*\n[\s\S]*?\n---\s*\n?/u, '')
+				.split('\n')
+				.map((line) => this.normalizeContextCandidateLine(line))
+				.filter(Boolean)
+				.filter((line) => !this.isMetadataContextLine(line));
+			if (!lines.length) {
+				return this.normalizeContextCandidateLine(decoded);
+			}
+
+			const preferredLine = lines.find((line) => {
+				const wordCount = line.split(/\s+/).filter(Boolean).length;
+				return wordCount >= 5 && /[,.;:]/.test(line);
+			});
+			if (preferredLine) {
+				return preferredLine;
+			}
+
+			const firstSubstantialLine = lines.find((line) => line.split(/\s+/).filter(Boolean).length >= 5);
+			return firstSubstantialLine || lines[0] || '';
+		},
+
 		extractContextMatchPhrase(text) {
-			const normalized = this.stripHtmlAndMarkdown(this.decodeHtmlEntities(text));
+			const normalized = this.extractMeaningfulContextLine(text);
 			if (!normalized) {
 				return '';
 			}
@@ -656,6 +233,7 @@
 				const parsed = new URL(normalizedUrl, String(getAiSearchConfig().site_url || globalThis.location?.origin || ''));
 				return ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'csv', 'rtf'].includes(this.getDocumentExtension(parsed.pathname || ''));
 			} catch (error) {
+				// eslint-disable-next-line no-console
 				console.debug('Document URL detection failed.', error);
 				return ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'csv', 'rtf'].includes(this.getDocumentExtension(normalizedUrl));
 			}
@@ -1088,7 +666,7 @@
 					}
 				}
 
-				const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
+				const headingMatch = /^(#{1,6})\s+(.+)$/.exec(trimmed);
 				if (headingMatch) {
 					flushList();
 					const level = Math.min(6, headingMatch[1].length);
@@ -1104,7 +682,7 @@
 					continue;
 				}
 
-				const listMatch = trimmed.match(/^[-*]\s+(.+)$/);
+				const listMatch = /^[-*]\s+(.+)$/.exec(trimmed);
 				if (listMatch) {
 					listItems.push(`<li>${this.applyInlineMarkdown(listMatch[1])}</li>`);
 					lineIndex += 1;
@@ -2388,6 +1966,7 @@
 						}
 					});
 				} catch (error) {
+					// eslint-disable-next-line no-console
 					console.debug('Source reference resolution failed.', error);
 				}
 			}
@@ -2542,6 +2121,7 @@
 					this.getSourceDetailsContainer($item).replaceWith($details);
 				});
 			} catch (error) {
+				// eslint-disable-next-line no-console
 				console.debug('Source context reconstruction failed.', error);
 			}
 		},
@@ -2706,7 +2286,7 @@
 					continue;
 				}
 
-				if (sourceTitle && sourceTitle.toLowerCase() === documentLabel.toLowerCase()) {
+				if (sourceTitle?.toLowerCase() === documentLabel.toLowerCase()) {
 					return { documentLabel, documentUrl: sourceUrl };
 				}
 
@@ -3375,5 +2955,5 @@
 
 			return {};
 		}
-	};
+	});
 })(jQuery);

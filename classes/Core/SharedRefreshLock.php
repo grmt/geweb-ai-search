@@ -12,30 +12,28 @@ class SharedRefreshLock {
 
     public static function acquireGroup(string $key, int $ttlSeconds = 30): ?string {
         $normalizedKey = self::normalizeKey($key);
-        if ($normalizedKey === '') {
-            return null;
+        $lockToken = null;
+
+        if ($normalizedKey !== '') {
+            $token = wp_generate_uuid4();
+            $expiresAt = time() + max(5, $ttlSeconds);
+            $optionName = self::OPTION_PREFIX . $normalizedKey;
+            $existing = UserScope::getGroupScopedOption($optionName, null);
+
+            if (!is_array($existing) || ((int) ($existing['expires_at'] ?? 0)) <= time()) {
+                UserScope::updateGroupScopedOption($optionName, [
+                    'token' => $token,
+                    'expires_at' => $expiresAt,
+                ], false);
+
+                $confirmed = UserScope::getGroupScopedOption($optionName, null);
+                if (is_array($confirmed) && hash_equals((string) ($confirmed['token'] ?? ''), $token)) {
+                    $lockToken = $token;
+                }
+            }
         }
 
-        $token = wp_generate_uuid4();
-        $expiresAt = time() + max(5, $ttlSeconds);
-        $optionName = self::OPTION_PREFIX . $normalizedKey;
-        $existing = UserScope::getGroupScopedOption($optionName, null);
-
-        if (is_array($existing) && ((int) ($existing['expires_at'] ?? 0)) > time()) {
-            return null;
-        }
-
-        UserScope::updateGroupScopedOption($optionName, [
-            'token' => $token,
-            'expires_at' => $expiresAt,
-        ], false);
-
-        $confirmed = UserScope::getGroupScopedOption($optionName, null);
-        if (!is_array($confirmed)) {
-            return null;
-        }
-
-        return hash_equals((string) ($confirmed['token'] ?? ''), $token) ? $token : null;
+        return $lockToken;
     }
 
     public static function releaseGroup(string $key, string $token): void {

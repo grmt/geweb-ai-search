@@ -59,21 +59,10 @@ class FrontendAiPromptManager {
             }
         }
 
-        if ($instruction === '' && method_exists($provider, 'getDefaultSystemInstructionForModel')) {
-            $instruction = trim((string) $provider->getDefaultSystemInstructionForModel($model !== '' ? $model : null));
-        }
-
-        if ($instruction === '') {
-            $instruction = trim((string) $provider->getDefaultSystemInstruction());
-        }
+        $instruction = $this->resolveFrontendPromptInstruction($provider, $model, $instruction);
 
         if ($name === '') {
-            $customPrompt = trim((string) UserScope::getGroupScopedOption('geweb_aisearch_custom_prompt', ''));
-            $customPromptName = trim((string) UserScope::getGroupScopedOption('geweb_aisearch_custom_prompt_name', ''));
-            $name = __('Built-in prompt', 'geweb-ai-search');
-            if ($customPrompt !== '') {
-                $name = $customPromptName !== '' ? $customPromptName : __('Custom prompt', 'geweb-ai-search');
-            }
+            $name = $this->resolveFrontendPromptName();
         }
 
         return [
@@ -82,16 +71,40 @@ class FrontendAiPromptManager {
         ];
     }
 
+    private function resolveFrontendPromptInstruction(AIProviderInterface $provider, string $model, string $instruction): string {
+        if ($instruction === '' && method_exists($provider, 'getDefaultSystemInstructionForModel')) {
+            $instruction = trim((string) $provider->getDefaultSystemInstructionForModel($model !== '' ? $model : null));
+        }
+
+        return $instruction !== '' ? $instruction : trim((string) $provider->getDefaultSystemInstruction());
+    }
+
+    private function resolveFrontendPromptName(): string {
+        $customPrompt = trim((string) UserScope::getGroupScopedOption('geweb_aisearch_custom_prompt', ''));
+        $customPromptName = trim((string) UserScope::getGroupScopedOption('geweb_aisearch_custom_prompt_name', ''));
+        $name = __('Built-in prompt', 'geweb-ai-search');
+        if ($customPrompt !== '') {
+            $name = $customPromptName !== '' ? $customPromptName : __('Custom prompt', 'geweb-ai-search');
+        }
+
+        return $name;
+    }
+
     private function supportsFrontendAiChatModel(string $model): bool {
         $normalizedModel = strtolower(trim($model));
-        if ($normalizedModel === '') {
-            return false;
+        $supportsChat = false;
+        if ($normalizedModel !== '') {
+            $supportsChat = in_array($normalizedModel, ['gemini-flash-latest', 'gemini-pro-latest'], true);
+            if (!$supportsChat && !$this->isExcludedFrontendAiModel($normalizedModel)) {
+                $supportsChat = preg_match('/^gemini-\d[a-z0-9.\-]*-(pro|flash|flash-lite)(?:-|$)/', $normalizedModel) === 1;
+            }
         }
 
-        if (in_array($normalizedModel, ['gemini-flash-latest', 'gemini-pro-latest'], true)) {
-            return true;
-        }
+        return $supportsChat;
+    }
 
+    private function isExcludedFrontendAiModel(string $normalizedModel): bool {
+        $isExcluded = false;
         foreach ([
             'tts',
             'speech',
@@ -107,10 +120,11 @@ class FrontendAiPromptManager {
             'computer-use',
         ] as $fragment) {
             if (strpos($normalizedModel, $fragment) !== false) {
-                return false;
+                $isExcluded = true;
+                break;
             }
         }
 
-        return preg_match('/^gemini-[0-9][a-z0-9.\-]*-(pro|flash|flash-lite)(?:-|$)/', $normalizedModel) === 1;
+        return $isExcluded;
     }
 }

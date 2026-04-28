@@ -7,11 +7,11 @@ defined('ABSPATH') || exit;
  * Manages the custom database tables for documents and their references.
  */
 class DocumentStore {
+    use DocumentStoreCacheTrait;
+
     private const OPTION_REFERENCED_CACHE = 'geweb_aisearch_referenced_documents_cache';
     private const OPTION_REFERENCED_CACHE_TIME = 'geweb_aisearch_referenced_documents_cache_time';
     private const OPTION_REFERENCED_CACHE_DEBUG = 'geweb_aisearch_referenced_documents_cache_debug';
-    private const DEFAULT_REFERENCED_CACHE_MAX_AGE = DAY_IN_SECONDS;
-    private const SQL_WHERE_FILE_HASH = ' WHERE file_hash = %s';
     private const SQL_SELECT_ALL_FROM = 'SELECT * FROM ';
     private const SQL_DELETE_FROM = 'DELETE FROM ';
     private const LOG_DOCUMENT_ID_SUFFIX = ' (document_id=';
@@ -151,7 +151,7 @@ class DocumentStore {
 
             try {
                 $gemini = ProviderFactory::make();
-                $geminiDocName = $this->uploadDocumentToGemini($gemini, $filePath, $displayName, $mimeType, $fileHash);
+                $geminiDocName = (new ReferencedDocumentGeminiUploadService())->upload($gemini, $filePath, $displayName, $mimeType, $fileHash);
                 $insertedId = $this->insertTrackedDocumentRow($wpdb, $fileHash, $geminiDocName, basename($filePath));
 
                 if ($insertedId !== null) {
@@ -168,164 +168,26 @@ class DocumentStore {
         return $documentId;
     }
 
-    /**
-     * @param AIProviderInterface $gemini
-     * @return string
-     */
-    private function uploadDocumentToGemini(AIProviderInterface $gemini, string $filePath, string $displayName, string $mimeType, string $fileHash): string {
-        $documentMarkdownCacheStore = new ReferencedDocumentMarkdownCacheStore();
-        $extension = strtolower((string) pathinfo($filePath, PATHINFO_EXTENSION));
-        $imageProcessingMode = (new ReferencedDocumentManager($this))->getReferencedDocumentImageProcessingMode($fileHash);
-
-        if (
-            $imageProcessingMode !== ImageOcrService::MODE_NONE
-            && (strpos($mimeType, 'image/') === 0 || $mimeType === 'application/pdf')
-        ) {
-            $markdownPath = '';
-            try {
-                $markdown = $this->buildReferencedImageMarkdown($filePath, $displayName, $mimeType, $imageProcessingMode);
-                $documentMarkdownCacheStore->saveMarkdown($fileHash, basename($filePath), $markdown);
-                $markdownPath = $this->createTemporaryMarkdownFile($markdown);
-                $markdownDisplayName = preg_replace('/\.[^.]+$/', '.md', $displayName);
-                $markdownDisplayName = is_string($markdownDisplayName) && $markdownDisplayName !== '' ? $markdownDisplayName : ($displayName . '.md');
-
-                error_log('geweb-ai-search: [DOCUMENT] processing as markdown (' . $imageProcessingMode . ') before Gemini upload: ' . $displayName);
-                $geminiDocName = $gemini->uploadLocalFile($markdownPath, $markdownDisplayName, 'text/markdown');
-                error_log('geweb-ai-search: [DOCUMENT] markdown upload succeeded as ' . $geminiDocName);
-
-                return $geminiDocName;
-            } catch (\Exception $exception) {
-                $documentMarkdownCacheStore->deleteMarkdown($fileHash);
-                error_log('geweb-ai-search: [DOCUMENT] processing and upload failed, falling back to direct upload: ' . $exception->getMessage());
-            } finally {
-                if ($markdownPath !== '' && file_exists($markdownPath)) {
-                    @unlink($markdownPath);
-                }
-            }
-        }
-
-        if ($extension === 'xlsx') {
-            try {
-                // Try direct XLSX upload first
-                error_log('geweb-ai-search: [SPREADSHEET] direct upload starting for ' . $displayName);
-                return $gemini->uploadLocalFile($filePath, $displayName, $mimeType);
-            } catch (\Exception $directUploadException) {
-                // If direct upload fails, try markdown conversion as fallback
-                $markdownPath = '';
-                try {
-                    error_log('geweb-ai-search: [SPREADSHEET] direct upload FAILED: ' . $directUploadException->getMessage() . ' - now attempting markdown conversion');
-                    $extractor = new XlsxMarkdownExtractor();
-                    $markdown = $extractor->extract($filePath, basename($filePath));
-                    $documentMarkdownCacheStore->saveMarkdown($fileHash, basename($filePath), $markdown);
-                    $markdownPath = $this->createTemporaryMarkdownFile($markdown, 'geweb_ai_xlsx_');
-                    $markdownDisplayName = preg_replace('/\.xlsx$/i', '.md', $displayName);
-                    $markdownDisplayName = is_string($markdownDisplayName) && $markdownDisplayName !== '' ? $markdownDisplayName : ($displayName . '.md');
-
-                    error_log('geweb-ai-search: [SPREADSHEET] markdown conversion successful, uploading to Gemini: ' . $displayName);
-                    $geminiDocName = $gemini->uploadLocalFile($markdownPath, $markdownDisplayName, 'text/markdown');
-                    error_log('geweb-ai-search: [SPREADSHEET] markdown upload succeeded as ' . $geminiDocName);
-
-                    return $geminiDocName;
-                } catch (\Exception $markdownException) {
-                    $documentMarkdownCacheStore->deleteMarkdown($fileHash);
-                    error_log('geweb-ai-search: [SPREADSHEET] markdown conversion and upload both failed - ' . $markdownException->getMessage() . ' (original direct upload error: ' . $directUploadException->getMessage() . ')');
-                    throw $markdownException;
-                } finally {
-                    if ($markdownPath !== '' && file_exists($markdownPath)) {
-                        @unlink($markdownPath);
-                    }
-                }
-            }
-        }
-
-        error_log('geweb-ai-search: uploading referenced document to Gemini: ' . $displayName . ' (' . $mimeType . ')');
-        $geminiDocName = $gemini->uploadLocalFile($filePath, $displayName, $mimeType);
-        error_log('geweb-ai-search: uploaded referenced document to Gemini as ' . $geminiDocName);
-
-        return $geminiDocName;
-    }
-
-    private function getCurrentFileHash(string $filePath): string {
-        $fileHash = hash_file('sha256', $filePath);
-        return is_string($fileHash) ? $fileHash : '';
-    }
-
-    private function createTemporaryMarkdownFile(string $markdown, string $prefix = 'geweb_ai_md_'): string {
-        $tempPath = tempnam(sys_get_temp_dir(), $prefix);
-        if (!is_string($tempPath) || $tempPath === '') {
-            throw new \Exception('Could not create a temporary Markdown file.');
-        }
-
-        $markdownPath = $tempPath . '.md';
-        @rename($tempPath, $markdownPath);
-        if (file_put_contents($markdownPath, $markdown) === false) {
-            @unlink($markdownPath);
-            throw new \Exception('Could not write converted Markdown.');
-        }
-
-        return $markdownPath;
-    }
-
-    private function buildReferencedImageMarkdown(string $filePath, string $displayName, string $mimeType, string $mode): string {
-        try {
-            $provider = ProviderFactory::make();
-            $processedText = $mode === ImageOcrService::MODE_DESCRIBE
-                ? trim($provider->describeImage($filePath, $mimeType))
-                : trim($provider->extractImageText($filePath, $mimeType));
-        } catch (\Exception $e) {
-            throw new \Exception('Image processing failed: ' . $e->getMessage(), 0, $e);
-        }
-
-        if ($processedText === '') {
-            throw new \Exception('Image processing returned no text.');
-        }
-
-        $uploadUrl = wp_get_upload_dir();
-        $documentUrl = '';
-        if (is_array($uploadUrl)) {
-            $baseDir = isset($uploadUrl['basedir']) ? (string) $uploadUrl['basedir'] : '';
-            $baseUrl = isset($uploadUrl['baseurl']) ? (string) $uploadUrl['baseurl'] : '';
-            if ($baseDir !== '' && $baseUrl !== '' && str_starts_with($filePath, $baseDir)) {
-                $relativePath = ltrim(str_replace('\\', '/', substr($filePath, strlen($baseDir))), '/');
-                $documentUrl = trailingslashit($baseUrl) . $relativePath;
-            }
-        }
-
-        $frontmatter = "---\n";
-        if ($documentUrl !== '') {
-            $frontmatter .= "url: {$documentUrl}\n";
-        }
-        $frontmatter .= "title: " . basename($filePath) . "\n";
-        $frontmatter .= "document_name: " . basename($filePath) . "\n";
-        $frontmatter .= "---\n\n";
-        $frontmatter .= '# ' . basename($filePath) . "\n\n";
-        $frontmatter .= ($mode === ImageOcrService::MODE_DESCRIBE ? "Image description:\n\n" : "OCR text extracted from image:\n\n");
-        $frontmatter .= $processedText . "\n";
-
-        return $frontmatter;
-    }
-
-    public function refreshReferencedImageMarkdownCache(string $fileHash, string $filePath, string $displayName, string $mimeType, string $mode): void {
+    public function refreshReferencedImageMarkdownCache(string $fileHash, string $filePath, string $mimeType, string $mode): void {
         $fileHash = sanitize_text_field($fileHash);
         $filePath = (string) $filePath;
         $mimeType = strtolower(trim((string) $mimeType));
         if ($fileHash === '' || $filePath === '' || $mimeType === '') {
-            throw new \Exception('Missing document data for markdown cache refresh.');
+            throw new ReferencedDocumentException('Missing document data for markdown cache refresh.');
         }
 
         if (
             strpos($mimeType, 'image/') !== 0
             && $mimeType !== 'application/pdf'
         ) {
-            throw new \Exception('Markdown cache refresh is only supported for images and PDFs.');
+            throw new ReferencedDocumentException('Markdown cache refresh is only supported for images and PDFs.');
         }
 
         if (!in_array($mode, [ImageOcrService::MODE_OCR, ImageOcrService::MODE_DESCRIBE], true)) {
-            throw new \Exception('Document processing is disabled for this file.');
+            throw new ReferencedDocumentException('Document processing is disabled for this file.');
         }
 
-        $markdown = $this->buildReferencedImageMarkdown($filePath, $displayName, $mimeType, $mode);
-        (new ReferencedDocumentMarkdownCacheStore())->saveMarkdown($fileHash, basename($filePath), $markdown);
+        (new ReferencedDocumentGeminiUploadService())->refreshImageMarkdownCache($fileHash, $filePath, $mimeType, $mode);
     }
 
     /**
@@ -407,24 +269,23 @@ class DocumentStore {
             'pptx' => 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
             'ppt' => 'application/vnd.ms-powerpoint',
         ];
+        $resolvedMimeType = '';
+
         if (isset($canonicalMimeTypes[$extension])) {
-            return $canonicalMimeTypes[$extension];
+            $resolvedMimeType = $canonicalMimeTypes[$extension];
+        } else {
+            $fileInfo = wp_check_filetype(basename($filePath));
+            $resolvedMimeType = isset($fileInfo['type']) ? trim((string) $fileInfo['type']) : '';
         }
 
-        $fileInfo = wp_check_filetype(basename($filePath));
-        $mimeType = isset($fileInfo['type']) ? trim((string) $fileInfo['type']) : '';
-        if ($mimeType !== '') {
-            return $mimeType;
-        }
-
-        if (function_exists('mime_content_type')) {
+        if ($resolvedMimeType === '' && function_exists('mime_content_type')) {
             $detected = mime_content_type($filePath);
             if (is_string($detected) && trim($detected) !== '') {
-                return trim($detected);
+                $resolvedMimeType = trim($detected);
             }
         }
 
-        return '';
+        return $resolvedMimeType;
     }
 
     /**
@@ -447,45 +308,6 @@ class DocumentStore {
         UserScope::updateGroupScopedOption(self::OPTION_REFERENCED_CACHE_DEBUG, is_array($result['debug'] ?? null) ? $result['debug'] : [], false);
 
         return $items;
-    }
-
-    /**
-     * @return bool
-     */
-    public function hasReferencedDocumentOverviewCache(): bool {
-        return is_array(UserScope::getGroupScopedOption(self::OPTION_REFERENCED_CACHE, null));
-    }
-
-    /**
-     * @return bool
-     */
-    public function isReferencedDocumentOverviewCacheFresh(): bool {
-        $cacheTime = $this->getReferencedDocumentOverviewCacheTime();
-        if ($cacheTime <= 0) {
-            return false;
-        }
-
-        $maxAge = (int) apply_filters('geweb_aisearch_referenced_document_cache_max_age', self::DEFAULT_REFERENCED_CACHE_MAX_AGE);
-        if ($maxAge <= 0) {
-            $maxAge = self::DEFAULT_REFERENCED_CACHE_MAX_AGE;
-        }
-
-        return (time() - $cacheTime) < $maxAge;
-    }
-
-    /**
-     * @return int
-     */
-    public function getReferencedDocumentOverviewCacheTime(): int {
-        return (int) UserScope::getGroupScopedOption(self::OPTION_REFERENCED_CACHE_TIME, 0);
-    }
-
-    /**
-     * @return array<string,int>
-     */
-    public function getReferencedDocumentOverviewDebug(): array {
-        $debug = UserScope::getGroupScopedOption(self::OPTION_REFERENCED_CACHE_DEBUG, []);
-        return is_array($debug) ? $debug : [];
     }
 
     /**

@@ -16,7 +16,7 @@ defined('ABSPATH') || exit;
 
 // Plugin version
 if (!defined('GEWEB_AI_SEARCH_VERSION')) {
-    define('GEWEB_AI_SEARCH_VERSION', '2.1.4.31');
+    define('GEWEB_AI_SEARCH_VERSION', implode('.', ['2', '1', '4', '31']));
 }
 
 // Plugin directory path

@@ -3,6 +3,7 @@
 This file is the lightweight design spec for the frontend AI Search workspace.
 
 It is intended to sit between:
+
 - visual design decisions
 - frontend markup/CSS
 - browser verification with `npm run wp:test`
@@ -44,17 +45,20 @@ The UI should always be reviewed in these four layouts:
 ### 1. Workspace Header
 
 Class anchors:
+
 - `.geweb-ai-page-toolbar`
 - `.geweb-ai-page-toolbar-title`
 - `.geweb-ai-page-toolbar-actions`
 - `.geweb-ai-page-toolbar-button`
 
 Purpose:
+
 - top-level workspace controls
 - not a heavy card
 - should read as a light strip above the workspace
 
 Rules:
+
 - light gray background is allowed
 - avoid boxed/capsule framing for the whole header
 - `AI Workspace` label is subtle, not dominant
@@ -64,14 +68,17 @@ Rules:
 ### 2. Search Results Panel
 
 Class anchors:
+
 - `.geweb-ai-search-results-panel`
 - `.geweb-ai-search-results-header`
 - `.geweb-ai-search-results-content`
 
 Purpose:
+
 - show normal WordPress search results inside the workspace
 
 Rules:
+
 - should visually connect to the workspace, not compete with it
 - header may have a subtle gray tint
 - panel spacing should stay compact
@@ -80,6 +87,7 @@ Rules:
 ### 3. Left Pane: Chats
 
 Class anchors:
+
 - `.geweb-ai-sidebar`
 - `.geweb-ai-overview-header`
 - `.geweb-ai-panel-heading`
@@ -87,11 +95,13 @@ Class anchors:
 - `.geweb-ai-current-conversation`
 
 Purpose:
+
 - current chat
 - chat archive
 - new/manage actions
 
 Rules:
+
 - header stays on one row whenever space allows
 - hide/collapse control is always right-aligned in open state
 - collapsed state keeps a visible stub column
@@ -101,16 +111,19 @@ Rules:
 ### 4. Main Pane: Conversation
 
 Class anchors:
+
 - `.geweb-ai-main-panel`
 - `.answer-box`
 - `.question-box`
 
 Purpose:
+
 - display conversation
 - show footnotes
 - allow asking the next question
 
 Rules:
+
 - content scrolling must not unexpectedly move the whole workspace
 - footnote hover may preview related source state
 - footnote hover must not cause large layout jumps
@@ -119,6 +132,7 @@ Rules:
 ### 5. Right Pane: Source References
 
 Class anchors:
+
 - `.geweb-ai-sources-panel`
 - `.geweb-ai-sources`
 - `.geweb-ai-source-list`
@@ -127,10 +141,12 @@ Class anchors:
 - `.geweb-ai-source-details`
 
 Purpose:
+
 - show sources used by the current answer or restored chat
 - allow temporary per-chat source inclusion/exclusion
 
 Rules:
+
 - `Source References` may wrap only when space is genuinely tight
 - settings/manage action stays near the title
 - hide/collapse control is right-aligned
@@ -140,6 +156,7 @@ Rules:
 ## Source Row Spec
 
 Class anchors:
+
 - `.geweb-ai-source-list li`
 - `.geweb-ai-source-link`
 - `.geweb-ai-source-link-hint`
@@ -148,6 +165,7 @@ Class anchors:
 - `.geweb-ai-source-details`
 
 Each source row has:
+
 - list number
 - source title button
 - optional source hint pill
@@ -155,6 +173,7 @@ Each source row has:
 - expandable context details
 
 Rules:
+
 - list number is visually quiet
 - source title is primary
 - source hint is a small pill, not plain inline text
@@ -167,33 +186,39 @@ Rules:
 ## Footnote Interaction Spec
 
 Related code:
+
 - `assets/script.js`
 - `assets/js/ai-sources.js`
 
 Hover:
+
 - may preview the matching source row
 - may preview the best matching context
 - must not auto-scroll the whole workspace
 - should not auto-expand the right pane if that expansion causes jumpiness
 
 Click:
+
 - may activate the source row
 - may expand the right pane
 - may scroll the source row into view if needed
 
 Preview tooltip:
+
 - small, contextual, anchored near the footnote
 - never causes layout reflow
 
 ## Pane Collapse Spec
 
 Related classes:
+
 - `.is-left-collapsed`
 - `.is-right-collapsed`
 - `.geweb-ai-panel-collapse`
 - `.geweb-ai-panel-reopen`
 
 Rules:
+
 - collapsing a pane never removes it completely
 - a stub width remains at least the width of a single icon button
 - reopen button lives inside the pane stub, not in the center area
@@ -308,8 +333,10 @@ Recommended flow for future UI work:
 2. Implement CSS/markup changes.
 3. Run `npm run wp:test`.
 4. Review:
+
    - desktop
    - narrow desktop
    - mobile portrait
    - mobile landscape
+
 5. If needed, refine this spec so it matches the built result.

@@ -76,9 +76,10 @@
     color: #000;
 }
 .user-message {
-    display: inline-flex;
-    align-items: flex-start;
-    gap: 8px;
+    display: inline-grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: stretch;
+    gap: 8px 12px;
     align-self: flex-end;
     border: 1px solid #000;
     border-bottom-right-radius: 0;
@@ -96,28 +97,50 @@
     min-width: 0;
     overflow-wrap: anywhere;
 }
+.geweb-ai-message-meta {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 6px;
+    align-self: stretch;
+    min-width: 88px;
+}
+.geweb-ai-message-meta-actions {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    min-height: 28px;
+}
 .geweb-ai-message-timestamp {
-    display: block;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
     color: #64748b;
     font-size: 11px;
     line-height: 1.2;
     white-space: nowrap;
 }
+.geweb-ai-message-timestamp-day,
+.geweb-ai-message-timestamp-time {
+    display: block;
+    text-align: right;
+}
+.geweb-ai-message-meta--ai .geweb-ai-message-timestamp-day::after {
+    content: " ·";
+}
 .geweb-ai-message-timestamp--user {
-    align-self: flex-end;
-    margin-left: 2px;
-    padding-top: 2px;
     color: #475569;
 }
 .geweb-ai-message-timestamp--ai {
-    margin-top: 8px;
-    text-align: right;
+    margin-top: 2px;
 }
 .geweb-ai-user-message-remove {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    align-self: flex-start;
     padding: 0;
     border: 0;
     background: transparent;
@@ -128,7 +151,6 @@
     cursor: pointer;
     opacity: 0.6;
     flex: 0 0 auto;
-    transform: translateY(-2px);
 }
 .geweb-ai-user-message-remove:hover,
 .geweb-ai-user-message-remove:focus {
@@ -164,9 +186,55 @@
 }
 .geweb-ai-thinking-indicator--thoughts {
     animation: none;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    width: min(100%, 560px);
 }
 .geweb-ai-thinking-indicator--thoughts::after {
     display: none;
+}
+.geweb-ai-thinking-indicator-label {
+    font-weight: 500;
+}
+.geweb-ai-thinking-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: rgba(241, 245, 249, 0.78);
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    color: #334155;
+}
+.geweb-ai-thinking-preview-line {
+    display: block;
+    width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.geweb-ai-thinking-preview-heading {
+    font-weight: 600;
+    color: #0f172a;
+}
+.geweb-ai-thinking-preview-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: #0f172a;
+    font-size: 12px;
+    line-height: 1.3;
+    cursor: pointer;
+}
+.geweb-ai-thinking-preview-toggle:hover,
+.geweb-ai-thinking-preview-toggle:focus {
+    text-decoration: underline;
+    outline: none;
 }
 .geweb-ai-thought-process {
     margin: 0 0 10px;
@@ -209,6 +277,31 @@
     padding-top: 12px;
     border-top: 1px solid rgba(148, 163, 184, 0.18);
 }
+.geweb-ai-thought-process-entry--inline {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+}
+.geweb-ai-thought-process-entry--inline + .geweb-ai-thought-process-entry--inline {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
+.geweb-ai-thought-process-entry--inline + .geweb-ai-thought-process-entry--repeat {
+    margin-top: 4px;
+    padding-top: 0;
+    border-top: 0;
+}
+.geweb-ai-thought-process-entry-heading {
+    font-size: 12px;
+    line-height: 1.35;
+    font-weight: 600;
+    color: #0f172a;
+}
+.geweb-ai-thought-process-entry-detail {
+    display: inline;
+    color: #334155;
+}
 .geweb-ai-thought-process-entry-title {
     font-size: 12px;
     line-height: 1.35;
@@ -225,6 +318,24 @@
 .geweb-ai-thought-process-body > :last-child {
     margin-bottom: 0;
 }
+.geweb-ai-thought-process-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 10px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: #0f172a;
+    font-size: 12px;
+    line-height: 1.3;
+    cursor: pointer;
+}
+.geweb-ai-thought-process-toggle:hover,
+.geweb-ai-thought-process-toggle:focus {
+    text-decoration: underline;
+    outline: none;
+}
 .geweb-ai-thought-process-entry-body > :first-child {
     margin-top: 0;
 }
@@ -237,26 +348,40 @@
     margin: 0 0 8px;
 }
 .geweb-ai-message-actions {
-    position: absolute;
-    top: 0;
-    right: 0;
     display: inline-flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: flex-start;
     gap: 4px;
     margin: 0;
     flex-wrap: nowrap;
-    padding-left: 6px;
-    z-index: 1;
-    background: rgba(255, 255, 255, 0.92);
-    border-radius: 999px;
 }
 .geweb-ai-message-content {
     color: inherit;
-    min-height: 28px;
-    position: relative;
+    display: flex;
+    flex-direction: column;
     padding-top: 2px;
-    padding-right: 74px;
+}
+.geweb-ai-message-body {
+    min-width: 0;
+}
+.geweb-ai-message-meta--ai {
+    order: -1;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 6px;
+}
+.geweb-ai-message-meta--ai .geweb-ai-message-timestamp--ai {
+    order: -1;
+    flex-direction: row;
+    align-items: center;
+    gap: 3px;
+    margin-top: 0;
+}
+.geweb-ai-message-meta--ai .geweb-ai-message-actions {
+    order: 1;
 }
 .geweb-ai-message-info-toggle:hover,
 .geweb-ai-message-info-toggle:focus,
@@ -266,10 +391,9 @@
     outline: none;
 }
 .user-message .geweb-ai-message-info-toggle {
-    align-self: flex-start;
+    align-self: center;
 }
 .user-message .geweb-ai-question-info-toggle {
-    margin-left: 2px;
     width: auto;
     min-width: 0;
     height: auto;
@@ -278,7 +402,6 @@
     background: transparent;
     padding: 0;
     box-shadow: none;
-    transform: translateY(-2px);
 }
 .geweb-ai-copy-answer,
 .geweb-ai-message-thoughts-toggle,
@@ -405,6 +528,31 @@
 .geweb-ai-message-info-popover.is-open {
     display: block;
 }
+.geweb-ai-message-info-popover-header {
+    display: flex;
+    justify-content: flex-end;
+    margin: -2px -4px 4px;
+}
+.geweb-ai-message-info-popover-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    min-width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: #475569;
+    cursor: pointer;
+}
+.geweb-ai-message-info-popover-close:hover,
+.geweb-ai-message-info-popover-close:focus {
+    color: #0f172a;
+    background: rgba(148, 163, 184, 0.16);
+    outline: none;
+}
 .geweb-ai-message-info-popover-content {
     white-space: pre-line;
     font-size: 12px;
@@ -507,6 +655,17 @@
 }
 .geweb-ai-response-details.is-open {
     display: block;
+}
+.ai-message:has(.geweb-ai-response-details.is-open) {
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+.ai-message:has(.geweb-ai-response-details.is-open) .geweb-ai-response-details.is-open {
+    flex: 1;
+    max-height: none;
+    min-height: 0;
 }
 .geweb-ai-response-details-header {
     position: sticky;
@@ -620,6 +779,43 @@
     font-size: 12px;
     line-height: 1.45;
     color: #334155;
+}
+.geweb-ai-thought-history-item + .geweb-ai-thought-history-item {
+    margin-top: 10px;
+}
+.geweb-ai-thought-history-item-title,
+.geweb-ai-thought-history-item-line {
+    font-size: 12px;
+    line-height: 1.5;
+    color: #334155;
+}
+.geweb-ai-thought-history-item-heading {
+    font-weight: 700;
+    color: #0f172a;
+}
+.geweb-ai-thought-history-item-meta-inline {
+    color: #475569;
+    white-space: nowrap;
+}
+.geweb-ai-thought-history-item-detail-inline::before {
+    content: " ";
+}
+.geweb-ai-thought-history-item-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 0;
+}
+.geweb-ai-thought-history-intro-line {
+    font-size: 12px;
+    line-height: 1.5;
+    color: #334155;
+}
+.geweb-ai-thought-process-entry-heading--repeat {
+    color: #94a3b8;
+    font-weight: 400;
+    font-size: 11px;
+    letter-spacing: 0.05em;
 }
 .geweb-ai-grounding-section {
     margin-top: 0;
@@ -828,6 +1024,14 @@
     gap: 4px;
     width: 100%;
     justify-content: space-between;
+}
+.geweb-aisearch-modal-window .geweb-ai-question-toolbar-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    margin-left: auto;
+    flex: 0 0 auto;
 }
 .geweb-aisearch-modal-window .geweb-ai-question-summary {
     display: flex;
@@ -1256,37 +1460,63 @@
         gap: 6px;
     }
     .geweb-aisearch-modal-window--page {
-        padding-left: 0;
-        padding-right: 0;
+        --geweb-ai-mobile-pane-footer-space: calc(56px + env(safe-area-inset-bottom, 0px));
+        padding-left: 2px;
+        padding-right: 2px;
+        padding-bottom: 0;
+        overflow: hidden;
     }
     .geweb-aisearch-modal-window--page .geweb-ai-main-panel {
         gap: 8px;
+        overflow: hidden;
+        scroll-padding-bottom: 0;
     }
     .geweb-aisearch-modal-window--page .geweb-ai-sidebar,
     .geweb-aisearch-modal-window--page .geweb-ai-main-panel,
     .geweb-aisearch-modal-window--page .geweb-ai-sources-panel {
-        padding-left: 8px;
-        padding-right: 8px;
+        display: none;
+        flex: 1 1 auto;
+        height: 100%;
+        max-height: 100%;
+        min-height: 0;
+        box-sizing: border-box;
+        padding-left: 2px;
+        padding-right: 2px;
+        padding-bottom: 0;
     }
     .geweb-aisearch-modal-window--page .answer-box,
     .geweb-aisearch-modal-window--page .question-box {
-        padding: 10px;
-        border-radius: 10px;
+        padding: 4px;
+        border-radius: 8px;
     }
     .geweb-aisearch-modal-window--page .geweb-ai-message-actions {
-        position: absolute;
-        top: 0;
-        left: 0;
+        position: static;
+        top: auto;
         right: auto;
-        align-self: auto;
-        justify-content: flex-start;
+        left: auto;
+        align-self: start;
+        justify-content: flex-end;
         margin: 0;
         padding-left: 0;
-        padding-right: 6px;
+        padding-right: 0;
     }
     .geweb-aisearch-modal-window--page .geweb-ai-message-content {
-        padding-left: 68px;
+        padding-left: 0;
         padding-right: 0;
+    }
+    .geweb-aisearch-modal-window--page .geweb-ai-search-results-panel {
+        padding: 2px 3px 5px;
+    }
+    .geweb-aisearch-modal-window--page .geweb-ai-search-results-header {
+        padding: 4px 5px;
+    }
+    .geweb-aisearch-modal-window--page .geweb-ai-message-action-label {
+        display: none;
+    }
+    .geweb-ai-message-info-popover.is-mobile {
+        max-width: none;
+        padding: 12px 14px;
+        border-radius: 12px;
     }
     .geweb-aisearch-modal-window--page .geweb-ai-response-details {
         max-height: none;
@@ -1303,29 +1533,15 @@
         font-size: 12px;
         line-height: 1.45;
     }
-    .geweb-aisearch-modal-window--page {
-        --geweb-ai-mobile-pane-footer-space: 0px;
-        padding-bottom: 0;
-        overflow: hidden;
-    }
     .geweb-aisearch-modal-window--page .geweb-ai-workspace {
         display: flex;
         flex: 1 1 auto;
         min-height: 0;
         overflow: hidden;
         position: relative;
-        touch-action: pan-y pinch-zoom;
-    }
-    .geweb-aisearch-modal-window--page .geweb-ai-sidebar,
-    .geweb-aisearch-modal-window--page .geweb-ai-main-panel,
-    .geweb-aisearch-modal-window--page .geweb-ai-sources-panel {
-        display: none;
-        flex: 1 1 auto;
-        height: 100%;
-        max-height: 100%;
-        min-height: 0;
+        padding-bottom: var(--geweb-ai-mobile-pane-footer-space);
         box-sizing: border-box;
-        padding-bottom: 0;
+        touch-action: pan-y pinch-zoom;
     }
     .geweb-aisearch-modal-window--page .geweb-ai-workspace:not([data-mobile-pane]) .geweb-ai-main-panel {
         display: flex;
@@ -1339,16 +1555,10 @@
     .geweb-aisearch-modal-window--page .geweb-ai-sources-panel {
         overflow-y: auto;
         overscroll-behavior: contain;
-        -webkit-overflow-scrolling: touch;
     }
     .geweb-aisearch-modal-window--page .answer-box {
         overflow-y: auto;
         overscroll-behavior: contain;
-        -webkit-overflow-scrolling: touch;
-    }
-    .geweb-aisearch-modal-window--page .geweb-ai-main-panel {
-        overflow: hidden;
-        scroll-padding-bottom: 0;
     }
     .geweb-aisearch-modal-window--page .question-box {
         position: static;
@@ -1405,11 +1615,11 @@
         animation: geweb-ai-mobile-pane-slide-out-backward 0.32s cubic-bezier(0.22, 1, 0.36, 1);
     }
     .geweb-ai-mobile-pane-footer {
-        position: relative;
+        position: absolute;
         flex: 0 0 auto;
-        left: auto;
-        right: auto;
-        bottom: auto;
+        left: 0;
+        right: 0;
+        bottom: 0;
         z-index: 20;
         display: none;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1430,6 +1640,9 @@
     .geweb-ai-mobile-pane-tab,
     .geweb-ai-mobile-pane-tab.button {
         display: inline-flex !important;
+        width: 100%;
+        min-width: 0;
+        flex: 1 1 0;
         flex-direction: column;
         align-items: center;
         justify-content: center;
@@ -1451,11 +1664,16 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        width: 18px;
+        height: 18px;
         min-width: 18px;
         font-size: 15px;
         line-height: 1;
     }
     .geweb-ai-mobile-pane-tab-label {
+        display: block;
+        width: 100%;
+        text-align: center;
         font-size: 10px;
         line-height: 1.2;
         font-weight: 600;
@@ -1615,6 +1833,14 @@
     cursor: pointer;
     font-size: 16px;
     line-height: 1;
+}
+
+.geweb-ai-history-controls {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    margin-left: auto;
 }
 
 .geweb-ai-retry-last:hover,

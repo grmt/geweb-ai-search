@@ -23,23 +23,10 @@ class ManagedSourceReferenceResolver {
 
         $postId = $this->extractPostIdFromManagedUrl($normalizedUrl);
         if ($postId > 0) {
-            $permalink = get_permalink($postId);
-            if (is_string($permalink) && $permalink !== '') {
-                $canonicalUrl = $permalink;
-            }
-
-            $postTitle = get_the_title($postId);
-            if (is_string($postTitle) && trim($postTitle) !== '') {
-                $title = trim($postTitle);
-            }
-
-            // Always try to get a better label from post data
-            // This handles cases where URL only has query params like "page 272"
-            $postLabel = $this->buildManagedSourceLabelFromPost($postId, $canonicalUrl, $title);
-            if ($postLabel !== '') {
-                $label = $postLabel;
-            }
-
+            $postDetails = $this->resolveManagedSourcePostDetails($postId, $canonicalUrl, $title, $label);
+            $canonicalUrl = $postDetails['url'];
+            $title = $postDetails['title'];
+            $label = $postDetails['label'];
             $sizeBytes = $this->resolveManagedSourceSizeBytes($postId);
         }
 
@@ -66,42 +53,46 @@ class ManagedSourceReferenceResolver {
         return $this->extractPostIdFromManagedUrl($normalizedUrl);
     }
 
-    private function buildManagedSourceLabelFromPost(int $postId, string $url, string $title): string {
-        $label = $this->formatManagedSourcePath($url);
-
-        // If we got "page X" or "post X" format, try to get something better from the permalink
-        if (preg_match('/^(page|post)\s+\d+$/', $label)) {
-            $post = get_post($postId);
-            if ($post instanceof \WP_Post) {
-                // Try to extract path from the post's permalink
-                $permalink = get_permalink($post);
-                if (is_string($permalink) && $permalink !== '') {
-                    $pathLabel = $this->formatManagedSourcePath($permalink);
-                    if ($pathLabel !== '' && !preg_match('/^(page|post)\s+\d+$/', $pathLabel)) {
-                        return $pathLabel;
-                    }
-                }
-                // Fall back to post_name if permalink doesn't have a better path
-                $postName = trim((string) $post->post_name);
-                if ($postName !== '') {
-                    return trailingslashit($postName);
-                }
-            }
+    /**
+     * @return array{url:string,title:string,label:string}
+     */
+    private function resolveManagedSourcePostDetails(int $postId, string $canonicalUrl, string $title, string $label): array {
+        $permalink = get_permalink($postId);
+        if (is_string($permalink) && $permalink !== '') {
+            $canonicalUrl = $permalink;
         }
 
-        if ($label === '') {
-            $post = get_post($postId);
-            if ($post instanceof \WP_Post) {
-                // Try to extract from permalink first
-                $permalink = get_permalink($post);
-                if (is_string($permalink) && $permalink !== '') {
-                    $pathLabel = $this->formatManagedSourcePath($permalink);
-                    if ($pathLabel !== '') {
-                        return $pathLabel;
-                    }
-                }
-                // Fall back to post_name
-                $label = trim((string) $post->post_name);
+        $postTitle = get_the_title($postId);
+        if (is_string($postTitle) && trim($postTitle) !== '') {
+            $title = trim($postTitle);
+        }
+
+        $postLabel = $this->buildManagedSourceLabelFromPost($postId, $canonicalUrl, $title);
+        if ($postLabel !== '') {
+            $label = $postLabel;
+        }
+
+        return [
+            'url' => $canonicalUrl,
+            'title' => $title,
+            'label' => $label,
+        ];
+    }
+
+    private function buildManagedSourceLabelFromPost(int $postId, string $url, string $title): string {
+        $label = $this->formatManagedSourcePath($url);
+        $post = get_post($postId);
+
+        // If we got "page X" or "post X" format, try to get something better from the permalink
+        if ($post instanceof \WP_Post && preg_match('/^(page|post)\s+\d+$/', $label)) {
+            $betterLabel = $this->buildManagedSourceLabelFromPermalink($post, true);
+            $label = $betterLabel !== '' ? $betterLabel : $this->buildManagedSourceLabelFromPostName($post, true);
+        }
+
+        if ($label === '' && $post instanceof \WP_Post) {
+            $label = $this->buildManagedSourceLabelFromPermalink($post, false);
+            if ($label === '') {
+                $label = $this->buildManagedSourceLabelFromPostName($post, false);
             }
         }
 
@@ -110,6 +101,22 @@ class ManagedSourceReferenceResolver {
         }
 
         return $label;
+    }
+
+    private function buildManagedSourceLabelFromPermalink(\WP_Post $post, bool $rejectGenericLabel): string {
+        $label = '';
+        $permalink = get_permalink($post);
+        if (is_string($permalink) && $permalink !== '') {
+            $pathLabel = $this->formatManagedSourcePath($permalink);
+            $label = $rejectGenericLabel && preg_match('/^(page|post)\s+\d+$/', $pathLabel) ? '' : $pathLabel;
+        }
+
+        return $label;
+    }
+
+    private function buildManagedSourceLabelFromPostName(\WP_Post $post, bool $trail): string {
+        $postName = trim((string) $post->post_name);
+        return $trail && $postName !== '' ? trailingslashit($postName) : $postName;
     }
 
     private function normalizeManagedSourceUrl(string $url): string {
@@ -163,10 +170,8 @@ class ManagedSourceReferenceResolver {
         }
 
         $path = isset($parts['path']) ? trim((string) $parts['path'], '/') : '';
-        if ($path !== '') {
-            if (preg_match('/^(\d+)\.md$/i', $path, $matches)) {
-                return (int) $matches[1];
-            }
+        if ($path !== '' && preg_match('/^(\d+)\.md$/i', $path, $matches)) {
+            return (int) $matches[1];
         }
 
         $postId = url_to_postid($url);
@@ -203,27 +208,23 @@ class ManagedSourceReferenceResolver {
     }
 
     private function resolveManagedSourceSizeBytes(int $postId): int {
+        $sizeBytes = 0;
         $post = get_post($postId);
-        if (!$post instanceof \WP_Post) {
-            return 0;
-        }
-
-        if ($post->post_type === 'attachment') {
+        if ($post instanceof \WP_Post && $post->post_type === 'attachment') {
             $attachedFile = get_attached_file($postId);
             if (is_string($attachedFile) && $attachedFile !== '' && file_exists($attachedFile)) {
                 $attachedSize = (int) (@filesize($attachedFile) ?: 0);
                 if ($attachedSize > 0) {
-                    return $attachedSize;
+                    $sizeBytes = $attachedSize;
                 }
             }
         }
 
-        $markdownBytes = (int) get_post_meta($postId, self::META_MARKDOWN_BYTES, true);
-        if ($markdownBytes > 0) {
-            return $markdownBytes;
+        if ($sizeBytes <= 0 && $post instanceof \WP_Post) {
+            $markdownBytes = (int) get_post_meta($postId, self::META_MARKDOWN_BYTES, true);
+            $sizeBytes = $markdownBytes > 0 ? $markdownBytes : strlen((string) $post->post_content);
         }
 
-        $content = (string) $post->post_content;
-        return $content !== '' ? strlen($content) : 0;
+        return $sizeBytes;
     }
 }

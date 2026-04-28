@@ -56,8 +56,7 @@ jQuery(document).ready(($) => {
 			try {
 				const url = new URL(currentUrl, globalThis.location?.origin);
 				return String(url.searchParams.get('s') || url.searchParams.get('geweb_ai_query') || '').trim();
-			} catch (error) {
-				console.debug('Resolving query text from URL failed.', error);
+			} catch {
 				return '';
 			}
 		},
@@ -204,7 +203,7 @@ jQuery(document).ready(($) => {
 				const entry = this.buildMobileMenuEntry(container);
 
 				if (firstChild) {
-					container.insertBefore(entry, firstChild);
+					firstChild.before(entry);
 					return;
 				}
 
@@ -227,8 +226,6 @@ jQuery(document).ready(($) => {
 				const mediaQuery = globalThis.matchMedia('(max-width: 782px)');
 				if (typeof mediaQuery.addEventListener === 'function') {
 					mediaQuery.addEventListener('change', inject);
-				} else if (typeof mediaQuery.addListener === 'function') {
-					mediaQuery.addListener(inject);
 				}
 			}
 

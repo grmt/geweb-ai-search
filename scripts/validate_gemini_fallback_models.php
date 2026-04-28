@@ -113,7 +113,7 @@ $candidateModels = array_values(array_filter($liveModels, static function (strin
         }
     }
 
-    return preg_match('/^gemini-[0-9][a-z0-9.\-]*-(pro|flash|flash-lite)(?:-|$)/', $model) === 1;
+    return preg_match('/^gemini-\d[a-z0-9.\-]*-(pro|flash|flash-lite)(?:-|$)/', $model) === 1;
 }));
 
 $missingCandidates = array_values(array_diff($candidateModels, $fallbackModels));
@@ -161,6 +161,22 @@ function extractQuotedArrayFromMethod(string $source, string $methodName): array
 function fetchLiveGeminiModels(string $apiKey): array
 {
     $url = 'https://generativelanguage.googleapis.com/v1beta/models?key=' . rawurlencode($apiKey);
+    [$response, $statusLine] = fetchGeminiListModelsResponse($url);
+    ensureSuccessfulGeminiResponse($response, $statusLine);
+    $payload = decodeGeminiListModelsPayload($response);
+
+    $models = extractGenerateContentModelNames($payload);
+    $models = array_values(array_unique($models));
+    sort($models);
+
+    return $models;
+}
+
+/**
+ * @return array{0:string,1:string}
+ */
+function fetchGeminiListModelsResponse(string $url): array
+{
     $context = stream_context_create([
         'http' => [
             'method' => 'GET',
@@ -176,7 +192,11 @@ function fetchLiveGeminiModels(string $apiKey): array
         exit(1);
     }
 
-    $statusLine = $http_response_header[0] ?? '';
+    return [$response, $http_response_header[0] ?? ''];
+}
+
+function ensureSuccessfulGeminiResponse(string $response, string $statusLine): void
+{
     if (!preg_match('/\s(\d{3})\s/', $statusLine, $statusMatches)) {
         fwrite(STDERR, "Could not determine Gemini ListModels response status.\n");
         exit(1);
@@ -188,13 +208,28 @@ function fetchLiveGeminiModels(string $apiKey): array
         fwrite(STDERR, $response . "\n");
         exit(1);
     }
+}
 
+/**
+ * @return array<string,mixed>
+ */
+function decodeGeminiListModelsPayload(string $response): array
+{
     $payload = json_decode($response, true);
     if (!is_array($payload)) {
         fwrite(STDERR, "Gemini ListModels returned invalid JSON.\n");
         exit(1);
     }
 
+    return $payload;
+}
+
+/**
+ * @param array<string,mixed> $payload
+ * @return array<int,string>
+ */
+function extractGenerateContentModelNames(array $payload): array
+{
     $models = [];
     foreach (($payload['models'] ?? []) as $model) {
         if (!is_array($model)) {
@@ -217,9 +252,6 @@ function fetchLiveGeminiModels(string $apiKey): array
 
         $models[] = $shortName;
     }
-
-    $models = array_values(array_unique($models));
-    sort($models);
 
     return $models;
 }

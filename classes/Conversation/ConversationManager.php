@@ -5,8 +5,8 @@ defined('ABSPATH') || exit;
 
 class ConversationManager {
     private const OPTION_CONVERSATIONS = 'geweb_aisearch_conversations';
-    private const REGEX_WHITESPACE = '/\s+/';
     private const DEFAULT_CONVERSATION_LIMIT = 50;
+    private const LABEL_UNTITLED_CONVERSATION = 'Untitled conversation';
 
     /**
      * @return array<int,array<string,mixed>>
@@ -19,8 +19,9 @@ class ConversationManager {
      * @return array<int,array<string,mixed>>
      */
     public function getFrontendConversationSummaries(): array {
-        return array_map(function (array $entry): array {
-            return $this->exportConversationSummaryForFrontend($entry);
+        $exporter = new ConversationFrontendExporter();
+        return array_map(static function (array $entry) use ($exporter): array {
+            return $exporter->exportSummary($entry);
         }, $this->getConversationLog());
     }
 
@@ -34,7 +35,9 @@ class ConversationManager {
             return null;
         }
 
-        return $this->exportConversationForFrontend($conversation);
+        return (new ConversationFrontendExporter())->export($conversation, $this->normalizeConversationMessages(
+            isset($conversation['messages']) && is_array($conversation['messages']) ? $conversation['messages'] : []
+        ));
     }
 
     /**
@@ -88,7 +91,7 @@ class ConversationManager {
         $normalizedMessages = $this->enforceStoredContextLimits($this->normalizeConversationMessages($messages));
         $normalizedSummary = trim($summary);
         if ($normalizedSummary === '') {
-            $normalizedSummary = $this->buildConversationSummary($normalizedMessages);
+            $normalizedSummary = (new ConversationFrontendExporter())->buildSummary($normalizedMessages);
         }
 
         $conversations = $this->getConversationOption();
@@ -106,7 +109,7 @@ class ConversationManager {
 
         $conversation = [
             'id' => $conversationId,
-            'summary' => $normalizedSummary !== '' ? $normalizedSummary : 'Untitled conversation',
+            'summary' => $normalizedSummary !== '' ? $normalizedSummary : self::LABEL_UNTITLED_CONVERSATION,
             'started_at' => (int) ($existing['started_at'] ?? $now),
             'last_used_at' => $now,
             'provider' => (string) ($existing['provider'] ?? ''),
@@ -254,7 +257,7 @@ class ConversationManager {
         $recentCount = max(2, $maxMessages - 1);
         $recentMessages = array_slice($messages, -$recentCount);
         $olderMessages = array_slice($messages, 0, max(0, count($messages) - $recentCount));
-        $summary = $this->buildConversationContextSummary($olderMessages);
+        $summary = (new ConversationFrontendExporter())->buildContextSummary($olderMessages);
 
         $compactedMessages = $recentMessages;
         if ($summary !== '') {
@@ -299,7 +302,7 @@ class ConversationManager {
         } else {
             $existing = [
                 'id' => $conversationId,
-                'summary' => $this->buildConversationSummary($messages),
+                'summary' => (new ConversationFrontendExporter())->buildSummary($messages),
                 'started_at' => $now,
                 'last_used_at' => $now,
                 'provider' => $provider->getProviderLabel(),
@@ -315,7 +318,7 @@ class ConversationManager {
         }
 
         if (trim((string) ($existing['summary'] ?? '')) === '') {
-            $existing['summary'] = $this->buildConversationSummary($messages);
+            $existing['summary'] = (new ConversationFrontendExporter())->buildSummary($messages);
         }
 
         $existing['last_used_at'] = $now;
@@ -469,112 +472,4 @@ class ConversationManager {
         return array_values($messages);
     }
 
-    /**
-     * @param array<int,array<string,mixed>> $messages
-     * @return string
-     */
-    private function buildConversationContextSummary(array $messages): string {
-        if (empty($messages)) {
-            return '';
-        }
-
-        $lines = ['Earlier conversation summary:'];
-        $maxLines = 8;
-        foreach ($messages as $message) {
-            if (!isset($message['content']) || trim($message['content']) === '') {
-                continue;
-            }
-
-            $prefix = ($message['role'] ?? '') === 'model'
-                ? 'Assistant answered: '
-                : 'User asked: ';
-            $content = wp_strip_all_tags((string) ($message['content'] ?? ''));
-            $content = preg_replace(self::REGEX_WHITESPACE, ' ', $content);
-            $content = is_string($content) ? trim($content) : (string) ($message['content'] ?? '');
-
-            if (function_exists('mb_strimwidth')) {
-                $content = mb_strimwidth($content, 0, 220, '...');
-            } elseif (strlen($content) > 220) {
-                $content = substr($content, 0, 217) . '...';
-            }
-
-            $lines[] = '- ' . $prefix . $content;
-            if (count($lines) >= ($maxLines + 1)) {
-                break;
-            }
-        }
-
-        return implode("\n", $lines);
-    }
-
-    /**
-     * @param array<string,mixed> $conversation
-     * @return array<string,mixed>
-     */
-    private function exportConversationSummaryForFrontend(array $conversation): array {
-        $messages = isset($conversation['messages']) && is_array($conversation['messages']) ? $conversation['messages'] : [];
-
-        return [
-            'id' => (string) ($conversation['id'] ?? ''),
-            'summary' => trim((string) ($conversation['summary'] ?? '')) !== '' ? (string) $conversation['summary'] : 'Untitled conversation',
-            'savedAt' => (int) (($conversation['last_used_at'] ?? $conversation['started_at'] ?? time()) * 1000),
-            'compacted' => trim((string) ($conversation['context_summary'] ?? '')) !== '',
-            'context_summary' => trim((string) ($conversation['context_summary'] ?? '')) === '__frontend_compacted__'
-                ? ''
-                : trim((string) ($conversation['context_summary'] ?? '')),
-            'firstUserMessage' => $this->extractFirstUserMessageText($messages),
-        ];
-    }
-
-    /**
-     * @param array<string,mixed> $conversation
-     * @return array<string,mixed>
-     */
-    private function exportConversationForFrontend(array $conversation): array {
-        $export = $this->exportConversationSummaryForFrontend($conversation);
-        $export['messages'] = $this->normalizeConversationMessages(
-            isset($conversation['messages']) && is_array($conversation['messages']) ? $conversation['messages'] : []
-        );
-
-        return $export;
-    }
-
-    /**
-     * @param array<int,array<string,mixed>> $messages
-     * @return string
-     */
-    private function buildConversationSummary(array $messages): string {
-        $firstUserMessage = $this->extractFirstUserMessageText($messages);
-        if ($firstUserMessage === '') {
-            return 'Untitled conversation';
-        }
-
-        if (function_exists('mb_strimwidth')) {
-            return mb_strimwidth($firstUserMessage, 0, 120, '...');
-        }
-
-        return strlen($firstUserMessage) > 120 ? substr($firstUserMessage, 0, 117) . '...' : $firstUserMessage;
-    }
-
-    /**
-     * @param array<int,array<string,mixed>> $messages
-     */
-    private function extractFirstUserMessageText(array $messages): string {
-        foreach ($messages as $message) {
-            if (!is_array($message)) {
-                continue;
-            }
-
-            $role = isset($message['role']) ? (string) $message['role'] : '';
-            $content = trim((string) ($message['content'] ?? ''));
-            if ($role !== 'user' || $content === '') {
-                continue;
-            }
-
-            $normalized = preg_replace(self::REGEX_WHITESPACE, ' ', $content);
-            return is_string($normalized) ? trim($normalized) : $content;
-        }
-
-        return '';
-    }
 }

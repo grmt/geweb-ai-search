@@ -951,43 +951,73 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
         }
 
         $orderby = (string) $query->get('orderby');
+        if ($this->applyMetaColumnSorting($query, $orderby)) {
+            return;
+        }
+
+        if ($orderby === 'geweb_ai_duplicates' && (string) $postType === 'attachment') {
+            $this->applyAttachmentDuplicateSorting($query);
+            return;
+        }
+
+        if (in_array($orderby, ['ID', 'modified'], true)) {
+            $query->set('orderby', $orderby);
+        }
+    }
+
+    private function applyMetaColumnSorting(\WP_Query $query, string $orderby): bool {
         if ($orderby === 'geweb_ai_markdown_cache') {
             $query->set('meta_key', self::META_MARKDOWN_BYTES);
             $query->set('orderby', 'meta_value_num');
-        } elseif ($orderby === 'geweb_ai_indexed') {
+            return true;
+        }
+
+        if ($orderby === 'geweb_ai_indexed') {
             $query->set('meta_key', self::META_STATUS);
             $query->set('orderby', 'meta_value');
-        } elseif ($orderby === 'geweb_ai_duplicates' && (string) $postType === 'attachment') {
-            $counts = (new FileDuplicateHashIndex())->getAttachmentDuplicateCounts();
-            $order = strtolower((string) $query->get('order')) === 'asc' ? 'asc' : 'desc';
-            $attachmentIds = get_posts([
-                'post_type' => 'attachment',
-                'post_status' => 'inherit',
-                'numberposts' => -1,
-                'fields' => 'ids',
-            ]);
-
-            if (is_array($attachmentIds)) {
-                usort($attachmentIds, static function ($left, $right) use ($counts, $order): int {
-                    $leftId = (int) $left;
-                    $rightId = (int) $right;
-                    $leftCount = (int) ($counts[$leftId] ?? 0);
-                    $rightCount = (int) ($counts[$rightId] ?? 0);
-                    if ($leftCount === $rightCount) {
-                        return $order === 'asc' ? ($leftId <=> $rightId) : ($rightId <=> $leftId);
-                    }
-
-                    return $order === 'asc' ? ($leftCount <=> $rightCount) : ($rightCount <=> $leftCount);
-                });
-
-                $query->set('post__in', array_map('intval', $attachmentIds));
-                $query->set('orderby', 'post__in');
-            }
-        } elseif ($orderby === 'ID') {
-            $query->set('orderby', 'ID');
-        } elseif ($orderby === 'modified') {
-            $query->set('orderby', 'modified');
+            return true;
         }
+
+        return false;
+    }
+
+    private function applyAttachmentDuplicateSorting(\WP_Query $query): void {
+        $counts = (new FileDuplicateHashIndex())->getAttachmentDuplicateCounts();
+        $order = strtolower((string) $query->get('order')) === 'asc' ? 'asc' : 'desc';
+        $attachmentIds = get_posts([
+            'post_type' => 'attachment',
+            'post_status' => 'inherit',
+            'numberposts' => -1,
+            'fields' => 'ids',
+        ]);
+
+        if (!is_array($attachmentIds)) {
+            return;
+        }
+
+        usort($attachmentIds, function ($left, $right) use ($counts, $order): int {
+            return $this->compareAttachmentDuplicateSortValues($left, $right, $counts, $order);
+        });
+
+        $query->set('post__in', array_map('intval', $attachmentIds));
+        $query->set('orderby', 'post__in');
+    }
+
+    /**
+     * @param array<int,int> $counts
+     */
+    private function compareAttachmentDuplicateSortValues($left, $right, array $counts, string $order): int {
+        $leftId = (int) $left;
+        $rightId = (int) $right;
+        $leftCount = (int) ($counts[$leftId] ?? 0);
+        $rightCount = (int) ($counts[$rightId] ?? 0);
+        $direction = $order === 'asc' ? 1 : -1;
+
+        if ($leftCount === $rightCount) {
+            return $direction * ($leftId <=> $rightId);
+        }
+
+        return $direction * ($leftCount <=> $rightCount);
     }
 
     /**
@@ -1337,21 +1367,14 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
             $hasDocument = (string) get_post_meta($postId, self::META_DOCUMENT_NAME, true) !== '';
         }
 
-        if ($normalizedStatus !== 'indexed' && !$hasDocument) {
-            return false;
-        }
-
-        if ($this->isExcluded($postId)) {
-            return false;
-        }
-
         $lastIndexed = (int) get_post_meta($postId, self::META_LAST_INDEXED, true);
-        if ($lastIndexed <= 0) {
-            return false;
-        }
-
         $modifiedAt = (int) get_post_modified_time('U', true, $postId);
-        return $modifiedAt > 0 && $modifiedAt > $lastIndexed;
+
+        return ($normalizedStatus === 'indexed' || $hasDocument)
+            && !$this->isExcluded($postId)
+            && $lastIndexed > 0
+            && $modifiedAt > 0
+            && $modifiedAt > $lastIndexed;
     }
 
     /**
@@ -1409,7 +1432,13 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
         $isExcluded = $this->isExcluded($postId);
         $hasError = $status === 'error' || ((string) get_post_meta($postId, self::META_LAST_ERROR, true) !== '');
         $isBusy = in_array($status, ['pending', 'uploading', 'removing'], true);
-        $label = $hasMarkdown ? size_format($markdownBytes, 1) : ($isExcluded ? 'N/A' : 'Missing');
+        $label = 'Missing';
+        if ($isExcluded) {
+            $label = 'N/A';
+        }
+        if ($hasMarkdown) {
+            $label = size_format($markdownBytes, 1);
+        }
         $color = self::COLOR_WARNING;
         $title = 'View cached Markdown';
 
@@ -1418,10 +1447,12 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
                 $color = self::COLOR_MUTED;
                 $title = 'View cached Markdown while the upload is in progress';
             } else {
-                $color = $hasError ? self::COLOR_ERROR : self::COLOR_SUCCESS;
-                $title = $hasError
-                    ? 'View cached Markdown from the failed upload attempt'
-                    : 'View cached Markdown';
+                $color = self::COLOR_SUCCESS;
+                $title = 'View cached Markdown';
+                if ($hasError) {
+                    $color = self::COLOR_ERROR;
+                    $title = 'View cached Markdown from the failed upload attempt';
+                }
             }
         }
 
