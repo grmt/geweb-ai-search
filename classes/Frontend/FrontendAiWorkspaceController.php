@@ -447,8 +447,10 @@ class FrontendAiWorkspaceController {
                             <div class="geweb-ai-temporary-settings-header">
                                 <div class="geweb-ai-temporary-settings-heading">
                                     <div class="geweb-ai-temporary-settings-title"><?php echo esc_html__('Next question settings', 'geweb-ai-search'); ?></div>
-                                    <p class="geweb-ai-temporary-settings-note"><?php echo esc_html__('Applies to the next questions until you reset it.', 'geweb-ai-search'); ?></p>
                                 </div>
+                                <button type="button" class="geweb-ai-icon-button geweb-ai-temporary-settings-info" id="geweb-ai-temporary-settings-info" aria-label="<?php echo esc_attr__('About next question settings', 'geweb-ai-search'); ?>" data-tooltip="<?php echo esc_attr__('Applies to the next questions until you reset it.', 'geweb-ai-search'); ?>">
+                                    <span aria-hidden="true">ⓘ</span>
+                                </button>
                                 <button type="button" class="geweb-ai-icon-button geweb-ai-secondary-button geweb-ai-secondary-button--icon-only geweb-ai-temporary-settings-close" id="geweb-ai-close-temp-settings" aria-label="<?php echo esc_attr__('Close settings', 'geweb-ai-search'); ?>" title="<?php echo esc_attr__('Close settings', 'geweb-ai-search'); ?>">×</button>
                             </div>
                             <?php if (!empty($models)): ?>

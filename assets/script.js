@@ -67,6 +67,7 @@ jQuery(document).ready(($) => {
 			$temporaryPromptSummary: $('#geweb-ai-temporary-prompt-summary'),
 			$temporaryPromptEditor: $('#geweb-ai-temporary-prompt-editor'),
 			$togglePromptEditorBtn: $('#geweb-ai-toggle-prompt-editor'),
+			$settingsInfoBtn: $('#geweb-ai-temporary-settings-info'),
 			$temporaryPrompt: $('#geweb-ai-temporary-prompt'),
 			$answerBox: $('.answer-box'),
 		$conversationOverview: $('#geweb-ai-conversation-overview'),
@@ -114,6 +115,7 @@ return;
 				this.$resetModelBtn.on('click', () => this.resetTemporaryModel(true));
 				this.$resetPromptBtn.on('click', () => this.resetTemporaryPrompt(true));
 				this.$togglePromptEditorBtn.on('click', () => this.toggleTemporaryPromptEditor());
+				this.$settingsInfoBtn.on('click', (event) => this.toggleTemporarySettingsInfo(event));
 				this.$modelSelector.on('change', () => this.handleTemporaryModelChange());
 				this.$temporaryPrompt.on('input', () => this.updateTemporarySettingsSummary());
 				this.$copyConversationBtn.on('click', () => {
@@ -2302,6 +2304,17 @@ return;
 			$messageActions.append($detailsButton);
 		},
 
+		toggleTemporarySettingsInfo(event) {
+			event.preventDefault();
+			event.stopPropagation();
+			const text = String(this.$settingsInfoBtn.attr('data-tooltip') || '').trim();
+			if (!text) {
+				return;
+			}
+
+			this.toggleMessageInfoPopover(this.$settingsInfoBtn, text);
+		},
+
 		ensureMessageInfoPopover() {
 			if (this.$messageInfoPopover?.length) {
 				return this.$messageInfoPopover;
@@ -3025,6 +3038,10 @@ return;
 
 					event.preventDefault();
 					event.stopPropagation();
+					if (this.shouldUseTapPreviewForFootnotes()) {
+						return;
+					}
+
 					const activeFootnote = Number(this.$footnotePreview.attr('data-footnote') || 0);
 					if (activeFootnote > 0) {
 						this.highlightSourceReference(activeFootnote, { mode: 'active' });

@@ -1033,6 +1033,26 @@
     box-shadow: 0 12px 24px rgba(15, 23, 42, 0.2);
     transform: translateX(-50%);
 }
+.geweb-ai-source-meta-tooltip-close {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    min-width: 22px;
+    height: 22px;
+    margin: -4px -6px 4px auto;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: #f8fafc;
+    cursor: pointer;
+}
+.geweb-ai-source-meta-tooltip-close:hover,
+.geweb-ai-source-meta-tooltip-close:focus {
+    background: rgba(248, 250, 252, 0.16);
+    outline: none;
+}
 .geweb-ai-source-meta:hover .geweb-ai-source-meta-tooltip,
 .geweb-ai-source-meta:focus-within .geweb-ai-source-meta-tooltip,
 .geweb-ai-source-meta.is-open .geweb-ai-source-meta-tooltip {
@@ -1433,6 +1453,9 @@
     .geweb-ai-source-meta-tooltip {
         left: 0;
         transform: none;
+    }
+    .geweb-ai-source-meta-tooltip-close {
+        display: inline-flex;
     }
     .geweb-ai-source-filter-reset {
         font-size: 0;

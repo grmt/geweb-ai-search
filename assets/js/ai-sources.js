@@ -1454,10 +1454,12 @@
 			const $button = $('<button type="button" class="geweb-ai-source-meta-toggle"></button>');
 			const $icon = $('<span class="geweb-ai-source-link-icon" aria-hidden="true"></span>').text(sourceIcon);
 			const $tooltip = $('<div class="geweb-ai-source-meta-tooltip" role="tooltip" aria-hidden="true"></div>');
+			const $close = $('<button type="button" class="geweb-ai-source-meta-tooltip-close" aria-label="Close source details" title="Close source details"><span aria-hidden="true">×</span></button>');
 
 			$button.attr('aria-label', `${buttonLabel} ${sourceLabel}`.trim());
 			$button.attr('title', '');
 			$button.append($icon);
+			$tooltip.append($close);
 
 			if (entries.length) {
 				entries.forEach((entry) => {
@@ -1525,6 +1527,11 @@
 
 				openTooltip();
 			});
+			$tooltip.on('click', '.geweb-ai-source-meta-tooltip-close', (event) => {
+				event.preventDefault();
+				event.stopPropagation();
+				closeTooltip();
+			});
 
 			$button.on('focus', () => {
 				if (!hasFinePointer()) {
@@ -1585,6 +1592,9 @@
 			}
 
 			$tooltip.empty();
+			$tooltip.append(
+				$('<button type="button" class="geweb-ai-source-meta-tooltip-close" aria-label="Close source details" title="Close source details"><span aria-hidden="true">×</span></button>')
+			);
 			if (entries.length) {
 				entries.forEach((entry) => {
 					const $row = $('<div class="geweb-ai-source-meta-tooltip-row"></div>');
