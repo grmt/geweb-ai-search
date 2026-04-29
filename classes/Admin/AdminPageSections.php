@@ -13,9 +13,9 @@ class AdminPageSections {
         $this->conversationManager = $conversationManager;
     }
 
-    public function renderReferencedDocumentsTable(): void {
+    public function renderReferencedDocumentsTable(?array $items = null): void {
         $table = new ReferencedDocumentListTable();
-        $table->prepare_items();
+        $table->prepare_items($items);
         ?>
         <form method="get" action="<?php echo esc_url(admin_url('admin.php')); ?>" class="geweb-referenced-documents-table-form">
             <input type="hidden" name="page" value="geweb-ai-search">

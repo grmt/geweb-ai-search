@@ -183,7 +183,7 @@ class DocumentStore {
             throw new ReferencedDocumentException('Markdown cache refresh is only supported for images and PDFs.');
         }
 
-        if (!in_array($mode, [ImageOcrService::MODE_OCR, ImageOcrService::MODE_DESCRIBE], true)) {
+        if (!in_array($mode, [ImageOcrService::MODE_OCR, ImageOcrService::MODE_DESCRIBE, ImageOcrService::MODE_DOCUMENT_AI_OCR], true)) {
             throw new ReferencedDocumentException('Document processing is disabled for this file.');
         }
 

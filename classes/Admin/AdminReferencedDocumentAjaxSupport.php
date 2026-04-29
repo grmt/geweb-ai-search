@@ -96,8 +96,10 @@ class AdminReferencedDocumentAjaxSupport {
     public static function buildImageProcessingMessage(string $mode, string $subject, string $cacheWarning): string {
         if ($mode === ImageOcrService::MODE_DESCRIBE) {
             $message = $subject === 'PDF' ? 'PDF description enabled.' : 'Image description enabled.';
+        } elseif ($mode === ImageOcrService::MODE_DOCUMENT_AI_OCR) {
+            $message = $subject === 'PDF' ? 'Document AI OCR enabled for this PDF.' : 'Document AI OCR is only supported for PDFs.';
         } elseif ($mode === ImageOcrService::MODE_OCR) {
-            $message = $subject === 'PDF' ? 'OCR enabled for this PDF.' : 'OCR enabled for this image.';
+            $message = $subject === 'PDF' ? 'Markdown extraction enabled for this PDF.' : 'OCR enabled for this image.';
         } else {
             $message = $subject === 'PDF' ? 'PDF processing disabled.' : 'Image processing disabled.';
         }

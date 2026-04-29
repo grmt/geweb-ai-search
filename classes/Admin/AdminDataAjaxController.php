@@ -40,7 +40,7 @@ class AdminDataAjaxController {
         $items = $documentStore->getReferencedDocumentOverview($forceRefresh);
 
         ob_start();
-        $this->adminPageSections->renderReferencedDocumentsTable();
+        $this->adminPageSections->renderReferencedDocumentsTable($items);
         $html = ob_get_clean();
 
         if ($preloadJobId !== '') {
@@ -336,6 +336,7 @@ class AdminDataAjaxController {
                 $documentManager->refreshReferencedDocumentImageMarkdownCache($fileHash);
             } catch (\Exception $exception) {
                 $cacheWarning = sanitize_text_field($exception->getMessage());
+                error_log('geweb-ai-search: referenced document processing cache refresh failed: ' . $exception->getMessage());
             }
         }
 

@@ -14,13 +14,12 @@ class ReferencedDocumentOverviewBuilder {
     private const STATUS_UPLOADS_DISABLED = 'Uploads disabled';
     private const STATUS_ONLY_IN_SIMPLE_FILE_LIST = 'Only in Simple File List';
     private const STATUS_UPLOADED_ONLY_IN_SIMPLE_FILE_LIST = 'Uploaded, only in Simple File List';
-    private const STATUS_REFERENCED_OUTSIDE_SIMPLE_FILE_LIST = 'Referenced on site, missing from Simple File List';
-    private const STATUS_UPLOADED_REFERENCED_ELSEWHERE = 'Uploaded, but missing from Simple File List';
     private const STATUS_REFERENCED_BROKEN = 'Referenced on site, but file is missing';
     private const COLOR_WARNING = '#996800';
     private const COLOR_SUCCESS = '#46b450';
     private const COLOR_DANGER = '#d63638';
     private const COLOR_MUTED = '#646970';
+    private const OPERATION_TRANSITION_TIMEOUT_SECONDS = 900;
 
     private DocumentStore $documentStore;
     private SimpleFileListSupport $simpleFileListSupport;
@@ -246,13 +245,31 @@ class ReferencedDocumentOverviewBuilder {
         $includeTarget = array_key_exists($fileHash, $selectionTargets)
             ? (bool) $selectionTargets[$fileHash]
             : $defaultTarget;
+        $isUploaded = strpos((string) ($item['status'] ?? ''), self::STATUS_UPLOADED) === 0;
+        if ($isUploaded && !$includeTarget) {
+            $includeTarget = true;
+        }
 
         $item['include_in_store_target'] = $includeTarget;
         $item['default_include_in_store_target'] = $defaultTarget;
         $operation = $operationStatuses[$fileHash] ?? null;
-        $item['operation_status'] = is_array($operation) ? (string) ($operation['status'] ?? '') : '';
+        $operationStatus = is_array($operation) ? sanitize_key((string) ($operation['status'] ?? '')) : '';
+        $operationUpdatedAt = is_array($operation) ? (int) ($operation['updated_at'] ?? 0) : 0;
+        $isStaleTransition = in_array($operationStatus, ['uploading', 'excluding'], true)
+            && $operationUpdatedAt > 0
+            && $operationUpdatedAt < (time() - self::OPERATION_TRANSITION_TIMEOUT_SECONDS);
+        if (
+            $isStaleTransition ||
+            ($isUploaded && in_array($operationStatus, ['error', 'excluded', 'not_indexed', 'uploading'], true))
+        ) {
+            $operation = null;
+            $operationStatus = '';
+            $operationUpdatedAt = 0;
+        }
+
+        $item['operation_status'] = $operationStatus;
         $item['operation_error'] = is_array($operation) ? (string) ($operation['error'] ?? '') : '';
-        $item['operation_updated_at'] = is_array($operation) ? (int) ($operation['updated_at'] ?? 0) : 0;
+        $item['operation_updated_at'] = $operationUpdatedAt;
         $item['image_processing_mode'] = $imageProcessingModes[$fileHash] ?? ImageOcrService::MODE_NONE;
         $item['pdf_classification'] = '';
         $item['pdf_classification_label'] = '';
@@ -391,11 +408,6 @@ class ReferencedDocumentOverviewBuilder {
             $item['status_color'] = self::COLOR_WARNING;
             return $item;
         }
-
-        $item['status'] = $isUploaded
-            ? self::STATUS_UPLOADED_REFERENCED_ELSEWHERE
-            : self::STATUS_REFERENCED_OUTSIDE_SIMPLE_FILE_LIST;
-        $item['status_color'] = self::COLOR_DANGER;
 
         return $item;
     }

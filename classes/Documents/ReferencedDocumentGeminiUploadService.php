@@ -30,8 +30,10 @@ class ReferencedDocumentGeminiUploadService {
     }
 
     public function refreshImageMarkdownCache(string $fileHash, string $filePath, string $mimeType, string $mode): void {
+        error_log('geweb-ai-search: [DOCUMENT] refreshing markdown cache (' . $mode . ') for ' . basename($filePath) . ' (' . $mimeType . ')');
         $markdown = $this->buildReferencedImageMarkdown($filePath, $mimeType, $mode);
         (new ReferencedDocumentMarkdownCacheStore())->saveMarkdown($fileHash, basename($filePath), $markdown);
+        error_log('geweb-ai-search: [DOCUMENT] markdown cache refreshed for ' . basename($filePath));
     }
 
     private function isProcessableImageOrPdf(string $mimeType, string $imageProcessingMode): bool {
@@ -135,7 +137,14 @@ class ReferencedDocumentGeminiUploadService {
         $frontmatter .= "document_name: " . basename($filePath) . "\n";
         $frontmatter .= "---\n\n";
         $frontmatter .= '# ' . basename($filePath) . "\n\n";
-        $frontmatter .= ($mode === ImageOcrService::MODE_DESCRIBE ? "Image description:\n\n" : "OCR text extracted from image:\n\n");
+        $documentLabel = $mimeType === self::MIME_PDF ? 'PDF document' : 'image';
+        if ($mode === ImageOcrService::MODE_DESCRIBE) {
+            $frontmatter .= ucfirst($documentLabel) . " description:\n\n";
+        } elseif ($mode === ImageOcrService::MODE_DOCUMENT_AI_OCR) {
+            $frontmatter .= "Document AI OCR Markdown extracted from {$documentLabel}:\n\n";
+        } else {
+            $frontmatter .= 'OCR text extracted from ' . $documentLabel . ":\n\n";
+        }
         $frontmatter .= $processedText . "\n";
 
         return $frontmatter;
@@ -144,15 +153,22 @@ class ReferencedDocumentGeminiUploadService {
     private function processImageDocument(string $filePath, string $mimeType, string $mode): string {
         try {
             $provider = ProviderFactory::make();
-            $processedText = $mode === ImageOcrService::MODE_DESCRIBE
-                ? trim($provider->describeImage($filePath, $mimeType))
-                : trim($provider->extractImageText($filePath, $mimeType));
+            if ($mode === ImageOcrService::MODE_DOCUMENT_AI_OCR) {
+                if ($mimeType !== self::MIME_PDF) {
+                    throw new ReferencedDocumentException('Document AI OCR is only supported for PDFs.');
+                }
+                $processedText = trim((new DocumentAiOcrService())->convertPdfToMarkdown($filePath));
+            } else {
+                $processedText = $mode === ImageOcrService::MODE_DESCRIBE
+                    ? trim($provider->describeImage($filePath, $mimeType))
+                    : trim($provider->extractImageText($filePath, $mimeType));
+            }
         } catch (\Exception $e) {
-            throw new ReferencedDocumentException('Image processing failed: ' . $e->getMessage(), 0, $e);
+            throw new ReferencedDocumentException('Document processing failed: ' . $e->getMessage(), 0, $e);
         }
 
         if ($processedText === '') {
-            throw new ReferencedDocumentException('Image processing returned no text.');
+            throw new ReferencedDocumentException('Document processing returned no text.');
         }
 
         return $processedText;

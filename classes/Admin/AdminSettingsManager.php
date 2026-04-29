@@ -116,6 +116,13 @@ class AdminSettingsManager {
 
         update_option(self::OPTION_INCLUDE_REFERENCED_DOCUMENTS, !empty($_POST['geweb_ai_search_include_referenced_documents']) ? '1' : '0');
         UserScope::updateGroupScopedOption(self::OPTION_OCR_ALL_UPLOAD_IMAGES, !empty($_POST['geweb_ai_search_ocr_all_upload_images']) ? '1' : '0', false);
+        (new DocumentAiOcrService())->saveSettings(
+            isset($_POST['geweb_ai_search_document_ai_project_id']) ? sanitize_text_field(wp_unslash($_POST['geweb_ai_search_document_ai_project_id'])) : '',
+            isset($_POST['geweb_ai_search_document_ai_location']) ? sanitize_key(wp_unslash($_POST['geweb_ai_search_document_ai_location'])) : '',
+            isset($_POST['geweb_ai_search_document_ai_processor_id']) ? sanitize_text_field(wp_unslash($_POST['geweb_ai_search_document_ai_processor_id'])) : '',
+            isset($_POST['geweb_ai_search_document_ai_service_account_json']) ? (string) wp_unslash($_POST['geweb_ai_search_document_ai_service_account_json']) : '',
+            !empty($_POST['geweb_ai_search_document_ai_clear_service_account'])
+        );
         $submittedDateFormat = '';
         if (isset($_POST['geweb_ai_search_date_display_format'])) {
             $submittedDateFormat = sanitize_key(wp_unslash($_POST['geweb_ai_search_date_display_format']));

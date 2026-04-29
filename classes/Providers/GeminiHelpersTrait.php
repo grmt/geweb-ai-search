@@ -65,6 +65,7 @@ trait GeminiHelpersTrait {
         ],
     ];
     private const DEFAULT_SUMMARY_TIMEOUT_SECONDS = 12;
+    private const DEFAULT_DOCUMENT_PROCESSING_TIMEOUT_SECONDS = 60;
     private const DEFAULT_UPLOAD_OPERATION_TIMEOUT_SECONDS = 300;
     private const DEFAULT_UPLOAD_OPERATION_POLL_INTERVAL_MS = 5000;
     private const GENERATE_TIMEOUT_BACKOFF_OPTION = 'geweb_aisearch_gemini_generate_timeout_backoff';
@@ -312,6 +313,14 @@ trait GeminiHelpersTrait {
     private function getSummaryTimeoutSeconds(): int {
         $timeout = apply_filters('geweb_aisearch_gemini_summary_timeout', self::DEFAULT_SUMMARY_TIMEOUT_SECONDS);
         return is_numeric($timeout) ? (int) $timeout : self::DEFAULT_SUMMARY_TIMEOUT_SECONDS;
+    }
+
+    private function getDocumentProcessingTimeoutSeconds(string $mimeType): int {
+        $default = strtolower(trim($mimeType)) === 'application/pdf'
+            ? self::DEFAULT_DOCUMENT_PROCESSING_TIMEOUT_SECONDS
+            : self::DEFAULT_SUMMARY_TIMEOUT_SECONDS;
+        $timeout = apply_filters('geweb_aisearch_gemini_document_processing_timeout', $default, $mimeType);
+        return is_numeric($timeout) ? max(1, (int) $timeout) : $default;
     }
 
     private function getUploadOperationTimeoutSeconds(): int {
@@ -606,10 +615,11 @@ trait GeminiHelpersTrait {
     }
     private function createVisionClient(): GeminiVisionClient {
         if ($this->visionClient instanceof GeminiVisionClient) { return $this->visionClient; }
-        $this->visionClient = new GeminiVisionClient(self::API_BASE, $this->apiKey, self::DEFAULT_OCR_MODEL, [
+        $this->visionClient = new GeminiVisionClient(self::API_BASE, self::API_UPLOAD_BASE, $this->apiKey, self::DEFAULT_OCR_MODEL, [
             'make_request' => function (string $url, ?array $body = null, string $method = 'POST', int $timeoutSeconds = self::DEFAULT_HTTP_TIMEOUT_SECONDS): array { return $this->makeRequest($url, $body, $method, $timeoutSeconds); },
             'extract_candidate_text' => function (array $result): string { return $this->extractCandidateText($result); },
             'get_summary_timeout_seconds' => function (): int { return $this->getSummaryTimeoutSeconds(); },
+            'get_document_processing_timeout_seconds' => function (string $mimeType): int { return $this->getDocumentProcessingTimeoutSeconds($mimeType); },
         ]);
         return $this->visionClient;
     }

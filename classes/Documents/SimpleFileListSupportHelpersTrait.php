@@ -4,14 +4,6 @@ namespace Geweb\AISearch;
 defined('ABSPATH') || exit;
 
 trait SimpleFileListSupportHelpersTrait {
-    private function prettifyFileName(string $fileName): string {
-        $name = pathinfo($fileName, PATHINFO_FILENAME);
-        $name = preg_replace('/[_-]+/', ' ', $name);
-        $name = trim((string) preg_replace('/\s+/', ' ', (string) $name));
-
-        return $name !== '' ? ucwords($name) : $fileName;
-    }
-
     private function buildEntryFromRecord(array $record): ?array {
         $filePathValue = isset($record['FilePath']) ? trim((string) $record['FilePath']) : '';
         if ($filePathValue === '') { return null; }
@@ -58,6 +50,78 @@ trait SimpleFileListSupportHelpersTrait {
             if ($niceName !== null) { return ['file_path' => $filePath, 'nice_name' => $niceName]; }
         }
         return null;
+    }
+
+    private function expandDirectoryFile(string $filePath, array $data, array $niceNameMap, array &$expanded): void {
+        $baseName = basename($filePath);
+        $dirUrl = isset($data['dir_url']) ? (string) $data['dir_url'] : '';
+        $fileUrl = $dirUrl !== '' ? $dirUrl . '/' . rawurlencode($baseName) : '';
+        if ($fileUrl === '') {
+            return;
+        }
+        $niceName = $niceNameMap[$filePath] ?? $this->prettifyFileName($baseName);
+        if (isset($expanded[$filePath])) {
+            if ($niceName !== '') {
+                $expanded[$filePath]['display_name'] = $niceName;
+            }
+            return;
+        }
+        $expanded[$filePath] = ['file_path' => $filePath, 'file_url' => $fileUrl, 'display_name' => $niceName];
+    }
+
+    private function collectReferenceForExpansion(array $reference, array &$expanded, array &$directories): void {
+        $filePath = isset($reference['file_path']) ? (string) $reference['file_path'] : '';
+        $fileUrl = isset($reference['file_url']) ? (string) $reference['file_url'] : '';
+        if ($filePath === '' || $fileUrl === '' || !is_readable($filePath)) {
+            return;
+        }
+        $expanded[$filePath] = $reference;
+        $directory = wp_normalize_path((string) dirname($filePath));
+        if ($directory !== '') {
+            $directories[$directory] = ['dir_url' => untrailingslashit((string) dirname($fileUrl))];
+        }
+    }
+
+    private function mergeEntryIntoOverview(array $entry, array &$overview, array $uploadedByHash, callable $buildOverviewEntry): void {
+        $filePath = isset($entry['file_path']) ? (string) $entry['file_path'] : '';
+        $fileUrl = isset($entry['file_url']) ? (string) $entry['file_url'] : '';
+        if ($filePath === '' || $fileUrl === '' || !is_readable($filePath)) {
+            return;
+        }
+        $hash = hash_file('sha256', $filePath);
+        if (!$hash) {
+            return;
+        }
+        $displayName = isset($entry['display_name']) ? trim((string) $entry['display_name']) : basename($filePath);
+        if (isset($overview[$hash])) {
+            $overview[$hash]['managed_by_simple_file_list'] = true;
+            if ($displayName !== '' && (empty($overview[$hash]['nice_name']) || $overview[$hash]['nice_name'] === basename($filePath))) {
+                $overview[$hash]['nice_name'] = $displayName;
+            }
+            return;
+        }
+        $overview[$hash] = $buildOverviewEntry($hash, $filePath, $fileUrl, $displayName, $uploadedByHash[$hash] ?? null, true);
+    }
+
+    private function processSimpleFileListEntryRow(array $row, array &$entries): void {
+        if (!is_array($row) || !isset($row['option_value'])) {
+            return;
+        }
+        $optionName = isset($row['option_name']) ? (string) $row['option_name'] : 'unknown-option';
+        $value = maybe_unserialize($row['option_value']);
+        if (!is_array($value)) {
+            error_log('geweb-ai-search: SFL option ' . $optionName . ' did not unserialize to an array.');
+            return;
+        }
+        foreach ($value as $record) {
+            if (!is_array($record)) {
+                continue;
+            }
+            $entry = $this->buildEntryFromRecord($record);
+            if ($entry !== null) {
+                $entries[$entry['file_path']] = $entry;
+            }
+        }
     }
 
     private function processRemoveRow(array $row, string $normalizedPath, array $targets, bool &$removedAny): void {
@@ -109,6 +173,60 @@ trait SimpleFileListSupportHelpersTrait {
         }
 
         return $targets;
+    }
+
+    private function getSupportedFilesInDirectory(string $directory): array {
+        $directory = wp_normalize_path($directory);
+        if ($directory === '' || !is_dir($directory) || !is_readable($directory)) {
+            return [];
+        }
+
+        $files = [];
+        try {
+            $iterator = new \DirectoryIterator($directory);
+            foreach ($iterator as $fileInfo) {
+                if (!$fileInfo instanceof \SplFileInfo || !$fileInfo->isFile()) {
+                    continue;
+                }
+
+                $filePath = wp_normalize_path($fileInfo->getPathname());
+                if ($filePath !== '' && is_readable($filePath) && $this->isSupportedSimpleFileListFile($filePath)) {
+                    $files[] = $filePath;
+                }
+            }
+        } catch (\Throwable $e) {
+            error_log('geweb-ai-search: could not scan Simple File List directory ' . $directory . ': ' . $e->getMessage());
+            return [];
+        }
+
+        sort($files, SORT_NATURAL | SORT_FLAG_CASE);
+        return $files;
+    }
+
+    private function isSupportedSimpleFileListFile(string $filePath): bool {
+        $extension = strtolower((string) pathinfo($filePath, PATHINFO_EXTENSION));
+        if ($extension === '' || in_array($extension, ['php', 'phtml', 'phar', 'js', 'css', 'html', 'htm', 'svg'], true)) {
+            return false;
+        }
+
+        $mimeType = strtolower(trim((new DocumentStore())->resolveMimeType($filePath)));
+        if ($mimeType === '') {
+            return false;
+        }
+
+        if (strpos($mimeType, 'text/') === 0 || strpos($mimeType, 'image/') === 0) {
+            return true;
+        }
+
+        return in_array($mimeType, [
+            'application/pdf',
+            'application/msword',
+            'application/vnd.ms-excel',
+            'application/vnd.ms-powerpoint',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        ], true);
     }
 
     private function getSflCandidateTableNames(): array {
@@ -230,5 +348,35 @@ trait SimpleFileListSupportHelpersTrait {
             }
         }
         return null;
+    }
+
+    public function resolveOverviewDisplayName(array $reference, string $filePath): string {
+        $displayName = isset($reference['display_name']) ? trim((string) $reference['display_name']) : '';
+        if ($displayName !== '') {
+            return $displayName;
+        }
+
+        return $this->prettifyFileName(basename($filePath));
+    }
+
+    public function prettifyFileName(string $fileName): string {
+        $name = pathinfo($fileName, PATHINFO_FILENAME);
+        if ($name === '') {
+            return $fileName;
+        }
+
+        $name = str_replace(['_', '-'], ' ', $name);
+        $name = preg_replace('/\s+/', ' ', $name);
+        $name = trim((string) $name);
+
+        return $name !== '' ? $name : $fileName;
+    }
+
+    public function isUsableSimpleFileListNiceName(string $niceName, string $basename): bool {
+        if ($niceName === '' || $niceName === $basename) {
+            return false;
+        }
+
+        return strpos($niceName, '/') === false && strpos($niceName, '\\') === false;
     }
 }

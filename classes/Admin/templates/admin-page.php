@@ -269,6 +269,41 @@ defined('ABSPATH') || exit;
                     </tr>
 
                     <tr>
+                        <th><label for="geweb_ai_search_document_ai_project_id">Document AI OCR:</label></th>
+                        <td>
+                            <p>
+                                <label for="geweb_ai_search_document_ai_project_id">Project ID</label><br>
+                                <input type="text" id="geweb_ai_search_document_ai_project_id" name="geweb_ai_search_document_ai_project_id" value="<?php echo esc_attr((string) $documentAiProjectId); ?>" class="regular-text">
+                            </p>
+                            <p>
+                                <label for="geweb_ai_search_document_ai_location">Location</label><br>
+                                <select id="geweb_ai_search_document_ai_location" name="geweb_ai_search_document_ai_location">
+                                    <option value="">Select location</option>
+                                    <option value="eu" <?php selected($documentAiLocation, 'eu'); ?>>EU</option>
+                                    <option value="us" <?php selected($documentAiLocation, 'us'); ?>>US</option>
+                                </select>
+                            </p>
+                            <p>
+                                <label for="geweb_ai_search_document_ai_processor_id">Processor ID</label><br>
+                                <input type="text" id="geweb_ai_search_document_ai_processor_id" name="geweb_ai_search_document_ai_processor_id" value="<?php echo esc_attr((string) $documentAiProcessorId); ?>" class="regular-text">
+                            </p>
+                            <p>
+                                <label for="geweb_ai_search_document_ai_service_account_json">Service account JSON</label><br>
+                                <textarea id="geweb_ai_search_document_ai_service_account_json" name="geweb_ai_search_document_ai_service_account_json" rows="5" class="large-text code" placeholder="<?php echo esc_attr($documentAiHasServiceAccountJson ? 'Saved. Leave empty to keep current credential.' : 'Paste service account JSON.'); ?>"></textarea>
+                            </p>
+                            <?php if ($documentAiHasServiceAccountJson): ?>
+                                <p>
+                                    <label>
+                                        <input type="checkbox" name="geweb_ai_search_document_ai_clear_service_account" value="1">
+                                        Clear saved service account credential
+                                    </label>
+                                </p>
+                            <?php endif; ?>
+                            <p class="description">Enables the PDF-only Document AI OCR option. Requires a Google Cloud Document AI Layout Parser processor and a service account with permission to process documents.</p>
+                        </td>
+                    </tr>
+
+                    <tr>
                         <th><label for="geweb_ai_search_date_display_format">Date Display:</label></th>
                         <td>
                             <select id="geweb_ai_search_date_display_format" name="geweb_ai_search_date_display_format">
@@ -448,7 +483,7 @@ defined('ABSPATH') || exit;
                 <?php if (!empty($documentsApiStatusLabel)): ?>
                     <p class="description" style="color: <?php echo esc_attr((string) $documentsApiStatusColor); ?>;">
                         <strong>API key status:</strong> <?php echo esc_html((string) $documentsApiStatusLabel); ?>
-                        <?php if ($documentsApiStatusMessage !== ''): ?>
+                        <?php if ($documentsApiStatusMessage !== '' && $documentsApiStatusLabel !== 'Valid'): ?>
                             <br><small><?php echo esc_html((string) $documentsApiStatusMessage); ?></small>
                         <?php endif; ?>
                     </p>

@@ -165,6 +165,7 @@ class AdminPageConfigBuilder {
         $modelPromptOverrides = $this->getArrayScopedOption('geweb_aisearch_model_prompts');
         $modelPromptOverrideNames = $this->getArrayScopedOption('geweb_aisearch_model_prompt_names');
         $modelPromptOverrideModes = $this->getArrayScopedOption('geweb_aisearch_model_prompt_modes');
+        $documentAiOcrService = new DocumentAiOcrService();
 
         return [
             'allPostTypes' => get_post_types(['public' => true], 'objects'),
@@ -177,6 +178,10 @@ class AdminPageConfigBuilder {
             'customPromptName' => $customPromptName,
             'dateDisplayFormat' => DateDisplay::getDateDisplayFormat(),
             'defaultPrompt' => $defaultPrompt,
+            'documentAiHasServiceAccountJson' => $documentAiOcrService->hasServiceAccountJson(),
+            'documentAiLocation' => $documentAiOcrService->getLocation(),
+            'documentAiProcessorId' => $documentAiOcrService->getProcessorId(),
+            'documentAiProjectId' => $documentAiOcrService->getProjectId(),
             'frontendAiInterface' => FrontendAiContext::getFrontendAiInterface(),
             'frontendAiPageId' => $frontendAiPageId,
             'frontendAiPageTitle' => $frontendAiPageId > 0 ? get_the_title($frontendAiPageId) : '',

@@ -269,14 +269,12 @@ trait ReferencedDocumentListTableHelpersTrait {
             $currentMode = ImageOcrService::MODE_NONE;
         }
 
-        $html = '<label for="' . esc_attr($selectId) . '" style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap;margin-left:8px;">';
-        $html .= '<span>Image</span>';
+        $html = '<label for="' . esc_attr($selectId) . '" class="screen-reader-text">Image processing</label>';
         $html .= '<select id="' . esc_attr($selectId) . '" class="geweb-ai-referenced-document-image-mode" data-file-hash="' . esc_attr($fileHash) . '" style="min-width:96px;"' . disabled($disabled, true, false) . '>';
         $html .= '<option value="' . esc_attr(ImageOcrService::MODE_NONE) . '"' . selected($currentMode, ImageOcrService::MODE_NONE, false) . '>None</option>';
         $html .= '<option value="' . esc_attr(ImageOcrService::MODE_OCR) . '"' . selected($currentMode, ImageOcrService::MODE_OCR, false) . '>OCR</option>';
         $html .= '<option value="' . esc_attr(ImageOcrService::MODE_DESCRIBE) . '"' . selected($currentMode, ImageOcrService::MODE_DESCRIBE, false) . '>Describe</option>';
         $html .= '</select>';
-        $html .= '</label>';
 
         return $html;
     }
@@ -294,20 +292,39 @@ trait ReferencedDocumentListTableHelpersTrait {
 
         $selectId = 'geweb-referenced-document-pdf-mode-' . substr(sanitize_html_class($fileHash), 0, 12);
         $currentMode = (string) ($item['image_processing_mode'] ?? ImageOcrService::MODE_NONE);
-        if (!in_array($currentMode, [ImageOcrService::MODE_NONE, ImageOcrService::MODE_OCR, ImageOcrService::MODE_DESCRIBE], true)) {
+        if (!in_array($currentMode, [ImageOcrService::MODE_NONE, ImageOcrService::MODE_OCR, ImageOcrService::MODE_DESCRIBE, ImageOcrService::MODE_DOCUMENT_AI_OCR], true)) {
             $currentMode = ImageOcrService::MODE_NONE;
         }
 
-        $html = '<label for="' . esc_attr($selectId) . '" style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap;">';
-        $html .= '<span>PDF</span>';
+        $html = '<label for="' . esc_attr($selectId) . '" class="screen-reader-text">PDF processing</label>';
         $html .= '<select id="' . esc_attr($selectId) . '" class="geweb-ai-referenced-document-image-mode" data-file-hash="' . esc_attr($fileHash) . '" data-processing-subject="pdf" style="min-width:96px;"' . disabled($disabled, true, false) . '>';
         $html .= '<option value="' . esc_attr(ImageOcrService::MODE_NONE) . '"' . selected($currentMode, ImageOcrService::MODE_NONE, false) . '>None</option>';
-        $html .= '<option value="' . esc_attr(ImageOcrService::MODE_OCR) . '"' . selected($currentMode, ImageOcrService::MODE_OCR, false) . '>OCR</option>';
+        $html .= '<option value="' . esc_attr(ImageOcrService::MODE_OCR) . '"' . selected($currentMode, ImageOcrService::MODE_OCR, false) . '>Extract Markdown</option>';
+        $html .= '<option value="' . esc_attr(ImageOcrService::MODE_DOCUMENT_AI_OCR) . '"' . selected($currentMode, ImageOcrService::MODE_DOCUMENT_AI_OCR, false) . '>Document AI OCR</option>';
         $html .= '<option value="' . esc_attr(ImageOcrService::MODE_DESCRIBE) . '"' . selected($currentMode, ImageOcrService::MODE_DESCRIBE, false) . '>Describe</option>';
         $html .= '</select>';
-        $html .= '</label>';
 
         return $html;
+    }
+
+    private function buildAnalysisLabelHtml(array $item, string $label, string $color, string $title): string {
+        $fileHash = (string) ($item['file_hash'] ?? '');
+        if ($fileHash !== '' && $this->hasDocumentMarkdownCache($fileHash)) {
+            return sprintf(
+                '<a href="#" class="geweb-ai-markdown-cache-view" data-cache-kind="document" data-file-hash="%s"%s style="font-weight:600;color:%s;">%s</a>',
+                esc_attr($fileHash),
+                $title,
+                esc_attr($color),
+                esc_html($label)
+            );
+        }
+
+        return '<span style="color:' . esc_attr($color) . ';"' . $title . '>' . esc_html($label) . '</span>';
+    }
+
+    private function hasDocumentMarkdownCache(string $fileHash): bool {
+        $bytes = (new ReferencedDocumentMarkdownCacheStore())->getMarkdownBytes($fileHash);
+        return $bytes > 0;
     }
 
     public function renderStatusCell(array $item): string {

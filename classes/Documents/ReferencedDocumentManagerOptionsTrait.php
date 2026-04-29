@@ -36,7 +36,7 @@ trait ReferencedDocumentManagerOptionsTrait {
         $normalized = [];
         foreach ($stored as $fileHash => $mode) {
             if (is_string($fileHash) && $fileHash !== '') {
-                $normalizedMode = in_array($mode, [ImageOcrService::MODE_OCR, ImageOcrService::MODE_DESCRIBE], true) ? $mode : ImageOcrService::MODE_NONE;
+                $normalizedMode = in_array($mode, [ImageOcrService::MODE_OCR, ImageOcrService::MODE_DESCRIBE, ImageOcrService::MODE_DOCUMENT_AI_OCR], true) ? $mode : ImageOcrService::MODE_NONE;
                 if ($normalizedMode !== ImageOcrService::MODE_NONE) { $normalized[sanitize_text_field($fileHash)] = $normalizedMode; }
             }
         }
@@ -52,7 +52,7 @@ trait ReferencedDocumentManagerOptionsTrait {
         $fileHash = sanitize_text_field($fileHash);
         if ($fileHash === '') { return; }
         $modes = $this->getReferencedDocumentImageProcessingModes();
-        $normalizedMode = in_array($mode, [ImageOcrService::MODE_OCR, ImageOcrService::MODE_DESCRIBE], true) ? $mode : ImageOcrService::MODE_NONE;
+        $normalizedMode = in_array($mode, [ImageOcrService::MODE_OCR, ImageOcrService::MODE_DESCRIBE, ImageOcrService::MODE_DOCUMENT_AI_OCR], true) ? $mode : ImageOcrService::MODE_NONE;
         if ($normalizedMode === ImageOcrService::MODE_NONE) { unset($modes[$fileHash]); } else { $modes[$fileHash] = $normalizedMode; }
         UserScope::updateGroupScopedOption('geweb_aisearch_referenced_document_image_processing_modes', $modes, false);
         $this->documentStore->clearReferencedDocumentOverviewCache();

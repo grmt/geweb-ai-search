@@ -9,6 +9,8 @@ defined('ABSPATH') || exit;
 class SimpleFileListSupport {
     use SimpleFileListSupportHelpersTrait;
 
+    private const SQL_SHOW_TABLES_LIKE = 'SHOW TABLES LIKE %s';
+
     /**
      * Determine whether a post is rendering a Simple File List shortcode.
      */

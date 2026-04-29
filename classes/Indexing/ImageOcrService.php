@@ -12,6 +12,7 @@ class ImageOcrService {
     public const MODE_NONE = 'none';
     public const MODE_OCR = 'ocr';
     public const MODE_DESCRIBE = 'describe';
+    public const MODE_DOCUMENT_AI_OCR = 'document_ai_ocr';
     private const META_ATTACHMENT_OCR_TEXT = 'geweb_aisearch_attachment_ocr_text';
     private const META_ATTACHMENT_OCR_HASH = 'geweb_aisearch_attachment_ocr_hash';
     private const META_ATTACHMENT_DESCRIPTION_TEXT = 'geweb_aisearch_attachment_description_text';

@@ -64,7 +64,7 @@ class ReferencedDocumentListTable extends \WP_List_Table {
             'markdown_cache'=> 'MD Cache',
             'tracked_as'    => 'Tracked As',
             'mime_type'     => 'Type',
-            'pdf_analysis'  => 'PDF',
+            'pdf_analysis'  => 'Analysis',
             'last_modified' => 'Last Modified',
             'last_uploaded' => 'Upload Date',
             'referenced_in' => 'Reference',
@@ -94,14 +94,13 @@ class ReferencedDocumentListTable extends \WP_List_Table {
      * Prepare table items.
      * Load ALL items for client-side filtering (ignore server-side filters).
      */
-    public function prepare_items(): void {
+    public function prepare_items(?array $items = null): void {
         $columns = $this->get_columns();
         $hidden = [];
         $sortable = $this->get_sortable_columns();
         $this->_column_headers = [$columns, $hidden, $sortable];
 
-        $documentStore = new DocumentStore();
-        $allItems = $documentStore->getReferencedDocumentOverview();
+        $allItems = is_array($items) ? $items : (new DocumentStore())->getReferencedDocumentOverview();
         // Skip server-side filtering; JavaScript handles it client-side.
         $allItems = $this->sortItems($allItems);
 
@@ -339,17 +338,32 @@ class ReferencedDocumentListTable extends \WP_List_Table {
      * @return string
      */
     protected function column_pdf_analysis($item): string {
-        if (((string) ($item['mime_type'] ?? '')) !== self::MIME_PDF) {
+        $mimeType = strtolower(trim((string) ($item['mime_type'] ?? '')));
+        $isPdf = $mimeType === self::MIME_PDF;
+        $isImage = strpos($mimeType, 'image/') === 0;
+        if (!$isPdf && !$isImage) {
             return '—';
         }
 
-        $label = trim((string) ($item['pdf_classification_label'] ?? ''));
-        $details = trim((string) ($item['pdf_classification_details'] ?? ''));
-        if ($label === '') {
-            return '<span style="color:' . esc_attr(self::COLOR_MUTED) . ';">Unknown PDF</span>';
+        $isTransitioning = in_array(sanitize_key((string) ($item['operation_status'] ?? '')), ['uploading', 'excluding'], true);
+        if ($isImage) {
+            $html = $this->buildAnalysisLabelHtml($item, 'Image', self::COLOR_SUCCESS, '');
+            $processingControlHtml = $this->buildImageProcessingControlHtml($item, $isTransitioning);
+            if ($processingControlHtml !== '') {
+                $html .= '<div style="margin-top:6px;">' . $processingControlHtml . '</div>';
+                $html .= '<p class="geweb-ai-index-feedback" style="display:none; margin:4px 0 0;"></p>';
+            }
+
+            return $html;
         }
 
         $color = self::COLOR_MUTED;
+        $label = trim((string) ($item['pdf_classification_label'] ?? ''));
+        $details = trim((string) ($item['pdf_classification_details'] ?? ''));
+        if ($label === '') {
+            $label = 'Unknown PDF';
+        }
+
         $key = (string) ($item['pdf_classification'] ?? '');
         if ($key === 'text') {
             $color = self::COLOR_SUCCESS;
@@ -360,8 +374,8 @@ class ReferencedDocumentListTable extends \WP_List_Table {
         }
 
         $title = $details !== '' ? ' title="' . esc_attr($details) . '"' : '';
-        $html = '<span style="color:' . esc_attr($color) . ';"' . $title . '>' . esc_html($label) . '</span>';
-        $processingControlHtml = $this->buildPdfProcessingControlHtml($item, in_array(sanitize_key((string) ($item['operation_status'] ?? '')), ['uploading', 'excluding'], true));
+        $html = $this->buildAnalysisLabelHtml($item, $label, $color, $title);
+        $processingControlHtml = $this->buildPdfProcessingControlHtml($item, $isTransitioning);
         if ($processingControlHtml !== '') {
             $html .= '<div style="margin-top:6px;">' . $processingControlHtml . '</div>';
             $html .= '<p class="geweb-ai-index-feedback" style="display:none; margin:4px 0 0;"></p>';
@@ -422,7 +436,6 @@ class ReferencedDocumentListTable extends \WP_List_Table {
         $disableExcludeToggle = $isTransitioning;
         $statusHtml = $this->getIndexedStatusHtml($item);
         $errorHtml = $this->getIndexedErrorHtml($item);
-        $imageProcessingControlHtml = $this->buildImageProcessingControlHtml($item, $isTransitioning);
 
         if (!$canManage) {
             return '<div class="geweb-ai-index-cell geweb-referenced-document-cell" data-file-hash="' . esc_attr($fileHash) . '"><p style="margin:0 0 6px;">' . $statusHtml . '</p>' . $errorHtml . '<p style="margin:6px 0 0;">—</p><p class="geweb-ai-index-feedback" style="display:none; margin:4px 0 0;"></p></div>';
@@ -435,7 +448,6 @@ class ReferencedDocumentListTable extends \WP_List_Table {
             '<p style="margin:8px 0 0;"><button type="button" class="button button-small geweb-referenced-document-upload-now" data-file-hash="%s"%s>Upload</button></p>' .
             '%s' .
             '<p style="margin:6px 0 0;"><label for="%s" style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;"><input type="checkbox" id="%s" name="%s" class="geweb-referenced-document-toggle-exclude" data-file-hash="%s" %s%s> <span>Exclude</span></label></p>' .
-            '%s' .
             '<p class="geweb-ai-index-feedback" style="display:none; margin:4px 0 0;"></p>' .
             '</div>',
             esc_attr($fileHash),
@@ -453,8 +465,7 @@ class ReferencedDocumentListTable extends \WP_List_Table {
             esc_attr($excludeToggleId),
             esc_attr($fileHash),
             checked(!$includeTarget, true, false),
-            $disableExcludeToggle ? ' disabled' : '',
-            $imageProcessingControlHtml
+            $disableExcludeToggle ? ' disabled' : ''
         );
     }
 
