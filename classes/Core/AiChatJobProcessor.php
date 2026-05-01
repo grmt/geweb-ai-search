@@ -24,22 +24,25 @@ class AiChatJobProcessor {
 
         $this->markJobRunning($job);
         $provider = null;
+        $thoughtHistory = [];
 
         try {
             $provider = ProviderFactory::make();
-            $this->runJob($job, $provider);
+            $this->runJob($job, $provider, $thoughtHistory);
         } catch (\Exception $e) {
-            $this->markJobFailed($job, $e, $provider);
+            $this->markJobFailed($job, $e, $provider, $thoughtHistory);
         }
     }
 
-    private function runJob(array &$job, AIProviderInterface $provider): void {
+    /**
+     * @param array<int,array<string,mixed>> $thoughtHistory
+     */
+    private function runJob(array &$job, AIProviderInterface $provider, array &$thoughtHistory): void {
         $conversationId = (string) ($job['conversation_id'] ?? '');
         $fullMessages = isset($job['messages']) && is_array($job['messages']) ? $job['messages'] : [];
         $selectedModel = (string) ($job['requested_model'] ?? '');
         $temporaryPrompt = (string) ($job['temporary_prompt'] ?? '');
         $excludedSources = isset($job['excluded_sources']) && is_array($job['excluded_sources']) ? $job['excluded_sources'] : [];
-        $thoughtHistory = [];
 
         $this->configureProvider($provider, $job, $conversationId, $thoughtHistory);
         $context = $this->prepareContext($job, $provider, $fullMessages, $selectedModel, $conversationId);
@@ -225,12 +228,15 @@ class AiChatJobProcessor {
         $this->jobStore->write($job);
     }
 
-    private function markJobFailed(array &$job, \Exception $exception, ?AIProviderInterface $provider): void {
+    /**
+     * @param array<int,array<string,mixed>> $thoughtHistory
+     */
+    private function markJobFailed(array &$job, \Exception $exception, ?AIProviderInterface $provider, array $thoughtHistory = []): void {
         $job['status'] = 'error';
         $job['updated_at'] = time();
         $job['error_message'] = $exception->getMessage();
         $job['result'] = null;
-        $job['error_meta'] = $this->buildErrorMeta($job, $exception, $provider);
+        $job['error_meta'] = $this->buildErrorMeta($job, $exception, $provider, $thoughtHistory);
         $this->updateProgress(
             $job,
             'error',
@@ -242,7 +248,11 @@ class AiChatJobProcessor {
         $this->jobStore->write($job);
     }
 
-    private function buildErrorMeta(array $job, \Exception $exception, ?AIProviderInterface $provider): array {
+    /**
+     * @param array<int,array<string,mixed>> $thoughtHistory
+     * @return array<string,mixed>
+     */
+    private function buildErrorMeta(array $job, \Exception $exception, ?AIProviderInterface $provider, array $thoughtHistory = []): array {
         $meta = [
             'provider' => 'Google Gemini',
             'model' => (string) ($job['requested_model'] ?? ''),
@@ -258,6 +268,17 @@ class AiChatJobProcessor {
             ],
         ];
 
+        $normalizedThoughtHistory = $this->normalizeThoughtHistory($thoughtHistory);
+        if (!empty($normalizedThoughtHistory)) {
+            $meta['thought_history'] = $normalizedThoughtHistory;
+            $meta['request']['thought_history_updates'] = count($normalizedThoughtHistory);
+        }
+
+        $thoughts = $this->resolveErrorThoughts($normalizedThoughtHistory, $job);
+        if (!empty($thoughts)) {
+            $meta['thoughts'] = $thoughts;
+        }
+
         if ($provider !== null && method_exists($provider, 'getLastRequestAttempts')) {
             $attempts = $provider->getLastRequestAttempts();
             if (is_array($attempts) && !empty($attempts)) {
@@ -266,6 +287,38 @@ class AiChatJobProcessor {
         }
 
         return $meta;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $thoughtHistory
+     * @return array<int,array<string,mixed>>
+     */
+    private function normalizeThoughtHistory(array $thoughtHistory): array {
+        return array_values(array_filter($thoughtHistory, static function ($entry): bool {
+            return is_array($entry) && !empty($entry['thoughts']) && is_array($entry['thoughts']);
+        }));
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $thoughtHistory
+     * @return array<int,string>
+     */
+    private function resolveErrorThoughts(array $thoughtHistory, array $job): array {
+        $lastThoughts = [];
+        if (!empty($thoughtHistory)) {
+            $lastEntry = $thoughtHistory[count($thoughtHistory) - 1] ?? null;
+            if (is_array($lastEntry) && isset($lastEntry['thoughts']) && is_array($lastEntry['thoughts'])) {
+                $lastThoughts = $this->normalizeThoughts($lastEntry['thoughts']);
+            }
+        }
+
+        if (!empty($lastThoughts)) {
+            return $lastThoughts;
+        }
+
+        $progress = isset($job['progress']) && is_array($job['progress']) ? $job['progress'] : [];
+        $progressThoughts = isset($progress['thoughts']) && is_array($progress['thoughts']) ? $progress['thoughts'] : [];
+        return $this->normalizeThoughts($progressThoughts);
     }
 
     /**

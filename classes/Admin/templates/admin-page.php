@@ -19,15 +19,51 @@ defined('ABSPATH') || exit;
             <?php if (!empty($pluginUpdateGuardActive)): ?>
                 <div class="notice notice-warning"><p><?php echo esc_html((string) $pluginUpdateGuardMessage); ?></p></div>
             <?php endif; ?>
+            <?php if (!empty($workspaceSelectorOptions)): ?>
+                <div style="margin:0 0 16px; padding:12px; background:#fff; border:1px solid #dcdcde; max-width:720px;">
+                    <label for="geweb-workspace-scope-selector"><strong>Configuration workspace</strong></label><br>
+                    <select id="geweb-workspace-scope-selector" onchange="if (this.value) { window.location = this.value; }" class="regular-text" style="max-width:360px;">
+                        <?php foreach ($workspaceSelectorOptions as $workspaceOption): ?>
+                            <?php
+                            $workspaceOptionId = (string) ($workspaceOption['workspace_id'] ?? '');
+                            $workspaceOptionName = (string) ($workspaceOption['name'] ?? $workspaceOptionId);
+                            $workspaceOptionUrl = add_query_arg(
+                                [
+                                    'page' => 'geweb-ai-search',
+                                    'geweb_tab' => $activeTab,
+                                    'geweb_workspace_id' => $workspaceOptionId,
+                                ],
+                                admin_url('admin.php')
+                            );
+                            ?>
+                            <option value="<?php echo esc_url($workspaceOptionUrl); ?>" <?php selected($activeWorkspaceId, $workspaceOptionId); ?>>
+                                <?php echo esc_html($workspaceOptionName . ' [' . $workspaceOptionId . ']'); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <p class="description" style="margin:8px 0 0;">
+                        API key, selected model, Gemini store, prompt overrides, and frontend-sharing toggle are now stored per workspace. Switch workspace here to edit its configuration.
+                    </p>
+                </div>
+                <?php if (!empty($activeWorkspaceId)): ?>
+                    <div style="margin:0 0 16px; padding:12px 14px; background:#f6f7f7; border-left:4px solid #2271b1; max-width:720px;">
+                        <strong>Editing workspace configuration:</strong>
+                        <?php echo esc_html((string) ($activeWorkspaceName !== '' ? $activeWorkspaceName : $activeWorkspaceId)); ?>
+                        <code style="margin-left:6px;"><?php echo esc_html((string) $activeWorkspaceId); ?></code>
+                    </div>
+                <?php endif; ?>
+            <?php endif; ?>
             <h2 class="nav-tab-wrapper" style="margin-bottom:16px;">
                 <a href="<?php echo esc_url((string) $generalTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'general' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="general">General</a>
                 <a href="<?php echo esc_url((string) $promptsTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'prompts' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="prompts">Prompts</a>
                 <a href="<?php echo esc_url((string) $documentsTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'documents' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="documents">Files</a>
                 <a href="<?php echo esc_url((string) $storesTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'stores' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="stores">Gemini Stores</a>
                 <a href="<?php echo esc_url((string) $conversationsTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'conversations' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="conversations">Chats</a>
+                <a href="<?php echo esc_url((string) $workspacesTabUrl); ?>" class="nav-tab <?php echo $activeTab === 'workspaces' ? 'nav-tab-active' : ''; ?>" data-geweb-tab="workspaces">Workspaces</a>
             </h2>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" accept-charset="UTF-8">
                 <input type="hidden" name="action" value="geweb_save">
+                <input type="hidden" name="geweb_workspace_id" value="<?php echo esc_attr((string) $activeWorkspaceId); ?>">
                 <input type="hidden" name="geweb_ai_search_referenced_document_targets" id="geweb_ai_search_referenced_document_targets" value="">
                 <input type="hidden" name="geweb_ai_search_group_revision" id="geweb_ai_search_group_revision" value="<?php echo esc_attr((string) $groupDataRevision); ?>">
                 <?php wp_nonce_field('geweb_ai_search_save_settings'); ?>
@@ -201,6 +237,15 @@ defined('ABSPATH') || exit;
                             <?php if ($frontendAiPageId > 0 && $frontendAiPageUrl !== ''): ?>
                                 <p class="description">Current AI Search page: <a href="<?php echo esc_url((string) $frontendAiPageUrl); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html((string) ($frontendAiPageTitle ?: 'AI Search')); ?></a></p>
                             <?php endif; ?>
+                            <p style="margin-top:12px;">
+                                <label for="geweb_ai_search_share_gemini_config_with_frontend" style="display:inline-flex; align-items:flex-start; gap:8px;">
+                                    <input type="checkbox" id="geweb_ai_search_share_gemini_config_with_frontend" name="geweb_ai_search_share_gemini_config_with_frontend" value="1" <?php checked(!empty($shareGeminiConfigWithFrontend)); ?>>
+                                    <span>
+                                        <strong>Share Gemini search configuration with frontend users</strong><br>
+                                        <span class="description" style="display:inline;">Allows non-admin frontend users to use the shared Gemini API key, shared file store, and shared prompt/model search configuration in read-only mode. Admin-only indexing, upload, and store-management actions remain restricted.</span>
+                                    </span>
+                                </label>
+                            </p>
                         </td>
                     </tr>
 
@@ -343,6 +388,133 @@ defined('ABSPATH') || exit;
                             <?php PostIndexManager::renderButton(); ?>
                         <?php endif; ?>
                     <?php endif; ?>
+                </table>
+                </div>
+
+                <div class="geweb-settings-tab-panel" data-geweb-tab-panel="workspaces" <?php echo $activeTab === 'workspaces' ? '' : (string) $inlineStyleHidden; ?>>
+                <table class="form-table">
+                    <tr>
+                        <th>Workspace Definitions</th>
+                        <td>
+                            <p class="description" style="margin-top:0; max-width:900px;">
+                                Workspace IDs are treated as durable primary keys. This screen lets you rename the display label and manage LDAP group mappings without changing the underlying ID.
+                            </p>
+                            <div style="display:flex; flex-direction:column; gap:12px; max-width:1000px;">
+                                <?php foreach ($workspaceRows as $index => $workspaceRow): ?>
+                                    <div style="padding:12px; border:1px solid #dcdcde; border-radius:6px; background:#fff;">
+                                        <p style="margin-top:0;">
+                                            <label for="geweb_ai_workspace_id_<?php echo esc_attr((string) $index); ?>"><strong>Workspace ID</strong></label><br>
+                                            <input type="hidden" name="geweb_ai_workspaces[<?php echo esc_attr((string) $index); ?>][workspace_id]" value="<?php echo esc_attr((string) ($workspaceRow['workspace_id'] ?? '')); ?>">
+                                            <input type="text" id="geweb_ai_workspace_id_<?php echo esc_attr((string) $index); ?>" value="<?php echo esc_attr((string) ($workspaceRow['workspace_id'] ?? '')); ?>" class="regular-text" readonly>
+                                        </p>
+                                        <p>
+                                            <label for="geweb_ai_workspace_name_<?php echo esc_attr((string) $index); ?>"><strong>Display name</strong></label><br>
+                                            <input type="text" id="geweb_ai_workspace_name_<?php echo esc_attr((string) $index); ?>" name="geweb_ai_workspaces[<?php echo esc_attr((string) $index); ?>][name]" value="<?php echo esc_attr((string) ($workspaceRow['name'] ?? '')); ?>" class="regular-text" placeholder="Example Team">
+                                        </p>
+                                        <p style="margin-bottom:0;">
+                                            <label for="geweb_ai_workspace_groups_<?php echo esc_attr((string) $index); ?>"><strong>LDAP / external groups</strong></label><br>
+                                            <input type="text" id="geweb_ai_workspace_groups_<?php echo esc_attr((string) $index); ?>" name="geweb_ai_workspaces[<?php echo esc_attr((string) $index); ?>][external_groups_csv]" value="<?php echo esc_attr((string) ($workspaceRow['external_groups_csv'] ?? '')); ?>" class="large-text" placeholder="cn=editors,ou=groups,dc=example,dc=com, team-alpha">
+                                        </p>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>User Memberships</th>
+                        <td>
+                            <p class="description" style="margin-top:0; max-width:900px;">
+                                Select one workspace and then manage who is assigned to it. Assigned users keep their role within this workspace; unassigned users can be added with a role.
+                            </p>
+                            <p style="margin:12px 0;">
+                                <label for="geweb-workspace-assignment-selector"><strong>Workspace to manage</strong></label><br>
+                                <select id="geweb-workspace-assignment-selector" onchange="if (this.value) { window.location = this.value; }" class="regular-text" style="max-width:360px;">
+                                    <?php foreach ($workspaceSelectorOptions as $workspaceOption): ?>
+                                        <?php
+                                        $workspaceOptionId = (string) ($workspaceOption['workspace_id'] ?? '');
+                                        $workspaceOptionName = (string) ($workspaceOption['name'] ?? $workspaceOptionId);
+                                        $workspaceOptionUrl = add_query_arg(
+                                            [
+                                                'page' => 'geweb-ai-search',
+                                                'geweb_tab' => 'workspaces',
+                                                'geweb_workspace_id' => $workspaceOptionId,
+                                            ],
+                                            admin_url('admin.php')
+                                        );
+                                        ?>
+                                        <option value="<?php echo esc_url($workspaceOptionUrl); ?>" <?php selected((string) ($workspaceAssignmentView['workspace_id'] ?? ''), $workspaceOptionId); ?>>
+                                            <?php echo esc_html($workspaceOptionName . ' [' . $workspaceOptionId . ']'); ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </p>
+                            <input type="hidden" name="geweb_workspace_assignment_workspace_id" value="<?php echo esc_attr((string) ($workspaceAssignmentView['workspace_id'] ?? '')); ?>">
+                            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:16px; max-width:1100px;">
+                                <div style="padding:12px; border:1px solid #dcdcde; border-radius:6px; background:#fff;">
+                                    <h3 style="margin-top:0;">Assigned users</h3>
+                                    <?php if (!empty($workspaceAssignmentView['assigned'])): ?>
+                                        <div style="display:flex; flex-direction:column; gap:12px;">
+                                            <?php foreach ($workspaceAssignmentView['assigned'] as $assignedRow): ?>
+                                                <div style="padding:12px; border:1px solid #f0f0f1; border-radius:6px; background:#fcfcfc;">
+                                                    <p style="margin:0 0 8px;">
+                                                        <strong><?php echo esc_html((string) ($assignedRow['label'] ?? '')); ?></strong>
+                                                        <?php if (!empty($assignedRow['email'])): ?>
+                                                            <br><span class="description"><?php echo esc_html((string) $assignedRow['email']); ?></span>
+                                                        <?php endif; ?>
+                                                    </p>
+                                                    <p style="margin:0 0 8px;">
+                                                        <label><strong>Role</strong></label><br>
+                                                        <select name="geweb_ai_workspace_assigned_roles[<?php echo esc_attr((string) ($assignedRow['user_id'] ?? 0)); ?>]" class="regular-text">
+                                                            <option value="member" <?php selected((string) ($assignedRow['role'] ?? ''), 'member'); ?>>member</option>
+                                                            <option value="editor" <?php selected((string) ($assignedRow['role'] ?? ''), 'editor'); ?>>editor</option>
+                                                            <option value="admin" <?php selected((string) ($assignedRow['role'] ?? ''), 'admin'); ?>>admin</option>
+                                                        </select>
+                                                    </p>
+                                                    <label>
+                                                        <input type="checkbox" name="geweb_ai_workspace_remove_user_ids[]" value="<?php echo esc_attr((string) ($assignedRow['user_id'] ?? 0)); ?>">
+                                                        Remove from this workspace
+                                                    </label>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    <?php else: ?>
+                                        <p class="description" style="margin-bottom:0;">No users are currently assigned to this workspace.</p>
+                                    <?php endif; ?>
+                                </div>
+                                <div style="padding:12px; border:1px solid #dcdcde; border-radius:6px; background:#fff;">
+                                    <h3 style="margin-top:0;">Unassigned users</h3>
+                                    <?php if (!empty($workspaceAssignmentView['unassigned'])): ?>
+                                        <div style="display:flex; flex-direction:column; gap:12px;">
+                                            <?php foreach ($workspaceAssignmentView['unassigned'] as $unassignedRow): ?>
+                                                <div style="padding:12px; border:1px solid #f0f0f1; border-radius:6px; background:#fcfcfc;">
+                                                    <p style="margin:0 0 8px;">
+                                                        <strong><?php echo esc_html((string) ($unassignedRow['label'] ?? '')); ?></strong>
+                                                        <?php if (!empty($unassignedRow['email'])): ?>
+                                                            <br><span class="description"><?php echo esc_html((string) $unassignedRow['email']); ?></span>
+                                                        <?php endif; ?>
+                                                    </p>
+                                                    <p style="margin:0 0 8px;">
+                                                        <label><strong>Role if assigned</strong></label><br>
+                                                        <select name="geweb_ai_workspace_add_roles[<?php echo esc_attr((string) ($unassignedRow['user_id'] ?? 0)); ?>]" class="regular-text">
+                                                            <option value="member" <?php selected((string) ($unassignedRow['default_role'] ?? ''), 'member'); ?>>member</option>
+                                                            <option value="editor" <?php selected((string) ($unassignedRow['default_role'] ?? ''), 'editor'); ?>>editor</option>
+                                                            <option value="admin" <?php selected((string) ($unassignedRow['default_role'] ?? ''), 'admin'); ?>>admin</option>
+                                                        </select>
+                                                    </p>
+                                                    <label>
+                                                        <input type="checkbox" name="geweb_ai_workspace_add_user_ids[]" value="<?php echo esc_attr((string) ($unassignedRow['user_id'] ?? 0)); ?>">
+                                                        Assign to this workspace
+                                                    </label>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    <?php else: ?>
+                                        <p class="description" style="margin-bottom:0;">All users are already assigned to this workspace.</p>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
                 </table>
                 </div>
 

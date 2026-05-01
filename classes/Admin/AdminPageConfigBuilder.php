@@ -9,6 +9,7 @@ defined('ABSPATH') || exit;
 class AdminPageConfigBuilder {
     private const GEMINI_CHANGELOG_URL = 'https://ai.google.dev/gemini-api/docs/changelog';
     private const GEMINI_DEPRECATIONS_URL = 'https://ai.google.dev/gemini-api/docs/deprecations';
+    private const OPTION_SHARE_GEMINI_CONFIG_WITH_FRONTEND = 'geweb_aisearch_share_gemini_config_with_frontend';
     /**
      * @var callable
      */
@@ -67,12 +68,14 @@ class AdminPageConfigBuilder {
         $cacheContext = $this->buildCacheContext($provider);
         $guardContext = $this->buildPluginUpdateGuardContext();
         $panelContext = $this->buildPanelContext($provider, $cacheContext, $guardContext);
+        $workspaceContext = $this->buildWorkspaceContext();
 
         return array_merge(
             $providerContext,
             $settingsContext,
             $cacheContext,
             $guardContext,
+            $workspaceContext,
             $panelContext,
             $this->buildNavigationContext(),
             [
@@ -92,6 +95,56 @@ class AdminPageConfigBuilder {
     /**
      * @return array<string,mixed>
      */
+    private function buildWorkspaceContext(): array {
+        $workspaceAdminManager = new WorkspaceAdminManager();
+        $workspaceDefinitions = (new WorkspaceRegistry())->getWorkspaceDefinitions();
+        $workspaceSelectorOptions = [];
+        foreach ($workspaceDefinitions as $definition) {
+            if (!is_array($definition)) {
+                continue;
+            }
+
+            $workspaceId = (string) ($definition['workspace_id'] ?? '');
+            if ($workspaceId === '') {
+                continue;
+            }
+
+            $workspaceSelectorOptions[] = [
+                'workspace_id' => $workspaceId,
+                'name' => (string) ($definition['name'] ?? $workspaceId),
+            ];
+        }
+
+        return [
+            'workspaceRows' => $workspaceAdminManager->getWorkspaceRows(),
+            'activeWorkspaceId' => UserScope::getCurrentWorkspaceId(),
+            'activeWorkspaceName' => $this->resolveActiveWorkspaceName($workspaceDefinitions, UserScope::getCurrentWorkspaceId()),
+            'workspaceSelectorOptions' => $workspaceSelectorOptions,
+            'workspaceAssignmentView' => $workspaceAdminManager->getWorkspaceAssignmentView(UserScope::getCurrentWorkspaceId()),
+        ];
+    }
+
+    /**
+     * @param array<string,array{workspace_id:string,name:string,external_groups:array<int,string>}> $workspaceDefinitions
+     */
+    private function resolveActiveWorkspaceName(array $workspaceDefinitions, string $activeWorkspaceId): string {
+        $normalizedWorkspaceId = WorkspaceRegistry::normalizeWorkspaceId($activeWorkspaceId);
+        if ($normalizedWorkspaceId === '') {
+            return '';
+        }
+
+        $definition = $workspaceDefinitions[$normalizedWorkspaceId] ?? null;
+        if (!is_array($definition)) {
+            return $normalizedWorkspaceId;
+        }
+
+        $name = trim((string) ($definition['name'] ?? ''));
+        return $name !== '' ? $name : $normalizedWorkspaceId;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
     private function buildProviderContext(AIProviderInterface $provider): array {
         $models = $provider->getModels();
         $selectedModel = $provider->getModel();
@@ -102,7 +155,7 @@ class AdminPageConfigBuilder {
 
         return [
             'storeEnabled' => !empty($provider->getStoreData()),
-            'connectionStatus' => get_option('geweb_aisearch_connection_status', []),
+            'connectionStatus' => $provider->getConnectionStatus(),
             'defaultModel' => $provider->getDefaultModel($models),
             'dropdownModels' => $dropdownModels,
             'hasValidSavedApiKey' => $this->hasValidSavedApiKey(),
@@ -148,7 +201,7 @@ class AdminPageConfigBuilder {
     }
 
     private function hasValidSavedApiKey(): bool {
-        $connectionStatus = get_option('geweb_aisearch_connection_status', []);
+        $connectionStatus = ProviderFactory::make()->getConnectionStatus();
         return is_array($connectionStatus) && (($connectionStatus['status'] ?? '') === 'ok');
     }
 
@@ -157,14 +210,14 @@ class AdminPageConfigBuilder {
      * @return array<string,mixed>
      */
     private function buildSettingsContext(AIProviderInterface $provider, array $providerContext): array {
-        $customPrompt = UserScope::getGroupScopedOption('geweb_aisearch_custom_prompt', '');
-        $customPromptName = UserScope::getGroupScopedOption('geweb_aisearch_custom_prompt_name', '');
+        $customPrompt = UserScope::getSharedSearchScopedOption('geweb_aisearch_custom_prompt', '');
+        $customPromptName = UserScope::getSharedSearchScopedOption('geweb_aisearch_custom_prompt_name', '');
         $defaultPrompt = $provider->getDefaultSystemInstruction();
         $promptHistory = PromptSupport::normalizePromptHistoryEntries(UserScope::getGroupScopedOption('geweb_aisearch_prompt_history', []));
         $frontendAiPageId = FrontendAiContext::getFrontendAiPageId();
-        $modelPromptOverrides = $this->getArrayScopedOption('geweb_aisearch_model_prompts');
-        $modelPromptOverrideNames = $this->getArrayScopedOption('geweb_aisearch_model_prompt_names');
-        $modelPromptOverrideModes = $this->getArrayScopedOption('geweb_aisearch_model_prompt_modes');
+        $modelPromptOverrides = $this->getArraySharedSearchScopedOption('geweb_aisearch_model_prompts');
+        $modelPromptOverrideNames = $this->getArraySharedSearchScopedOption('geweb_aisearch_model_prompt_names');
+        $modelPromptOverrideModes = $this->getArraySharedSearchScopedOption('geweb_aisearch_model_prompt_modes');
         $documentAiOcrService = new DocumentAiOcrService();
 
         return [
@@ -195,6 +248,7 @@ class AdminPageConfigBuilder {
             'promptHistoryItems' => AdminPageSupport::buildPromptHistoryItems($promptHistory, $defaultPrompt, 'Default prompt'),
             'promptHistoryLimit' => (int) UserScope::getGroupScopedOption('geweb_aisearch_prompt_history_limit', 10),
             'selectedProvider' => ProviderFactory::getConfiguredProviderKey(),
+            'shareGeminiConfigWithFrontend' => UserScope::getWorkspaceConfigOption(self::OPTION_SHARE_GEMINI_CONFIG_WITH_FRONTEND, '0') === '1',
             'storedContextCharLimit' => FrontendAiContext::getStoredContextCharLimit(),
             'storedContextMessageLimit' => FrontendAiContext::getStoredContextMessageLimit(),
         ];
@@ -205,6 +259,14 @@ class AdminPageConfigBuilder {
      */
     private function getArrayScopedOption(string $optionName): array {
         $value = UserScope::getGroupScopedOption($optionName, []);
+        return is_array($value) ? $value : [];
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function getArraySharedSearchScopedOption(string $optionName): array {
+        $value = UserScope::getSharedSearchScopedOption($optionName, []);
         return is_array($value) ? $value : [];
     }
 
@@ -223,6 +285,7 @@ class AdminPageConfigBuilder {
         }
 
         return in_array($activeTab, ['general', 'prompts', 'documents', 'stores', 'conversations'], true)
+            || $activeTab === 'workspaces'
             ? $activeTab
             : 'general';
     }
@@ -318,6 +381,7 @@ class AdminPageConfigBuilder {
             'documentsTabUrl' => ($this->getTabUrl)('documents'),
             'storesTabUrl' => ($this->getTabUrl)('stores'),
             'conversationsTabUrl' => ($this->getTabUrl)('conversations'),
+            'workspacesTabUrl' => ($this->getTabUrl)('workspaces'),
             'geminiChangelogUrl' => self::GEMINI_CHANGELOG_URL,
             'geminiDeprecationsUrl' => self::GEMINI_DEPRECATIONS_URL,
         ];

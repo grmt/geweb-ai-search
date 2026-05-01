@@ -42,6 +42,10 @@ trait WPAjaxTrait {
     public function ajaxAiChat(): void {
         check_ajax_referer('geweb_ai_search_search', 'nonce');
 
+        if (!FrontendAiAccess::currentUserCanUseGeminiFrontend()) {
+            wp_send_json_error(['message' => FrontendAiAccess::getFrontendDisabledMessage()], 403);
+        }
+
         // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
         $rawMessages = isset($_POST['messages']) && is_array($_POST['messages']) ? wp_unslash($_POST['messages']) : [];
         // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized

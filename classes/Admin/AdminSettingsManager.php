@@ -17,6 +17,7 @@ class AdminSettingsManager {
     private const OPTION_DATE_DISPLAY_FORMAT = 'geweb_aisearch_date_display_format';
     private const OPTION_PRESERVE_DATA_ON_UNINSTALL = 'geweb_aisearch_preserve_data_on_uninstall';
     private const OPTION_FRONTEND_AI_INTERFACE = 'geweb_aisearch_frontend_ai_interface';
+    private const OPTION_SHARE_GEMINI_CONFIG_WITH_FRONTEND = 'geweb_aisearch_share_gemini_config_with_frontend';
     private const OPTION_CONVERSATION_TRIM_MESSAGE_LIMIT = 'geweb_aisearch_conversation_trim_message_limit';
     private const OPTION_CONVERSATION_TRIM_CHAR_LIMIT = 'geweb_aisearch_conversation_trim_char_limit';
     private const OPTION_LOCAL_CONVERSATION_ARCHIVE_LIMIT = 'geweb_aisearch_local_conversation_archive_limit';
@@ -39,6 +40,7 @@ class AdminSettingsManager {
     public function save(): void {
         $this->handleSubmittedApiKey();
         $this->saveGeneralSettings();
+        $this->saveWorkspaceSettings();
         $this->applySubmittedReferencedDocumentTargets();
         $historyLimit = $this->savePromptHistoryLimit();
         $this->saveCustomPromptSettings($historyLimit);
@@ -47,6 +49,10 @@ class AdminSettingsManager {
         AdminViewRevision::touchPrompts();
         AdminViewRevision::touchFiles();
         GroupDataRevision::touch();
+    }
+
+    private function saveWorkspaceSettings(): void {
+        (new WorkspaceAdminManager())->saveFromRequest();
     }
 
     /**
@@ -106,12 +112,12 @@ class AdminSettingsManager {
         if (isset($_POST['geweb_ai_search_model'])) {
             $submittedModel = sanitize_text_field(wp_unslash($_POST['geweb_ai_search_model']));
             $provider = ProviderFactory::make();
-            update_option('geweb_aisearch_model', $submittedModel);
+            UserScope::updateWorkspaceConfigOption('geweb_aisearch_model', $submittedModel, false);
 
             $selectionMode = $submittedModel === $provider->getDefaultModel()
                 ? self::MODEL_SELECTION_MODE_DEFAULT
                 : self::MODEL_SELECTION_MODE_CUSTOM;
-            update_option(self::OPTION_MODEL_SELECTION_MODE, $selectionMode);
+            UserScope::updateWorkspaceConfigOption(self::OPTION_MODEL_SELECTION_MODE, $selectionMode, false);
         }
 
         update_option(self::OPTION_INCLUDE_REFERENCED_DOCUMENTS, !empty($_POST['geweb_ai_search_include_referenced_documents']) ? '1' : '0');
@@ -135,6 +141,7 @@ class AdminSettingsManager {
             self::OPTION_FRONTEND_AI_INTERFACE,
             $this->normalizeFrontendAiInterface(wp_unslash($submittedFrontendInterface))
         );
+        UserScope::updateWorkspaceConfigOption(self::OPTION_SHARE_GEMINI_CONFIG_WITH_FRONTEND, !empty($_POST['geweb_ai_search_share_gemini_config_with_frontend']) ? '1' : '0', false);
 
         foreach ([
             [self::OPTION_CONVERSATION_TRIM_MESSAGE_LIMIT, 'geweb_ai_search_conversation_trim_message_limit', self::DEFAULT_CONVERSATION_TRIM_MESSAGE_LIMIT, 2, 200],
@@ -237,8 +244,8 @@ class AdminSettingsManager {
         }
 
         if ($useDefaultPrompt) {
-            UserScope::deleteGroupScopedOption(self::OPTION_CUSTOM_PROMPT);
-            UserScope::deleteGroupScopedOption(self::OPTION_CUSTOM_PROMPT_NAME);
+            UserScope::deleteSharedSearchScopedOption(self::OPTION_CUSTOM_PROMPT);
+            UserScope::deleteSharedSearchScopedOption(self::OPTION_CUSTOM_PROMPT_NAME);
             if (trim($defaultPrompt) !== trim($currentPrompt)) {
                 (new AdminPromptHistoryManager())->storeEntry($defaultPrompt, self::LABEL_DEFAULT_PROMPT, $historyLimit);
             }
@@ -298,6 +305,10 @@ class AdminSettingsManager {
      * @return mixed
      */
     private function getScopedOption(string $optionName, $default = false) {
+        if (in_array($optionName, [self::OPTION_CUSTOM_PROMPT, self::OPTION_CUSTOM_PROMPT_NAME], true)) {
+            return UserScope::getSharedSearchScopedOption($optionName, $default);
+        }
+
         return UserScope::getGroupScopedOption($optionName, $default);
     }
 
@@ -306,6 +317,10 @@ class AdminSettingsManager {
      * @return bool
      */
     private function updateScopedOption(string $optionName, $value): bool {
+        if (in_array($optionName, [self::OPTION_CUSTOM_PROMPT, self::OPTION_CUSTOM_PROMPT_NAME], true)) {
+            return UserScope::updateSharedSearchScopedOption($optionName, $value, false);
+        }
+
         return UserScope::updateGroupScopedOption($optionName, $value, false);
     }
 

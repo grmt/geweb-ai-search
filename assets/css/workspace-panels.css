@@ -1019,19 +1019,25 @@
     outline: none;
 }
 .geweb-ai-source-meta-tooltip {
-    position: absolute;
-    top: calc(100% + 8px);
-    left: 50%;
-    z-index: 15;
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 200;
     display: none;
     min-width: 132px;
-    max-width: 220px;
+    max-width: min(220px, calc(100vw - 16px));
     padding: 8px 10px;
     border-radius: 10px;
     background: #0f172a;
     color: #f8fafc;
     box-shadow: 0 12px 24px rgba(15, 23, 42, 0.2);
-    transform: translateX(-50%);
+    transform: none;
+}
+.geweb-ai-source-meta-tooltip[data-placement="top"] {
+    transform-origin: bottom center;
+}
+.geweb-ai-source-meta-tooltip[data-placement="bottom"] {
+    transform-origin: top center;
 }
 .geweb-ai-source-meta-tooltip-close {
     display: none;
@@ -1451,8 +1457,7 @@
         padding: 8px 10px;
     }
     .geweb-ai-source-meta-tooltip {
-        left: 0;
-        transform: none;
+        max-width: min(240px, calc(100vw - 16px));
     }
     .geweb-ai-source-meta-tooltip-close {
         display: inline-flex;

@@ -1307,6 +1307,20 @@ return;
 				$(this).addClass('nav-tab-active');
 				$('.geweb-settings-tab-panel').hide();
 				$('.geweb-settings-tab-panel[data-geweb-tab-panel="' + tab + '"]').show();
+				if (tab === 'documents') {
+						const $documentsContainer = $('#geweb-referenced-documents-container');
+						if ($documentsContainer.length && String($documentsContainer.attr('data-needs-refresh') || '0') === '1') {
+								showAdminLoadingOverlay('Loading Documents…');
+								refreshReferencedDocuments('', { keepOverlay: false });
+						}
+				}
+				if (tab === 'stores') {
+						const $storesContainer = $('#geweb-gemini-stores-container');
+						if ($storesContainer.length && String($storesContainer.attr('data-needs-refresh') || '0') === '1') {
+								showAdminLoadingOverlay('Loading Gemini Stores…');
+								refreshGeminiStores('', { keepOverlay: false });
+						}
+				}
 				if (globalThis.history?.replaceState) {
 						const url = new URL(globalThis.location.href);
 						url.searchParams.set('page', 'geweb-ai-search');

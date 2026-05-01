@@ -325,7 +325,7 @@ class AdminPromptHistoryManager {
             return;
         }
 
-        UserScope::deleteGroupScopedOption($optionName);
+        UserScope::deleteSharedSearchScopedOption($optionName);
     }
 
     private function getDefaultPrompt(): string {
@@ -337,6 +337,10 @@ class AdminPromptHistoryManager {
      * @return mixed
      */
     private function getScopedOption(string $optionName, $default = false) {
+        if (in_array($optionName, [self::OPTION_MODEL_PROMPTS, self::OPTION_MODEL_PROMPT_NAMES, self::OPTION_MODEL_PROMPT_MODES], true)) {
+            return UserScope::getSharedSearchScopedOption($optionName, $default);
+        }
+
         return UserScope::getGroupScopedOption($optionName, $default);
     }
 
@@ -344,6 +348,10 @@ class AdminPromptHistoryManager {
      * @param mixed $value
      */
     private function updateScopedOption(string $optionName, $value): bool {
+        if (in_array($optionName, [self::OPTION_MODEL_PROMPTS, self::OPTION_MODEL_PROMPT_NAMES, self::OPTION_MODEL_PROMPT_MODES], true)) {
+            return UserScope::updateSharedSearchScopedOption($optionName, $value, false);
+        }
+
         return UserScope::updateGroupScopedOption($optionName, $value, false);
     }
 }

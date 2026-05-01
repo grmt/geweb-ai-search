@@ -73,7 +73,7 @@ class Encryption {
      */
     public function saveApiKey(string $apiKey): bool {
         $apiKey = trim($apiKey);
-        return empty($apiKey) ? false : update_option(self::API_KEY, $this->encrypt($apiKey));
+        return empty($apiKey) ? false : UserScope::updateWorkspaceConfigOption(self::API_KEY, $this->encrypt($apiKey));
     }
 
     /**
@@ -82,7 +82,7 @@ class Encryption {
      * @return string|null Decrypted API key or null if not found
      */
     public function getApiKey(): string {
-        $encryptedApiKey = get_option(self::API_KEY, '');
+        $encryptedApiKey = UserScope::getWorkspaceConfigOption(self::API_KEY, '');
         return is_string($encryptedApiKey) ? $this->decrypt($encryptedApiKey) : '';
     }
 }

@@ -1423,8 +1423,16 @@
 
 		getSourceMetaEntries(url, originalUrl = '') {
 			const entries = [];
+			const pathLabel = this.getSourcePathLabel(url, originalUrl);
 			const sizeLabel = this.getSourceSizeLabel(url, originalUrl);
 			const pageIdLabel = this.getSourcePageIdLabel(url, originalUrl);
+
+			if (pathLabel) {
+				entries.push({
+					label: t('sourceMetaPath', 'Path'),
+					value: pathLabel,
+				});
+			}
 
 			if (sizeLabel) {
 				entries.push({
@@ -1506,6 +1514,11 @@
 				$wrapper.removeClass('is-open');
 				$button.attr('aria-expanded', 'false');
 				$tooltip.attr('aria-hidden', 'true');
+				$tooltip.removeAttr('data-placement');
+				$tooltip.css({
+					top: '',
+					left: '',
+				});
 			};
 
 			const openTooltip = () => {
@@ -1513,6 +1526,9 @@
 				$wrapper.addClass('is-open');
 				$button.attr('aria-expanded', 'true');
 				$tooltip.attr('aria-hidden', 'false');
+				globalThis.requestAnimationFrame(() => {
+					this.positionSourceMetaTooltip($button, $tooltip);
+				});
 			};
 
 			$button.attr('aria-expanded', 'false');
@@ -1566,8 +1582,47 @@
 
 					this.closeAllSourceMetaTooltips();
 				});
+				$(globalThis).on('resize.geweb-ai-source-meta-tooltip scroll.geweb-ai-source-meta-tooltip', () => {
+					this.closeAllSourceMetaTooltips();
+				});
 				this._boundSourceMetaTooltipDocumentClick = true;
 			}
+		},
+
+		positionSourceMetaTooltip($button, $tooltip) {
+			if (!$button?.length || !$tooltip?.length) {
+				return;
+			}
+
+			const buttonElement = $button.get(0);
+			const tooltipElement = $tooltip.get(0);
+			if (!buttonElement || !tooltipElement) {
+				return;
+			}
+
+			const buttonRect = buttonElement.getBoundingClientRect();
+			const tooltipRect = tooltipElement.getBoundingClientRect();
+			const viewportWidth = globalThis.innerWidth || document.documentElement.clientWidth || 0;
+			const viewportHeight = globalThis.innerHeight || document.documentElement.clientHeight || 0;
+			const gutter = 8;
+			const spacing = 8;
+
+			const openAbove = buttonRect.bottom + spacing + tooltipRect.height > viewportHeight - gutter
+				&& buttonRect.top - spacing - tooltipRect.height >= gutter;
+
+			let left = buttonRect.left + (buttonRect.width / 2) - (tooltipRect.width / 2);
+			left = Math.max(gutter, Math.min(left, viewportWidth - tooltipRect.width - gutter));
+
+			let top = openAbove
+				? buttonRect.top - tooltipRect.height - spacing
+				: buttonRect.bottom + spacing;
+			top = Math.max(gutter, Math.min(top, viewportHeight - tooltipRect.height - gutter));
+
+			$tooltip.attr('data-placement', openAbove ? 'top' : 'bottom');
+			$tooltip.css({
+				left: `${Math.round(left)}px`,
+				top: `${Math.round(top)}px`,
+			});
 		},
 
 		refreshSourceMetaTooltip($item, url, originalUrl = '') {

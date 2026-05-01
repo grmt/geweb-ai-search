@@ -230,9 +230,9 @@ trait GeminiHelpersTrait {
         if ($requestModel === '' || !$this->shouldMarkModelPermanentlyUnavailable($requestModel, $httpCode, $responseBody)) { return; }
         $this->recordModelStatus($requestModel, 'failed', $responseBody, ['permanent_unavailable' => true]);
         $this->clearModelsCache();
-        if ((string) get_option(self::OPTION_MODEL, '') === $requestModel) {
-            update_option(self::OPTION_MODEL, self::DEFAULT_MODEL);
-            update_option(self::OPTION_MODEL_SELECTION_MODE, self::MODEL_SELECTION_MODE_DEFAULT);
+        if ((string) UserScope::getWorkspaceConfigOption(self::OPTION_MODEL, '') === $requestModel) {
+            UserScope::updateWorkspaceConfigOption(self::OPTION_MODEL, self::DEFAULT_MODEL, false);
+            UserScope::updateWorkspaceConfigOption(self::OPTION_MODEL_SELECTION_MODE, self::MODEL_SELECTION_MODE_DEFAULT, false);
         }
     }
 
@@ -509,7 +509,7 @@ trait GeminiHelpersTrait {
     }
 
     private function getScopedOption(string $optionName, $default = false) {
-        return UserScope::getGroupScopedOption($optionName, $default);
+        return UserScope::getSharedSearchScopedOption($optionName, $default);
     }
 
     private function getUserScopedOption(string $optionName, $default = false) {
@@ -517,11 +517,11 @@ trait GeminiHelpersTrait {
     }
 
     private function updateScopedOption(string $optionName, $value): bool {
-        return UserScope::updateGroupScopedOption($optionName, $value, false);
+        return UserScope::updateSharedSearchScopedOption($optionName, $value, false);
     }
 
     private function deleteScopedOption(string $optionName): void {
-        UserScope::deleteGroupScopedOption($optionName);
+        UserScope::deleteSharedSearchScopedOption($optionName);
     }
 
     private function updateUserScopedOption(string $optionName, $value): bool {
@@ -666,8 +666,8 @@ trait GeminiHelpersTrait {
         if ($this->modelRegistry instanceof GeminiModelRegistry) { return $this->modelRegistry; }
         $this->modelRegistry = new GeminiModelRegistry(self::API_BASE, $this->apiKey, [
             'default_model' => self::DEFAULT_MODEL, 'legacy_default_models' => self::LEGACY_DEFAULT_MODELS, 'official_latest_model_aliases' => self::OFFICIAL_LATEST_MODEL_ALIASES,
-            'transient_models' => self::TRANSIENT_MODELS, 'option_model' => self::OPTION_MODEL, 'option_model_selection_mode' => self::OPTION_MODEL_SELECTION_MODE,
-            'option_model_status' => self::OPTION_MODEL_STATUS, 'option_connection_status' => self::OPTION_CONNECTION_STATUS, 'model_selection_mode_default' => self::MODEL_SELECTION_MODE_DEFAULT,
+            'transient_models' => UserScope::getWorkspaceConfigOptionName(self::TRANSIENT_MODELS), 'option_model' => UserScope::getWorkspaceConfigOptionName(self::OPTION_MODEL), 'option_model_selection_mode' => UserScope::getWorkspaceConfigOptionName(self::OPTION_MODEL_SELECTION_MODE),
+            'option_model_status' => UserScope::getWorkspaceConfigOptionName(self::OPTION_MODEL_STATUS), 'option_connection_status' => UserScope::getWorkspaceConfigOptionName(self::OPTION_CONNECTION_STATUS), 'model_selection_mode_default' => self::MODEL_SELECTION_MODE_DEFAULT,
             'model_selection_mode_custom' => self::MODEL_SELECTION_MODE_CUSTOM, 'stale_failed_model_retention_seconds' => self::STALE_FAILED_MODEL_RETENTION_SECONDS, 'model_test_timeout_seconds' => self::MODEL_TEST_TIMEOUT_SECONDS,
         ], [
             'make_request' => function (string $url, ?array $body = null, string $method = 'POST', int $timeoutSeconds = self::DEFAULT_HTTP_TIMEOUT_SECONDS): array { return $this->makeRequest($url, $body, $method, $timeoutSeconds); },

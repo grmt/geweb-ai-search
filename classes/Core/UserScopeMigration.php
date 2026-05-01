@@ -9,6 +9,8 @@ defined('ABSPATH') || exit;
  */
 class UserScopeMigration {
     private const OPTION_MIGRATION_DONE = 'geweb_aisearch_user_scope_migration_done_v2';
+    private const OPTION_SHARED_SEARCH_MIGRATION_DONE = 'geweb_aisearch_shared_search_scope_migration_done_v1';
+    private const OPTION_WORKSPACE_BOOTSTRAP_DONE = 'geweb_aisearch_workspace_bootstrap_done_v1';
 
     /**
      * @var array<int,string>
@@ -38,11 +40,36 @@ class UserScopeMigration {
         'geweb_aisearch_referenced_document_selection_targets',
     ];
 
-    public static function maybeRun(): void {
-        if ((string) get_option(self::OPTION_MIGRATION_DONE, '') !== '') {
-            return;
-        }
+    /**
+     * @var array<int,string>
+     */
+    private const SHARED_SEARCH_OPTION_NAMES = [
+        'geweb_aisearch_custom_prompt',
+        'geweb_aisearch_custom_prompt_name',
+        'geweb_aisearch_model_prompts',
+        'geweb_aisearch_model_prompt_names',
+        'geweb_aisearch_model_prompt_modes',
+        'geweb_aisearch_gemini_store',
+        'geweb_aisearch_gemini_stores_cache',
+        'geweb_aisearch_gemini_stores_cache_time',
+        'geweb_aisearch_gemini_stores_cache_error',
+        'geweb_aisearch_gemini_store_documents_cache',
+        'geweb_aisearch_gemini_store_documents_cache_time',
+    ];
 
+    /**
+     * @var array<int,string>
+     */
+    private const WORKSPACE_CONFIG_OPTION_NAMES = [
+        'geweb_aisearch_api_key_encrypted',
+        'geweb_aisearch_model',
+        'geweb_aisearch_model_selection_mode',
+        'geweb_aisearch_model_status',
+        'geweb_aisearch_connection_status',
+        'geweb_aisearch_share_gemini_config_with_frontend',
+    ];
+
+    public static function maybeRun(): void {
         if (!is_user_logged_in() || !current_user_can('manage_options')) {
             return;
         }
@@ -50,6 +77,16 @@ class UserScopeMigration {
         $userScopeKey = UserScope::getCurrentUserScopeKey();
         $groupScopeKey = UserScope::getCurrentGroupScopeKey();
         if ($userScopeKey === '' || $groupScopeKey === '') {
+            return;
+        }
+
+        self::maybeRunLegacyScopeMigration($userScopeKey, $groupScopeKey);
+        self::maybeRunSharedSearchScopeMigration($groupScopeKey);
+        self::maybeRunWorkspaceBootstrap();
+    }
+
+    private static function maybeRunLegacyScopeMigration(string $userScopeKey, string $groupScopeKey): void {
+        if ((string) get_option(self::OPTION_MIGRATION_DONE, '') !== '') {
             return;
         }
 
@@ -62,6 +99,135 @@ class UserScopeMigration {
             $userScopeKey . '|' . $groupScopeKey . '|' . (string) time(),
             false
         );
+    }
+
+    private static function maybeRunSharedSearchScopeMigration(string $groupScopeKey): void {
+        if ((string) get_option(self::OPTION_SHARED_SEARCH_MIGRATION_DONE, '') !== '') {
+            return;
+        }
+
+        foreach (self::SHARED_SEARCH_OPTION_NAMES as $baseOptionName) {
+            self::migrateOptionIfMissing(
+                UserScope::getSharedSearchScopedOptionName($baseOptionName),
+                [
+                    UserScope::getOptionNameForScope($baseOptionName, $groupScopeKey),
+                    UserScope::getOptionNameForScope($baseOptionName, 'group_authenticated'),
+                    $baseOptionName,
+                ]
+            );
+        }
+
+        update_option(
+            self::OPTION_SHARED_SEARCH_MIGRATION_DONE,
+            $groupScopeKey . '|' . (string) time(),
+            false
+        );
+    }
+
+    private static function maybeRunWorkspaceBootstrap(): void {
+        if ((string) get_option(self::OPTION_WORKSPACE_BOOTSTRAP_DONE, '') !== '') {
+            return;
+        }
+
+        $targetWorkspaceId = self::ensureBootstrapWorkspace();
+        if ($targetWorkspaceId === '') {
+            update_option(self::OPTION_WORKSPACE_BOOTSTRAP_DONE, 'skipped|' . (string) time(), false);
+            return;
+        }
+
+        self::migrateSharedSearchOptionsIntoWorkspace($targetWorkspaceId);
+        self::migrateWorkspaceConfigOptions($targetWorkspaceId);
+        self::assignExistingUsersToBootstrapWorkspace($targetWorkspaceId);
+
+        update_option(
+            self::OPTION_WORKSPACE_BOOTSTRAP_DONE,
+            $targetWorkspaceId . '|' . (string) time(),
+            false
+        );
+    }
+
+    private static function ensureBootstrapWorkspace(): string {
+        $registry = new WorkspaceRegistry();
+        $definitions = $registry->getWorkspaceDefinitions();
+        if (empty($definitions)) {
+            $definitions[WorkspaceRegistry::DEFAULT_WORKSPACE_ID] = [
+                'workspace_id' => WorkspaceRegistry::DEFAULT_WORKSPACE_ID,
+                'name' => WorkspaceRegistry::DEFAULT_WORKSPACE_NAME,
+                'external_groups' => [],
+            ];
+            update_option(WorkspaceRegistry::OPTION_WORKSPACE_DEFINITIONS, $definitions, false);
+            return WorkspaceRegistry::DEFAULT_WORKSPACE_ID;
+        }
+
+        if (isset($definitions[WorkspaceRegistry::DEFAULT_WORKSPACE_ID])) {
+            return WorkspaceRegistry::DEFAULT_WORKSPACE_ID;
+        }
+
+        if (count($definitions) === 1) {
+            $definition = reset($definitions);
+            return is_array($definition) ? (string) ($definition['workspace_id'] ?? '') : '';
+        }
+
+        return '';
+    }
+
+    private static function migrateSharedSearchOptionsIntoWorkspace(string $workspaceId): void {
+        foreach (self::SHARED_SEARCH_OPTION_NAMES as $baseOptionName) {
+            self::migrateOptionIfMissing(
+                UserScope::getOptionNameForScope($baseOptionName, 'workspacecfg_' . $workspaceId),
+                [
+                    UserScope::getOptionNameForScope($baseOptionName, 'shared_search'),
+                    $baseOptionName,
+                ]
+            );
+        }
+    }
+
+    private static function migrateWorkspaceConfigOptions(string $workspaceId): void {
+        foreach (self::WORKSPACE_CONFIG_OPTION_NAMES as $baseOptionName) {
+            self::migrateOptionIfMissing(
+                UserScope::getOptionNameForScope($baseOptionName, 'workspacecfg_' . $workspaceId),
+                [$baseOptionName]
+            );
+        }
+    }
+
+    private static function assignExistingUsersToBootstrapWorkspace(string $workspaceId): void {
+        $membershipService = new WorkspaceMembershipService();
+        foreach (get_users(['fields' => 'ID']) as $userId) {
+            $normalizedUserId = absint($userId);
+            if ($normalizedUserId <= 0) {
+                continue;
+            }
+
+            $memberships = $membershipService->getUserMemberships($normalizedUserId);
+            if (!empty($memberships)) {
+                update_user_meta($normalizedUserId, WorkspaceMembershipService::USER_WORKSPACES_META_KEY, $memberships);
+                continue;
+            }
+
+            update_user_meta(
+                $normalizedUserId,
+                WorkspaceMembershipService::USER_WORKSPACES_META_KEY,
+                [[
+                    'workspace_id' => $workspaceId,
+                    'role' => self::resolveBootstrapWorkspaceRole($normalizedUserId),
+                    'external_groups' => [],
+                ]]
+            );
+        }
+    }
+
+    private static function resolveBootstrapWorkspaceRole(int $userId): string {
+        if (user_can($userId, 'manage_options')) {
+            return WorkspaceMembershipService::ROLE_ADMIN;
+        }
+
+        if (user_can($userId, 'edit_pages') || user_can($userId, 'edit_posts')) {
+            return WorkspaceMembershipService::ROLE_EDITOR;
+        }
+
+        return WorkspaceMembershipService::ROLE_MEMBER;
     }
 
     private static function migrateUserScopedOptions(string $userScopeKey, string $groupScopeKey): void {

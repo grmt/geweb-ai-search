@@ -22,6 +22,8 @@ class WP {
     private AdminPageSections $adminPageSections;
     private FrontendAiWorkspaceController $frontendAiWorkspaceController;
     private FrontendAiPromptManager $frontendAiPromptManager;
+    private WorkspacePageAccessController $workspacePageAccessController;
+    private WorkspacePageRestController $workspacePageRestController;
 
     /**
      * Constructor - registers WordPress hooks
@@ -33,6 +35,8 @@ class WP {
         $this->aiChatJobProcessor = new AiChatJobProcessor($this->conversationManager, $this->aiChatJobStore);
         $this->adminPageSections = new AdminPageSections($this->conversationManager);
         $this->frontendAiPromptManager = new FrontendAiPromptManager();
+        $this->workspacePageAccessController = new WorkspacePageAccessController();
+        $this->workspacePageRestController = new WorkspacePageRestController($this->workspacePageAccessController);
         $this->frontendAiWorkspaceController = new FrontendAiWorkspaceController(
             fn(string $tab): string => $this->getTabUrl($tab),
             fn(AIProviderInterface $provider): array => $this->frontendAiPromptManager->getFrontendAiChatModelConfig($provider),
@@ -96,6 +100,8 @@ class WP {
         add_action('init', [self::class, 'registerFrontendAiRewrite']);
         add_action('init', [self::class, 'maybeRefreshFrontendAiRewrite'], 20);
         add_action('init', [self::class, 'maybeEnsureFrontendAiPageExists'], 30);
+        add_action('rest_api_init', [$this->workspacePageRestController, 'registerRoutes']);
+        add_filter('map_meta_cap', [$this->workspacePageAccessController, 'filterPageCapabilities'], 10, 4);
         add_filter('query_vars', [$this, 'registerFrontendAiQueryVars']);
         add_action('wp_enqueue_scripts', [$this->frontendAiWorkspaceController, 'enqueueScripts']);
         add_action('admin_enqueue_scripts', [$this, 'enqueueAdminScripts']);
@@ -203,6 +209,15 @@ class WP {
             'geweb-ai-search&geweb_tab=conversations',
             [$this, 'renderOptionsPage']
         );
+
+        add_submenu_page(
+            'geweb-ai-search',
+            'Workspaces',
+            'Workspaces',
+            'manage_options',
+            'geweb-ai-search&geweb_tab=workspaces',
+            [$this, 'renderOptionsPage']
+        );
     }
 
     /**
@@ -212,13 +227,16 @@ class WP {
      * @return string
      */
     private function getTabUrl(string $tab): string {
-        return add_query_arg(
-            [
-                'page' => 'geweb-ai-search',
-                'geweb_tab' => $tab,
-            ],
-            admin_url('admin.php')
-        );
+        $args = [
+            'page' => 'geweb-ai-search',
+            'geweb_tab' => $tab,
+        ];
+        $workspaceId = UserScope::getCurrentWorkspaceId();
+        if ($workspaceId !== '') {
+            $args['geweb_workspace_id'] = $workspaceId;
+        }
+
+        return add_query_arg($args, admin_url('admin.php'));
     }
 
     /**
