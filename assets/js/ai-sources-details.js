@@ -71,7 +71,7 @@
 				$details.append(this.buildResponseDetailsSection(
 					t('requestMetaTitle', 'Request context'),
 					$requestSection,
-					true
+					false
 				));
 				hasContentSection = true;
 			}
@@ -81,7 +81,7 @@
 				$details.append(this.buildResponseDetailsSection(
 					t('thoughtHistoryTitle', 'Gedachtegang'),
 					$thoughtHistorySection,
-					true
+					false
 				));
 				hasContentSection = true;
 			}
@@ -126,7 +126,7 @@
 				$details.append(this.buildResponseDetailsSection(
 					`${t('groundingChunksTitle', 'Grounding chunks')} (${groundingChunks.length})`,
 					$section,
-					true
+					false
 				));
 				hasContentSection = true;
 			}

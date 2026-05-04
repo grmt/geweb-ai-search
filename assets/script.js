@@ -3187,6 +3187,27 @@ return;
 			return false;
 		},
 
+		closeOpenResponseDetails($exceptMessage = null) {
+			const exceptElement = $exceptMessage?.get?.(0) || null;
+			this.$answerBox.find('.ai-message--details-open').each((_, element) => {
+				if (exceptElement && element === exceptElement) {
+					return;
+				}
+
+				const $message = $(element);
+				$message.removeClass('ai-message--details-open');
+				$message.find('.geweb-ai-response-details').removeClass('is-open');
+				$message.find('.geweb-ai-message-content').attr('aria-expanded', 'false');
+
+				const $button = $message.find('.geweb-ai-message-details-toggle').first();
+				if ($button.length) {
+					$button.attr('aria-expanded', 'false');
+					$button.attr('aria-label', t('showDetails', 'Show details'));
+					$button.find('.geweb-ai-message-action-label').text(t('showDetails', 'Show details'));
+				}
+			});
+		},
+
 		toggleResponseDetails($message) {
 			const $details = $message.find('.geweb-ai-response-details');
 			const $content = $message.find('.geweb-ai-message-content');
@@ -3195,16 +3216,13 @@ return;
 			}
 
 			const shouldShow = !$details.hasClass('is-open');
-			$details.toggleClass('is-open', shouldShow);
-			$content.attr('aria-expanded', shouldShow ? 'true' : 'false');
 			if (shouldShow) {
-				const detailsElement = $details.get(0);
-				if (detailsElement && typeof detailsElement.scrollIntoView === 'function') {
-					globalThis.setTimeout(() => {
-						detailsElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-					}, 0);
-				}
+				this.closeOpenResponseDetails($message);
 			}
+
+			$details.toggleClass('is-open', shouldShow);
+			$message.toggleClass('ai-message--details-open', shouldShow);
+			$content.attr('aria-expanded', shouldShow ? 'true' : 'false');
 		},
 
 		scrollToBottom() {

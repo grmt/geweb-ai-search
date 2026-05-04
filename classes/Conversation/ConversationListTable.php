@@ -76,6 +76,8 @@ class ConversationListTable extends \WP_List_Table {
         $items = array_map(function (array $item): array {
             $item['group_scope'] = UserScope::getCurrentGroupScopeKey();
             $item['user_scope'] = UserScope::getCurrentUserScopeKey();
+            $item['group_scope_label'] = $this->resolveGroupScopeLabel((string) $item['group_scope']);
+            $item['user_scope_label'] = $this->resolveUserScopeLabel((string) $item['user_scope']);
             return $item;
         }, $this->sourceItems);
         $items = $this->filterItems($items);
@@ -224,8 +226,8 @@ class ConversationListTable extends \WP_List_Table {
      * @return string
      */
     protected function column_group_scope($item): string {
-        $scope = trim((string) ($item['group_scope'] ?? ''));
-        return $scope !== '' ? '<code>' . esc_html($scope) . '</code>' : '—';
+        $label = trim((string) ($item['group_scope_label'] ?? ''));
+        return $label !== '' ? esc_html($label) : '—';
     }
 
     /**
@@ -233,8 +235,52 @@ class ConversationListTable extends \WP_List_Table {
      * @return string
      */
     protected function column_user_scope($item): string {
-        $scope = trim((string) ($item['user_scope'] ?? ''));
-        return $scope !== '' ? '<code>' . esc_html($scope) . '</code>' : '—';
+        $label = trim((string) ($item['user_scope_label'] ?? ''));
+        return $label !== '' ? esc_html($label) : '—';
+    }
+
+    private function resolveGroupScopeLabel(string $scope): string {
+        $labels = [
+            'group_administrators' => __('Administrators', 'geweb-ai-search'),
+            'group_authenticated' => __('Authenticated users', 'geweb-ai-search'),
+            'group_content_creators' => __('Content creators', 'geweb-ai-search'),
+            'group_guests' => __('Guests', 'geweb-ai-search'),
+            'group_readers' => __('Readers', 'geweb-ai-search'),
+        ];
+
+        return $labels[$scope] ?? $this->prettifyScopeKey($scope);
+    }
+
+    private function resolveUserScopeLabel(string $scope): string {
+        if (strpos($scope, 'user_') === 0) {
+            return $this->resolveUserLabel((int) substr($scope, 5), $scope);
+        }
+
+        if (strpos($scope, 'guest_') === 0) {
+            return __('Guest', 'geweb-ai-search');
+        }
+
+        return $this->prettifyScopeKey($scope);
+    }
+
+    private function resolveUserLabel(int $userId, string $fallback): string {
+        $user = $userId > 0 ? get_userdata($userId) : false;
+        if (!$user) {
+            return $fallback;
+        }
+
+        $displayName = trim((string) $user->display_name);
+        if ($displayName !== '') {
+            return $displayName;
+        }
+
+        $userLogin = trim((string) $user->user_login);
+        return $userLogin !== '' ? $userLogin : $fallback;
+    }
+
+    private function prettifyScopeKey(string $scope): string {
+        $label = trim(str_replace('_', ' ', preg_replace('/^(group|user|guest)_/', '', $scope) ?? $scope));
+        return $label !== '' ? ucwords($label) : '';
     }
 
     /**
@@ -301,10 +347,11 @@ class ConversationListTable extends \WP_List_Table {
         }
 
         $direction = $order === 'asc' ? 1 : -1;
+        $sortKey = $this->getSortKey($orderby);
 
-        usort($items, static function (array $a, array $b) use ($orderby, $direction): int {
-            $valueA = $a[$orderby] ?? '';
-            $valueB = $b[$orderby] ?? '';
+        usort($items, static function (array $a, array $b) use ($orderby, $direction, $sortKey): int {
+            $valueA = $a[$sortKey] ?? '';
+            $valueB = $b[$sortKey] ?? '';
 
             if (in_array($orderby, ['request_count', 'last_used_at', 'total_tokens'], true)) {
                 return (((int) $valueA) <=> ((int) $valueB)) * $direction;
@@ -318,5 +365,17 @@ class ConversationListTable extends \WP_List_Table {
         });
 
         return $items;
+    }
+
+    private function getSortKey(string $orderby): string {
+        if ($orderby === 'group_scope') {
+            return 'group_scope_label';
+        }
+
+        if ($orderby === 'user_scope') {
+            return 'user_scope_label';
+        }
+
+        return $orderby;
     }
 }
