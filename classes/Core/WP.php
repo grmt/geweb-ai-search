@@ -50,7 +50,6 @@ class WP {
         add_action('admin_menu', [$this, 'adminMenu']);
         add_action('admin_post_geweb_save', [$this, 'saveSettings']);
         add_filter('plugin_action_links_' . plugin_basename(GEWEB_AI_SEARCH_PATH . 'geweb-ai-search.php'), [$this, 'addPluginActionLinks']);
-        add_filter('wp_nav_menu_items', [$this, 'addFrontendLogoutMenuItem'], 20, 2);
 
         add_action('wp_ajax_geweb_search', [$this, 'ajaxSearch']);
         add_action('wp_ajax_nopriv_geweb_search', [$this, 'ajaxSearch']);
@@ -337,49 +336,6 @@ class WP {
         array_unshift($links, $workspaceLink);
 
         return $links;
-    }
-
-    /**
-     * Add a logout link to frontend navigation menus for logged-in users.
-     *
-     * @param string $items Current menu markup.
-     * @param object $args Menu arguments.
-     * @return string
-     */
-    public function addFrontendLogoutMenuItem(string $items, $args): string {
-        if (!$this->shouldAddFrontendLogoutMenuItem($items)) {
-            return $items;
-        }
-
-        return $items . $this->buildFrontendLogoutMenuItem($args);
-    }
-
-    private function shouldAddFrontendLogoutMenuItem(string $items): bool {
-        if (is_admin() || !is_user_logged_in()) {
-            return false;
-        }
-
-        return strpos($items, 'geweb-ai-logout-menu-item') === false;
-    }
-
-    /**
-     * @param object $args Menu arguments.
-     */
-    private function buildFrontendLogoutMenuItem($args): string {
-        $classes = ['menu-item', 'geweb-ai-logout-menu-item'];
-        if (!empty($args->menu_class) && strpos((string) $args->menu_class, 'wp-block-navigation') !== false) {
-            $classes[] = 'wp-block-navigation-item';
-        }
-
-        $loginUrl = (string) apply_filters('geweb_aisearch_logout_redirect_url', wp_login_url());
-        $logoutUrl = wp_logout_url($loginUrl);
-
-        return sprintf(
-            '<li class="%1$s"><a href="%2$s">%3$s</a></li>',
-            esc_attr(implode(' ', $classes)),
-            esc_url($logoutUrl),
-            esc_html__('Logout', 'geweb-ai-search')
-        );
     }
 
     /**
