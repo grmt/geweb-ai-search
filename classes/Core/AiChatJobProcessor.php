@@ -91,7 +91,7 @@ class AiChatJobProcessor {
             ]);
         }
 
-        if (method_exists($provider, 'setStreamProgressCallback')) {
+        if ($provider instanceof Gemini) {
             $this->setStreamProgressCallback($provider, $job, $thoughtHistory, $requestStartedAt);
         }
     }
@@ -99,7 +99,7 @@ class AiChatJobProcessor {
     /**
      * @param array<int,array<string,mixed>> $thoughtHistory
      */
-    private function setStreamProgressCallback(AIProviderInterface $provider, array &$job, array &$thoughtHistory, float $requestStartedAt): void {
+    private function setStreamProgressCallback(Gemini $provider, array &$job, array &$thoughtHistory, float $requestStartedAt): void {
         $lastProgressHash = '';
         $lastProgressWriteAt = 0.0;
 

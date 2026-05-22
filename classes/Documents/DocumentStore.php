@@ -15,8 +15,8 @@ class DocumentStore {
     private const SQL_SELECT_ALL_FROM = 'SELECT * FROM ';
     private const SQL_DELETE_FROM = 'DELETE FROM ';
     private const LOG_DOCUMENT_ID_SUFFIX = ' (document_id=';
-    private static $documentsTable;
-    private static $refsTable;
+    private static string $documentsTable;
+    private static string $refsTable;
     private static bool $schemaEnsured = false;
     private string $ownerKey;
 

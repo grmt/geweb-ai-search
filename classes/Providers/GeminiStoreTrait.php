@@ -36,6 +36,25 @@ trait GeminiStoreTrait {
         return $this->createStoreClient()->getStoreDocuments($storeName, $forceRefresh);
     }
 
+    private function hasCachedStoreDocuments(string $storeName): bool {
+        if ($storeName === '') {
+            return false;
+        }
+
+        $cache = $this->getScopedOption(self::OPTION_STORE_DOCUMENTS_CACHE, null);
+        if (!is_array($cache) || !array_key_exists($storeName, $cache) || !is_array($cache[$storeName])) {
+            return false;
+        }
+
+        $cacheTimes = $this->getScopedOption(self::OPTION_STORE_DOCUMENTS_CACHE_TIME, null);
+        $cacheTime = is_array($cacheTimes) ? (int) ($cacheTimes[$storeName] ?? 0) : 0;
+        if ($cacheTime <= 0) {
+            return false;
+        }
+
+        return (time() - $cacheTime) < self::STORE_DOCUMENTS_CACHE_MAX_AGE;
+    }
+
     public function hasStoreOverviewCache(): bool {
         return is_array($this->getScopedOption(self::OPTION_STORES_CACHE, null));
     }

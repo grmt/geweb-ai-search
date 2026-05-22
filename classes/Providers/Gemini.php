@@ -71,6 +71,10 @@ class Gemini implements AIProviderInterface {
         $this->streamProgressCallback = is_callable($callback) ? $callback : null;
     }
 
+    public function hasStoreDocumentsCache(string $storeName): bool {
+        return $this->hasCachedStoreDocuments($storeName);
+    }
+
     /**
      * @return array<int,array<string,mixed>>
      */

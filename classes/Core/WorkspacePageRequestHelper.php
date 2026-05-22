@@ -75,7 +75,10 @@ class WorkspacePageRequestHelper {
         return $args;
     }
 
-    public function validatePageStatus($value): bool {
+    /**
+     * @param string $value
+     */
+    public function validatePageStatus(string $value): bool {
         $status = sanitize_key((string) $value);
         if ($status === '') {
             return true;
