@@ -1299,13 +1299,22 @@ return;
 			}
 		},
 
-			getSelectedModel() {
-				if (!this.$modelSelector.length) {
-					return String(geweb_aisearch.selected_model || '').trim();
-				}
+		getSelectedModel() {
+			if (!this.$modelSelector.length) {
+				return String(geweb_aisearch.selected_model || '').trim();
+			}
 
-				return String(this.$modelSelector.val() || geweb_aisearch.selected_model || '').trim();
-			},
+			return String(this.$modelSelector.val() || geweb_aisearch.selected_model || '').trim();
+		},
+
+		getAjaxTimeoutSecondsForModel(model) {
+			const resolvedModel = String(model || this.getSelectedModel() || '').trim().toLowerCase();
+			const flashTimeout = Math.max(15, Number(geweb_aisearch.gemini_timeout_flash_seconds) || 90);
+			const proTimeout = Math.max(15, Number(geweb_aisearch.gemini_timeout_pro_seconds) || flashTimeout);
+			const bufferSeconds = Math.max(0, Number(geweb_aisearch.frontend_ai_ajax_timeout_buffer_seconds) || 60);
+			const baseTimeout = resolvedModel.includes('pro') ? proTimeout : flashTimeout;
+			return Math.max(30, baseTimeout + bufferSeconds);
+		},
 
 			getPromptDescriptors() {
 				return geweb_aisearch.prompt_descriptors && typeof geweb_aisearch.prompt_descriptors === 'object'
@@ -1364,11 +1373,24 @@ return;
 			return fallbackMessage;
 		},
 
-		normalizeAiErrorMessage(message, fallbackMessage = '') {
+		formatElapsedSeconds(elapsedSeconds) {
+			const totalSeconds = Math.max(0, Math.round(Number(elapsedSeconds) || 0));
+			const minutes = Math.floor(totalSeconds / 60);
+			const seconds = totalSeconds % 60;
+			const parts = [];
+			if (minutes > 0) {
+				parts.push(`${minutes}m`);
+			}
+			parts.push(`${seconds}s`);
+			return parts.join(' ');
+		},
+
+		normalizeAiErrorMessage(message, fallbackMessage = '', options = {}) {
 			const rawMessage = String(message || '').trim();
 			const fallback = String(fallbackMessage || '').trim() || t('answerError', 'Error: Unable to get response');
 			const normalized = rawMessage || fallback;
 			const formatted = this.formatAiErrorDisplayMessage(normalized);
+			const elapsedSeconds = Math.max(0, Number(options?.elapsed_seconds) || 0);
 			const lowerMessage = normalized.toLowerCase();
 			const isTimeout = lowerMessage.includes('timed out')
 				|| lowerMessage.includes('curl error 28')
@@ -1380,6 +1402,9 @@ return;
 					'<div class="geweb-ai-error-card geweb-ai-error-card--timeout">',
 					`<div class="geweb-ai-error-card-title">${this.escapeHtml(t('requestTimedOutTitle', 'The AI request timed out'))}</div>`,
 					`<div class="geweb-ai-error-card-body">${this.escapeHtml(t('requestTimedOutBody', 'The request to the AI service took too long and no answer was returned.'))}</div>`,
+					elapsedSeconds > 0
+						? `<div class="geweb-ai-error-card-body">${this.escapeHtml(`${t('requestTimedOutElapsed', 'Elapsed time')}: ${this.formatElapsedSeconds(elapsedSeconds)}`)}</div>`
+						: '',
 					'<ul class="geweb-ai-error-card-tips">',
 					`<li>${this.escapeHtml(t('requestTimedOutRetry', 'Please try again.'))}</li>`,
 					`<li>${this.escapeHtml(t('requestTimedOutModelTip', 'If it keeps happening, retry with a different model.'))}</li>`,
@@ -1396,8 +1421,12 @@ return;
 			].join('');
 		},
 
-		buildTransportRecoveryMessage(message) {
-			const errorHtml = this.normalizeAiErrorMessage(message, t('connectionError', 'Connection error. Please try again.'));
+		buildTransportRecoveryMessage(message, elapsedSeconds = 0) {
+			const errorHtml = this.normalizeAiErrorMessage(
+				message,
+				t('connectionError', 'Connection error. Please try again.'),
+				{ elapsed_seconds: elapsedSeconds }
+			);
 			return [
 				errorHtml,
 				'<div class="geweb-ai-error-card geweb-ai-error-card--recovery">',
@@ -1444,6 +1473,7 @@ return;
 
 			const maxAttempts = Math.max(1, Number(options.maxAttempts) || 120);
 			const intervalMs = Math.max(500, Number(options.intervalMs) || 2000);
+			const startedAtMs = Date.now();
 
 			for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
 				if (attempt > 0) {
@@ -1477,7 +1507,10 @@ return;
 			await this.handleResponse({
 				success: false,
 				data: {
-					message: t('requestTimedOut', 'The AI request timed out. Please try again.')
+					message: t('requestTimedOut', 'The AI request timed out. Please try again.'),
+					meta: {
+						elapsed_seconds: Math.max(1, Math.round((Date.now() - startedAtMs) / 1000))
+					}
 				}
 			}, $loader);
 			return false;
@@ -1948,10 +1981,12 @@ return;
 			},
 
 		sendAiAjaxRequest(requestData, $loader, userCreatedAt, retryState) {
+			retryState.requestStartedAtMs = retryState.requestStartedAtMs || Date.now();
+			const timeoutSeconds = this.getAjaxTimeoutSecondsForModel(requestData?.model);
 			$.ajax({
 				url: geweb_aisearch.ajax_url,
 				type: 'POST',
-				timeout: 180000,
+				timeout: timeoutSeconds * 1000,
 				data: requestData,
 				success: (response) => {
 					this.handleSendAjaxSuccess(response, requestData, $loader);
@@ -1988,12 +2023,12 @@ return;
 					})
 					.catch((error) => {
 						console.debug('Could not refresh expired AI search nonce.', error); // eslint-disable-line no-console
-						this.handleError($loader, xhr, requestData.conversation_id, userCreatedAt).catch((err) => console.debug('Handling AI error failed.', err)); // eslint-disable-line no-console
+						this.handleError($loader, xhr, requestData.conversation_id, userCreatedAt, retryState.requestStartedAtMs).catch((err) => console.debug('Handling AI error failed.', err)); // eslint-disable-line no-console
 					});
 				return;
 			}
 
-			this.handleError($loader, xhr, requestData.conversation_id, userCreatedAt).catch((error) => console.debug('Handling AI error failed.', error)); // eslint-disable-line no-console
+			this.handleError($loader, xhr, requestData.conversation_id, userCreatedAt, retryState.requestStartedAtMs).catch((error) => console.debug('Handling AI error failed.', error)); // eslint-disable-line no-console
 		},
 
 		async handleResponse(response, $loader) {
@@ -2051,7 +2086,11 @@ return;
 			const backendMeta = response?.data?.meta && typeof response.data.meta === 'object' ? response.data.meta : {};
 			const thoughts = this.mergeThoughtLists(backendMeta.thoughts, loaderThoughts);
 			return this.buildAiHistoryEntry({
-				content: this.normalizeAiErrorMessage(backendMessage, t('answerError', 'Error: Unable to get response')),
+				content: this.normalizeAiErrorMessage(
+					backendMessage,
+					t('answerError', 'Error: Unable to get response'),
+					{ elapsed_seconds: backendMeta.elapsed_seconds }
+				),
 				meta: {
 					...backendMeta,
 					...(thoughts.length ? { thoughts } : {}),
@@ -2067,16 +2106,21 @@ return;
 			});
 		},
 
-		async handleError($loader, xhr, conversationId = '', userCreatedAt = null) {
+		async handleError($loader, xhr, conversationId = '', userCreatedAt = null, requestStartedAtMs = null) {
 			const loaderThoughts = this.getLoaderThoughts($loader);
 			$loader.remove();
 			this.requestInFlight = false;
 			const ajaxErrorMessage = this.getAjaxErrorMessage(xhr, t('connectionError', 'Connection error. Please try again.'));
+			const elapsedSeconds = this.getElapsedSeconds(requestStartedAtMs, userCreatedAt);
 			const shouldRecover = this.shouldAttemptResponseRecovery(xhr) && String(conversationId || '').trim() !== '';
 			await this.appendAiHistoryEntry(this.buildAiHistoryEntry({
 				content: shouldRecover
-					? this.buildTransportRecoveryMessage(ajaxErrorMessage)
-					: this.normalizeAiErrorMessage(ajaxErrorMessage, t('connectionError', 'Connection error. Please try again.')),
+					? this.buildTransportRecoveryMessage(ajaxErrorMessage, elapsedSeconds)
+					: this.normalizeAiErrorMessage(
+						ajaxErrorMessage,
+						t('connectionError', 'Connection error. Please try again.'),
+						{ elapsed_seconds: elapsedSeconds }
+					),
 				meta: {
 					error: true,
 					error_type: shouldRecover ? 'transport_recoverable' : 'transport',
@@ -2084,6 +2128,7 @@ return;
 					raw_message: ajaxErrorMessage,
 					http_status: Number(xhr?.status || 0) || null,
 					model: this.getSelectedModel(),
+					...(elapsedSeconds > 0 ? { elapsed_seconds: elapsedSeconds } : {}),
 					...(loaderThoughts.length ? { thoughts: loaderThoughts } : {}),
 					request: {
 						created_at: userCreatedAt || this.normalizeEpochSeconds(Math.floor(Date.now() / 1000)),
@@ -2105,6 +2150,20 @@ return;
 			return Array.isArray(thoughts)
 				? thoughts.map((item) => String(item || '').trim()).filter(Boolean)
 				: [];
+		},
+
+		getElapsedSeconds(requestStartedAtMs, createdAtSeconds = null) {
+			const startedAtMs = Number(requestStartedAtMs) || 0;
+			if (startedAtMs > 0) {
+				return Math.max(1, Math.round((Date.now() - startedAtMs) / 1000));
+			}
+
+			const createdAt = this.normalizeEpochSeconds(createdAtSeconds);
+			if (createdAt > 0) {
+				return Math.max(1, Math.round(Date.now() / 1000 - createdAt));
+			}
+
+			return 0;
 		},
 
 		mergeThoughtLists(...thoughtLists) {
