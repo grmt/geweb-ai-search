@@ -169,7 +169,12 @@ class Element implements ElementInterface
 
     public function getChildrenAsString(): string
     {
-        return $this->node->C14N();
+        $innerHtml = '';
+        foreach ($this->node->childNodes as $child) {
+            $innerHtml .= $this->node->ownerDocument->saveHTML($child);
+        }
+
+        return $innerHtml;
     }
 
     public function getSiblingPosition(): int

@@ -1,23 +1,23 @@
-=== Geweb AI Search ===
-Contributors: gavrilovweb
+=== Workspace AI Search ===
+Contributors: grmt
 Tags: search, ai, gemini, artificial intelligence, semantic search
 Requires at least: 6.0
 Tested up to: 6.9
 Requires PHP: 7.2
-Stable tag: 2.1.3
+Stable tag: 2.1.4.32
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 Text Domain: geweb-ai-search
 
-AI-powered search for WordPress using Google Gemini. Smart answers, source links, and instant autocomplete — all in one modal.
+Keep native WordPress search results, and add optional AI answers powered by Google Gemini.
 
 == Description ==
 
 Live demo: https://aisearch.mygeweb.com/
 
-Geweb AI Search transforms your WordPress search into an intelligent assistant powered by Google Gemini AI. Instead of returning a plain list of matching posts, it understands the user's question and provides a direct, contextual answer — along with links to the source pages.
+Workspace AI Search adds an AI layer to your existing WordPress search powered by Google Gemini AI. Visitors can keep using the standard WordPress search results page from your theme, including excerpts and surrounding context, and optionally continue their search with AI for a direct, contextual answer with source links.
 
-The plugin intercepts the standard WordPress search form and opens a modal with two modes: instant autocomplete suggestions (via WP_Query) and a full AI chat powered by Google Gemini File Search.
+Workspace AI Search is a spinoff of geweb, expanded into a broader AI search workspace with chats, prompts, document handling, and source-grounded answers.
 
 = Key Features =
 
@@ -36,7 +36,7 @@ The plugin intercepts the standard WordPress search form and opens a modal with 
 1. The plugin converts your WordPress posts to Markdown format (with URL and title in frontmatter)
 2. Each document is uploaded to a Google Gemini File Search Store
 3. When a user submits a search query, Gemini searches the indexed documents and generates an answer
-4. The answer is displayed in a chat modal along with source links
+4. Visitors can optionally open the AI assistant from the search form and get an answer with source links
 
 = Third-Party Services =
 
@@ -64,7 +64,7 @@ By using this plugin you agree to Google's Terms of Service and Privacy Policy. 
 = Automatic Installation =
 
 1. Go to **Plugins → Add New**
-2. Search for "Geweb AI Search"
+2. Search for "Workspace AI Search"
 3. Click **Install Now**, then **Activate**
 
 = Manual Installation =
@@ -76,9 +76,9 @@ By using this plugin you agree to Google's Terms of Service and Privacy Policy. 
 
 = Configuration =
 
-1. Go to **Settings → Geweb AI Search**
+1. Go to **Settings → Workspace AI Search**
 2. Enter your Google Gemini API key — get one free at https://aistudio.google.com/app/apikey
-3. Select the AI model (recommended: gemini-2.5-flash for most sites)
+3. Select the AI model (recommended: gemini-3.5-flash for most sites)
 4. Choose which post types to index
 5. Click **Save Settings** — this will create a Gemini File Search Store automatically
 6. Click **Generate Library** to index all existing published content
@@ -112,7 +112,7 @@ The AI search will return an error. The standard autocomplete search will contin
 
 = Which Gemini models are supported? =
 
-Currently: gemini-2.5-flash, gemini-2.5-pro, gemini-3-flash-preview, gemini-3.1-pro-preview. Gemini 3 models support structured JSON responses with source attribution. Gemini 2.5 models return plain text answers.
+Currently: gemini-3.5-flash, gemini-3.1-pro-preview, gemini-2.5-flash, and gemini-2.5-pro. Gemini 3 models support structured JSON responses with source attribution. Gemini 2.5 models return plain text answers.
 
 == Customization ==
 
@@ -170,6 +170,20 @@ Available filters:
 
 == Changelog ==
 
+= 2.1.4.31 =
+* Added: Persistent Markdown cache storage, inspection modal, and shared Markdown renderer
+* Improved: HTML-to-Markdown conversion for WordPress tables, headings, anchors, and source reconstruction
+* Added: OCR/describe support for selected media-library images used during indexing
+* Improved: Gemini upload logging, model administration, and storage estimation tooling
+* Improved: Admin and frontend workspace rendering, status feedback, and source-context display
+
+= 2.1.4 =
+* Fixed: Nonce compatibility with page caching plugins
+* Updated: Default Gemini model to gemini-3.5-flash and kept Pro on gemini-3.1-pro-preview
+
+= 2.1.4 =
+* Fixed: Nonce compatibility with page caching plugins
+
 = 2.1.3 =
 * Improved: Modal overlay background opacity
 * Added: Filters for customizing interface text labels
@@ -177,6 +191,7 @@ Available filters:
 
 = 2.1.2 =
 * Improved: AI response display and formatting
+* Changed: Restored native WordPress search results flow and made AI search optional from the search form
 
 = 2.1.1 =
 * Fixed: Changed method visibility from private to public for better extensibility
@@ -203,7 +218,7 @@ Available filters:
 == Upgrade Notice ==
 
 = 2.0.0 =
-Major rewrite. After upgrading, please go to Settings → Geweb AI Search and click "Generate Library" to re-index your content. Your API key and settings will be preserved.
+Major rewrite. After upgrading, please go to Settings → Workspace AI Search and click "Generate Library" to re-index your content. Your API key and settings will be preserved.
 
 == Third-Party Libraries ==
 

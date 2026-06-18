@@ -10,10 +10,7 @@ class PreformattedConverter implements ConverterInterface
 {
     public function convert(ElementInterface $element): string
     {
-        $preContent = \html_entity_decode($element->getChildrenAsString());
-        $preContent = \preg_replace('/<pre\b[^>]*>/', '', $preContent);
-        \assert($preContent !== null);
-        $preContent = \str_replace('</pre>', '', $preContent);
+        $preContent = \html_entity_decode($element->getChildrenAsString(), ENT_QUOTES, 'UTF-8');
 
         /*
          * Checking for the code tag.
@@ -44,8 +41,18 @@ class PreformattedConverter implements ConverterInterface
             $preContent .= "\n";
         }
 
-        // Use three backticks
-        return "```\n" . $preContent . "```\n\n";
+        // Find the longest sequence of backticks to dynamically size the wrapper
+        \preg_match_all('/`+/', $preContent, $matches);
+        $maxBackticks = 2; // Ensure at least 3 backticks
+        foreach ($matches[0] as $match) {
+            $len = \strlen($match);
+            if ($len > $maxBackticks) {
+                $maxBackticks = $len;
+            }
+        }
+
+        $wrapper = \str_repeat('`', $maxBackticks + 1);
+        return $wrapper . "\n" . $preContent . $wrapper . "\n\n";
     }
 
     /**
