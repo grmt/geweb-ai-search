@@ -202,6 +202,17 @@ defined('ABSPATH') || exit;
                             ? max(0, min(4, (int) get_option(\Geweb\AISearch\Gemini::OPTION_HUMAN_RETRIES, '')))
                             : \Geweb\AISearch\Gemini::DEFAULT_HUMAN_RETRIES;
                         $maxAttempts = $systemRetries * (1 + $humanRetries);
+                        $frontendAjaxTimeoutBufferSeconds = 60;
+                        $selectedModel = (string) ($selectedModel ?? '');
+                        $selectedModelTimeoutSeconds = strpos(strtolower($selectedModel), 'pro') !== false
+                            ? (int) get_option(\Geweb\AISearch\Gemini::OPTION_TIMEOUT_PRO, \Geweb\AISearch\Gemini::DEFAULT_PRO_HTTP_TIMEOUT_SECONDS)
+                            : (int) get_option(\Geweb\AISearch\Gemini::OPTION_TIMEOUT_FLASH, \Geweb\AISearch\Gemini::DEFAULT_HTTP_TIMEOUT_SECONDS);
+                        if ($selectedModelTimeoutSeconds <= 0) {
+                            $selectedModelTimeoutSeconds = strpos(strtolower($selectedModel), 'pro') !== false
+                                ? \Geweb\AISearch\Gemini::DEFAULT_PRO_HTTP_TIMEOUT_SECONDS
+                                : \Geweb\AISearch\Gemini::DEFAULT_HTTP_TIMEOUT_SECONDS;
+                        }
+                        $frontendAjaxTimeoutSeconds = max(30, $selectedModelTimeoutSeconds + $frontendAjaxTimeoutBufferSeconds);
                         ?>
                         <p style="margin-top:0;">
                             <label for="geweb_aisearch_timeout_flash"><strong>Standard/Flash Model Timeout (seconds)</strong></label><br>
@@ -221,6 +232,7 @@ defined('ABSPATH') || exit;
                         </p>
                         <p class="description">Maximum time WordPress will wait for a response from the Gemini API. Complex queries or large document contexts take longer to process. Leave empty to use the defaults.</p>
                         <p class="description">Retries are tracked per same question + model + prompt combination. The total maximum attempts for the same combination are currently <strong><?php echo esc_html((string) $maxAttempts); ?></strong>.</p>
+                        <p class="description">Current frontend browser wait for the selected model (<code><?php echo esc_html($selectedModel !== '' ? $selectedModel : 'default'); ?></code>) is about <strong><?php echo esc_html((string) $frontendAjaxTimeoutSeconds); ?> seconds</strong> after adding the <strong><?php echo esc_html((string) $frontendAjaxTimeoutBufferSeconds); ?> second</strong> buffer.</p>
                     </td>
                 </tr>
 
