@@ -242,6 +242,10 @@ class GeminiSearchCoordinator {
             return 'AI response was blocked by safety filters. Please rephrase the request.';
         }
 
+        if ($finishReason === 'TOO_MANY_TOOL_CALLS') {
+            return 'AI stopped after spending the request on source lookups and reasoning, before it returned answer text. This can look like a timeout, but Gemini reported TOO_MANY_TOOL_CALLS. No automatic retry was done. Please temporarily exclude one or more sources in the Sources panel, shorten the question, or switch models and try again.';
+        }
+
         if ($toolTokens > 200000) {
             return 'AI returned no answer text because the search context became too large. No automatic retry was done. Please temporarily exclude one or more large sources in the Sources panel and try again.';
         }

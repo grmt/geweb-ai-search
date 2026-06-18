@@ -1997,12 +1997,13 @@ return;
 		},
 
 		async handleResponse(response, $loader) {
+			const loaderThoughts = this.getLoaderThoughts($loader);
 			$loader.remove();
 			this.requestInFlight = false;
 			if (response?.success && response?.data) {
 				await this.handleSuccessfulResponseData(response.data);
 			} else {
-				await this.appendAiHistoryEntry(this.buildBackendErrorHistoryEntry(response));
+				await this.appendAiHistoryEntry(this.buildBackendErrorHistoryEntry(response, loaderThoughts));
 			}
 			this.toggleSubmitButton();
 		},
@@ -2045,13 +2046,15 @@ return;
 			return String(responseRequestContext.context_summary || data.context_summary || '').trim();
 		},
 
-		buildBackendErrorHistoryEntry(response) {
+		buildBackendErrorHistoryEntry(response, loaderThoughts = []) {
 			const backendMessage = response?.data?.message ? String(response.data.message) : '';
 			const backendMeta = response?.data?.meta && typeof response.data.meta === 'object' ? response.data.meta : {};
+			const thoughts = this.mergeThoughtLists(backendMeta.thoughts, loaderThoughts);
 			return this.buildAiHistoryEntry({
 				content: this.normalizeAiErrorMessage(backendMessage, t('answerError', 'Error: Unable to get response')),
 				meta: {
 					...backendMeta,
+					...(thoughts.length ? { thoughts } : {}),
 					error: true,
 					error_type: 'backend',
 					raw_message: backendMessage,
@@ -2065,6 +2068,7 @@ return;
 		},
 
 		async handleError($loader, xhr, conversationId = '', userCreatedAt = null) {
+			const loaderThoughts = this.getLoaderThoughts($loader);
 			$loader.remove();
 			this.requestInFlight = false;
 			const ajaxErrorMessage = this.getAjaxErrorMessage(xhr, t('connectionError', 'Connection error. Please try again.'));
@@ -2080,6 +2084,7 @@ return;
 					raw_message: ajaxErrorMessage,
 					http_status: Number(xhr?.status || 0) || null,
 					model: this.getSelectedModel(),
+					...(loaderThoughts.length ? { thoughts: loaderThoughts } : {}),
 					request: {
 						created_at: userCreatedAt || this.normalizeEpochSeconds(Math.floor(Date.now() / 1000)),
 						finished_at: this.normalizeEpochSeconds(Math.floor(Date.now() / 1000)),
@@ -2093,6 +2098,30 @@ return;
 			if (shouldRecover) {
 				this.pollForRecoveredResponse(conversationId, userCreatedAt).catch((error) => console.debug('Polling for recovered response failed.', error)); // eslint-disable-line no-console
 			}
+		},
+
+		getLoaderThoughts($loader) {
+			const thoughts = $loader?.data('gewebThoughts');
+			return Array.isArray(thoughts)
+				? thoughts.map((item) => String(item || '').trim()).filter(Boolean)
+				: [];
+		},
+
+		mergeThoughtLists(...thoughtLists) {
+			const merged = [];
+			thoughtLists.forEach((thoughtList) => {
+				if (!Array.isArray(thoughtList)) {
+					return;
+				}
+
+				thoughtList.forEach((thought) => {
+					const text = String(thought || '').trim();
+					if (text !== '' && !merged.includes(text)) {
+						merged.push(text);
+					}
+				});
+			});
+			return merged;
 		},
 
 		appendMessage(text, type, options = {}) {
@@ -2201,12 +2230,13 @@ return;
 				? this.buildResponseDetails(responseMeta)
 				: null;
 			const $messageActions = $('<div class="geweb-ai-message-actions"></div>');
+			const shouldShowThoughtProcess = !!(responseMeta.error && $thoughtProcess);
 
 			this.appendAiMessagePrimaryAction($messageActions, responseMeta, plainText);
 			if ($body.find('.geweb-ai-footnote-ref').length) {
 				this.bindFootnoteInteractions($body);
 			}
-			this.appendAiThoughtsToggle($messageActions, $container, $thoughtProcess);
+			this.appendAiThoughtsToggle($messageActions, $container, $thoughtProcess, shouldShowThoughtProcess);
 			this.appendAiDetailsToggle($messageActions, $container, $details);
 
 			if ($messageActions.children().length) {
@@ -2256,16 +2286,20 @@ return;
 			}
 		},
 
-		appendAiThoughtsToggle($messageActions, $container, $thoughtProcess) {
+		appendAiThoughtsToggle($messageActions, $container, $thoughtProcess, initiallyExpanded = false) {
 			if (!$thoughtProcess) {
 				return;
 			}
 
+			if (initiallyExpanded) {
+				$thoughtProcess.prop('hidden', false).addClass('is-open');
+			}
+
 			const $thoughtsButton = $('<button type="button" class="geweb-ai-icon-button geweb-ai-message-thoughts-toggle"></button>');
-			$thoughtsButton.attr('aria-expanded', 'false');
-			$thoughtsButton.attr('aria-label', t('showThoughtProcess', 'Show thought process'));
+			$thoughtsButton.attr('aria-expanded', initiallyExpanded ? 'true' : 'false');
+			$thoughtsButton.attr('aria-label', initiallyExpanded ? t('hideThoughtProcess', 'Hide thought process') : t('showThoughtProcess', 'Show thought process'));
 			$thoughtsButton.append($('<span class="geweb-ai-message-action-icon geweb-ai-message-action-icon--thoughts" aria-hidden="true">✦</span>'));
-			$thoughtsButton.append($('<span class="geweb-ai-message-action-label"></span>').text(t('showThoughtProcess', 'Show thought process')));
+			$thoughtsButton.append($('<span class="geweb-ai-message-action-label"></span>').text(initiallyExpanded ? t('hideThoughtProcess', 'Hide thought process') : t('showThoughtProcess', 'Show thought process')));
 			$thoughtsButton.on('click', () => {
 				this.toggleThoughtProcess($container);
 				const expanded = $thoughtProcess.hasClass('is-open');
@@ -2628,6 +2662,7 @@ return;
 			const thoughtSections = this.getThoughtProcessSections(thoughts);
 			const hasExpandableThoughtDetails = thoughtSections.some((section) => String(section?.body || '').trim() !== '');
 
+			$loader.data('gewebThoughts', thoughts);
 			$loader.empty();
 			$loader.toggleClass('geweb-ai-thinking-indicator--thoughts', supportsThoughtProcess);
 			$loader.append($('<div class="geweb-ai-thinking-indicator-label"></div>').text(label));
