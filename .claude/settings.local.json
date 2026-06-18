@@ -3,7 +3,9 @@
     "allow": [
       "Read(//mnt/c/03-src/AI/geweb-ai-search/**)",
       "Read(//mnt/c/03-src/AI/geweb-ai-search-devtools/**)",
-      "Bash(node -e \"const playwright = require\\('playwright'\\); console.log\\('iPad Pro 11:', playwright.devices['iPad Pro 11']\\); console.log\\('iPad gen 7:', playwright.devices['iPad \\(gen 7\\)']\\);\")"
+      "Bash(node -e \"const playwright = require\\('playwright'\\); console.log\\('iPad Pro 11:', playwright.devices['iPad Pro 11']\\); console.log\\('iPad gen 7:', playwright.devices['iPad \\(gen 7\\)']\\);\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
