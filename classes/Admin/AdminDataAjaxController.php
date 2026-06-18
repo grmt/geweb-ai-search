@@ -7,7 +7,7 @@ class AdminDataAjaxController {
     private const MESSAGE_INSUFFICIENT_PERMISSIONS = 'Insufficient permissions';
     private const MODEL_REFRESH_COOLDOWN_SECONDS = DAY_IN_SECONDS;
     private const STORE_REFRESH_COOLDOWN_SECONDS = DAY_IN_SECONDS;
-    private const OFFICIAL_GEMINI_FLASH_LATEST = 'gemini-3-flash-preview';
+    private const OFFICIAL_GEMINI_FLASH_LATEST = 'gemini-3.5-flash';
     private const OFFICIAL_GEMINI_PRO_LATEST = 'gemini-3.1-pro-preview';
 
     private AdminPageSections $adminPageSections;

@@ -60,7 +60,7 @@ Workspace AI Search is a spinoff of geweb, expanded into a broader AI search wor
 
 1. Go to **Settings → Workspace AI Search**
 2. Enter your Google Gemini API key
-3. Select the AI model (recommended: `gemini-2.5-flash`)
+3. Select the AI model (recommended: `gemini-3.5-flash`)
 4. Choose which post types to index
 5. Click **Save Settings** — a Gemini File Search Store will be created automatically
 6. Click **Generate Library** to index all existing published content
@@ -76,7 +76,7 @@ add_filter('geweb_aisearch_gemini_system_instruction', function($instruction) {
 
 // Limit available models in settings
 add_filter('geweb_aisearch_gemini_models', function($models) {
-    return ['gemini-2.5-flash', 'gemini-2.5-pro'];
+    return ['gemini-3.5-flash', 'gemini-3.1-pro-preview', 'gemini-2.5-flash', 'gemini-2.5-pro'];
 });
 ```
 
@@ -137,6 +137,7 @@ This plugin bundles [league/html-to-markdown](https://github.com/thephpleague/ht
 - Improved: Modal overlay background opacity
 - Added: Filters for customizing interface text labels
 - Updated: Model gemini-3-pro-preview → gemini-3.1-pro-preview
+- Updated: Default Gemini model to gemini-3.5-flash and kept Pro on gemini-3.1-pro-preview
 
 ### 2.1.2
 - Improved: AI response display and formatting

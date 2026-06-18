@@ -43,17 +43,18 @@ trait GeminiHelpersTrait {
         "- Do not add a separate Sources, Bronnen, References, or Links section at the end of the answer\n" .
         "- Put source URLs and titles only in the structured sources field, not in the answer body\n" .
         "- Keep the answer body focused on the explanation itself\n\n";
-    private const DEFAULT_MODEL = 'gemini-3-flash-preview';
+    private const DEFAULT_MODEL = 'gemini-3.5-flash';
     private const OFFICIAL_LATEST_MODEL_ALIASES = [
         'gemini-flash-latest',
         'gemini-pro-latest',
     ];
     private const LEGACY_DEFAULT_MODELS = [
+        'gemini-3-flash-preview',
         'gemini-2.5-flash',
     ];
     private const MODEL_SELECTION_MODE_DEFAULT = 'default';
     private const MODEL_SELECTION_MODE_CUSTOM = 'custom';
-    private const TRANSIENT_MODELS = 'geweb_aisearch_gemini_models_v2';
+    private const TRANSIENT_MODELS = 'geweb_aisearch_gemini_models_v3';
     private const MODEL_PRICING_USD_PER_MILLION = [
         'gemini-2.5-flash' => [
             'input' => 0.30,

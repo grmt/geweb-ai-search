@@ -46,6 +46,7 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
         add_action('add_meta_boxes', [$this, 'registerMetaBox']);
         add_action('restrict_manage_posts', [$this, 'renderStatusFilter']);
         add_action('pre_get_posts', [$this, 'applyStatusFilter']);
+        add_filter('hidden_columns', [$this, 'ensureAdminColumnsVisible'], 10, 2);
         add_action(self::CRON_HOOK_PROCESS, [$this, 'processQueuedPost'], 10, 3);
     }
 
@@ -82,16 +83,20 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
 
             if ($key === 'title') {
                 $updated['geweb_post_id'] = 'ID';
-                $updated['geweb_ai_indexed'] = 'AI Indexed';
                 if ($isAttachmentScreen) {
+                    $updated['geweb_ai_indexed'] = 'AI Indexed';
                     $updated['geweb_ai_duplicates'] = 'Duplicates';
+                    $updated['geweb_ai_markdown_cache'] = 'MD Cache';
                 }
-                $updated['geweb_ai_markdown_cache'] = 'MD Cache';
                 continue;
             }
 
             if ($key === 'date') {
                 $updated['geweb_last_modified'] = 'Last Modified';
+                if (!$isAttachmentScreen) {
+                    $updated['geweb_ai_indexed'] = 'AI Indexed';
+                    $updated['geweb_ai_markdown_cache'] = 'MD Cache';
+                }
             }
         }
 
@@ -163,6 +168,41 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
         $columns['geweb_ai_markdown_cache'] = 'geweb_ai_markdown_cache';
         $columns['geweb_last_modified'] = 'modified';
         return $columns;
+    }
+
+    public function ensureAdminColumnsVisible(array $hidden, $screen): array {
+        $postType = $this->getAdminColumnsPostType($screen);
+        if (!$this->isManagedPostType($postType)) {
+            return $hidden;
+        }
+
+        $requiredColumns = [
+            'author',
+            'date',
+            'geweb_post_id',
+            'geweb_ai_indexed',
+            'geweb_ai_markdown_cache',
+            'geweb_last_modified',
+        ];
+
+        if ($postType === 'attachment') {
+            $requiredColumns = [
+                'geweb_post_id',
+                'geweb_ai_indexed',
+                'geweb_ai_duplicates',
+                'geweb_ai_markdown_cache',
+            ];
+        }
+
+        return array_values(array_diff($hidden, $requiredColumns));
+    }
+
+    private function getAdminColumnsPostType($screen): string {
+        if (is_object($screen) && isset($screen->post_type)) {
+            return (string) $screen->post_type;
+        }
+
+        return isset($_GET['post_type']) ? sanitize_key((string) wp_unslash($_GET['post_type'])) : 'post';
     }
 
     public function renderMarkdownCacheColumn(string $column, int $postId): void {
@@ -766,32 +806,36 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
     private function getImageUsageData(int $postId): array {
         $post = get_post($postId);
         if (!$post instanceof \WP_Post) {
-            return [
-                'embedded_bitmap_count' => 0,
-                'uploads_image_count' => 0,
-            ];
+            return $this->getEmptyImageUsageData();
         }
 
-        $content = (string) apply_filters('the_content', $post->post_content);
+        $content = (string) $post->post_content;
         if ($content === '') {
-            return [
-                'embedded_bitmap_count' => 0,
-                'uploads_image_count' => 0,
-            ];
+            return $this->getEmptyImageUsageData();
         }
 
-        $embeddedBitmapCount = preg_match_all('/<img\b[^>]*src\s*=\s*["\']data:image\//i', $content) ?: 0;
+        $embeddedBitmapCount = preg_match_all('/data:image\//i', $content) ?: 0;
         $uploadsBaseUrl = (string) (wp_get_upload_dir()['baseurl'] ?? '');
         $uploadsImageCount = 0;
 
         if ($uploadsBaseUrl !== '') {
-            $uploadsPattern = '/<img\b[^>]*src\s*=\s*["\']' . preg_quote($uploadsBaseUrl, '/') . '[^"\']+["\']/i';
+            $uploadsPattern = '/' . preg_quote($uploadsBaseUrl, '/') . '[^"\'\s<>)]+/i';
             $uploadsImageCount = preg_match_all($uploadsPattern, $content) ?: 0;
         }
 
         return [
             'embedded_bitmap_count' => (int) $embeddedBitmapCount,
             'uploads_image_count' => (int) $uploadsImageCount,
+        ];
+    }
+
+    /**
+     * @return array<string,int>
+     */
+    private function getEmptyImageUsageData(): array {
+        return [
+            'embedded_bitmap_count' => 0,
+            'uploads_image_count' => 0,
         ];
     }
 
@@ -1414,12 +1458,11 @@ class PostIndexManager { // NOSONAR - This is the main orchestration point for a
         }
 
         $cacheStore = $cacheStore ?? new MarkdownCacheStore();
-        $markdown = $cacheStore->getMarkdown($postId);
-        if ($markdown === '') {
+        $bytes = $cacheStore->getMarkdownBytes($postId);
+        if ($bytes <= 0) {
             return 0;
         }
 
-        $bytes = strlen($markdown);
         update_post_meta($postId, self::META_MARKDOWN_BYTES, (string) $bytes);
         return $bytes;
     }

@@ -95,6 +95,22 @@ class MarkdownCacheStore {
         return is_string($markdown) ? $markdown : '';
     }
 
+    public function getMarkdownBytes(int $postId): int {
+        self::init();
+        if ($postId <= 0) {
+            return 0;
+        }
+
+        global $wpdb;
+        $bytes = $wpdb->get_var($wpdb->prepare(
+            "SELECT LENGTH(markdown) FROM " . self::$table . " WHERE owner_key = %s AND post_id = %d",
+            $this->ownerKey,
+            $postId
+        ));
+
+        return $bytes !== null ? (int) $bytes : 0;
+    }
+
     public function hasMarkdown(int $postId): bool {
         return $this->getMarkdown($postId) !== '';
     }

@@ -7,7 +7,7 @@ defined('ABSPATH') || exit;
  * Builds Gemini model hint metadata for the admin page.
  */
 class AdminPageModelHintsBuilder {
-    private const OFFICIAL_GEMINI_FLASH_LATEST = 'gemini-3-flash-preview';
+    private const OFFICIAL_GEMINI_FLASH_LATEST = 'gemini-3.5-flash';
     private const OFFICIAL_GEMINI_PRO_LATEST = 'gemini-3.1-pro-preview';
 
     /**

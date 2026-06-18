@@ -78,7 +78,7 @@ By using this plugin you agree to Google's Terms of Service and Privacy Policy. 
 
 1. Go to **Settings → Workspace AI Search**
 2. Enter your Google Gemini API key — get one free at https://aistudio.google.com/app/apikey
-3. Select the AI model (recommended: gemini-2.5-flash for most sites)
+3. Select the AI model (recommended: gemini-3.5-flash for most sites)
 4. Choose which post types to index
 5. Click **Save Settings** — this will create a Gemini File Search Store automatically
 6. Click **Generate Library** to index all existing published content
@@ -112,7 +112,7 @@ The AI search will return an error. The standard autocomplete search will contin
 
 = Which Gemini models are supported? =
 
-Currently: gemini-2.5-flash, gemini-2.5-pro, gemini-3-flash-preview, gemini-3.1-pro-preview. Gemini 3 models support structured JSON responses with source attribution. Gemini 2.5 models return plain text answers.
+Currently: gemini-3.5-flash, gemini-3.1-pro-preview, gemini-2.5-flash, and gemini-2.5-pro. Gemini 3 models support structured JSON responses with source attribution. Gemini 2.5 models return plain text answers.
 
 == Customization ==
 
@@ -179,6 +179,7 @@ Available filters:
 
 = 2.1.4 =
 * Fixed: Nonce compatibility with page caching plugins
+* Updated: Default Gemini model to gemini-3.5-flash and kept Pro on gemini-3.1-pro-preview
 
 = 2.1.4 =
 * Fixed: Nonce compatibility with page caching plugins

@@ -8,10 +8,46 @@
     min-width: 220px;
 }
 
+.edit-php.post-type-page .wp-list-table {
+    table-layout: auto;
+    min-width: 1040px;
+}
+
+.edit-php.post-type-page .wp-list-table .column-title {
+    width: 32%;
+    min-width: 260px;
+}
+
+.edit-php.post-type-page .wp-list-table .column-author {
+    width: 12%;
+    min-width: 120px;
+}
+
+.edit-php.post-type-page .wp-list-table .column-date,
+.edit-php.post-type-page .wp-list-table .column-geweb_last_modified {
+    width: 12%;
+    min-width: 130px;
+}
+
+.edit-php.post-type-page .wp-list-table .column-geweb_post_id {
+    width: 64px;
+}
+
+.edit-php.post-type-page .wp-list-table .column-geweb_ai_indexed {
+    width: 180px;
+    min-width: 180px;
+}
+
+.edit-php.post-type-page .wp-list-table .column-geweb_ai_markdown_cache {
+    width: 96px;
+    min-width: 96px;
+}
+
 .upload-php .wp-list-table .column-title .title,
 .upload-php .wp-list-table .column-file .title,
 .upload-php .wp-list-table .column-title .row-title,
-.upload-php .wp-list-table .column-file .row-title {
+.upload-php .wp-list-table .column-file .row-title,
+.edit-php.post-type-page .wp-list-table .column-title .row-title {
     display: inline-block;
     max-width: 100%;
     overflow-wrap: anywhere;
