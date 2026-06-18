@@ -1951,7 +1951,7 @@ return;
 			$.ajax({
 				url: geweb_aisearch.ajax_url,
 				type: 'POST',
-				timeout: 20000,
+				timeout: 180000,
 				data: requestData,
 				success: (response) => {
 					this.handleSendAjaxSuccess(response, requestData, $loader);

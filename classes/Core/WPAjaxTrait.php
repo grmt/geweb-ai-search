@@ -205,14 +205,17 @@ trait WPAjaxTrait {
     }
 
     private function sendAsyncJsonAndContinue(array $payload): void {
+        $json = wp_json_encode($payload);
+        $responseBody = is_string($json) ? $json : '{"success":false,"data":{"message":"Could not encode async response."}}';
         if (!headers_sent()) {
             status_header(202);
             header('Content-Type: application/json; charset=' . get_option('blog_charset'));
             header('Cache-Control: no-cache, must-revalidate, max-age=0');
+            header('X-Accel-Buffering: no');
+            header('Content-Length: ' . strlen($responseBody));
         }
         ignore_user_abort(true);
-        $json = wp_json_encode($payload);
-        echo is_string($json) ? $json : '{"success":false,"data":{"message":"Could not encode async response."}}';
+        echo $responseBody;
         if (function_exists('fastcgi_finish_request')) {
             fastcgi_finish_request();
             return;
