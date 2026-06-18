@@ -169,7 +169,7 @@ class FrontendAiWorkspaceController {
             'selected_model' => $selectedModel,
             'gemini_timeout_flash_seconds' => (int) get_option(Gemini::OPTION_TIMEOUT_FLASH, Gemini::DEFAULT_HTTP_TIMEOUT_SECONDS),
             'gemini_timeout_pro_seconds' => (int) get_option(Gemini::OPTION_TIMEOUT_PRO, Gemini::DEFAULT_PRO_HTTP_TIMEOUT_SECONDS),
-            'frontend_ai_ajax_timeout_buffer_seconds' => 60,
+            'frontend_ai_ajax_timeout_buffer_seconds' => 120,
             'prompt_descriptors' => ($this->getFrontendPromptDescriptors)($provider, $models, $selectedModel),
             'frontend_ai_interface' => FrontendAiContext::getFrontendAiInterface(),
             'frontend_ai_page_url' => FrontendAiContext::getCurrentFrontendAiPageUrl(),

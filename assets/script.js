@@ -1311,7 +1311,7 @@ return;
 			const resolvedModel = String(model || this.getSelectedModel() || '').trim().toLowerCase();
 			const flashTimeout = Math.max(15, Number(geweb_aisearch.gemini_timeout_flash_seconds) || 90);
 			const proTimeout = Math.max(15, Number(geweb_aisearch.gemini_timeout_pro_seconds) || flashTimeout);
-			const bufferSeconds = Math.max(0, Number(geweb_aisearch.frontend_ai_ajax_timeout_buffer_seconds) || 60);
+			const bufferSeconds = Math.max(0, Number(geweb_aisearch.frontend_ai_ajax_timeout_buffer_seconds) || 120);
 			const baseTimeout = resolvedModel.includes('pro') ? proTimeout : flashTimeout;
 			return Math.max(30, baseTimeout + bufferSeconds);
 		},
@@ -2089,7 +2089,7 @@ return;
 				content: this.normalizeAiErrorMessage(
 					backendMessage,
 					t('answerError', 'Error: Unable to get response'),
-					{ elapsed_seconds: backendMeta.elapsed_seconds }
+					{ elapsed_seconds: this.resolveElapsedSeconds(backendMeta) }
 				),
 				meta: {
 					...backendMeta,
@@ -2111,7 +2111,7 @@ return;
 			$loader.remove();
 			this.requestInFlight = false;
 			const ajaxErrorMessage = this.getAjaxErrorMessage(xhr, t('connectionError', 'Connection error. Please try again.'));
-			const elapsedSeconds = this.getElapsedSeconds(requestStartedAtMs, userCreatedAt);
+			const elapsedSeconds = this.resolveElapsedSeconds({}, requestStartedAtMs, userCreatedAt);
 			const shouldRecover = this.shouldAttemptResponseRecovery(xhr) && String(conversationId || '').trim() !== '';
 			await this.appendAiHistoryEntry(this.buildAiHistoryEntry({
 				content: shouldRecover
@@ -2164,6 +2164,30 @@ return;
 			}
 
 			return 0;
+		},
+
+		resolveElapsedSeconds(meta = {}, requestStartedAtMs = null, createdAtSeconds = null) {
+			const normalizedMeta = meta && typeof meta === 'object' ? meta : {};
+			const directElapsedSeconds = Math.max(0, Number(normalizedMeta.elapsed_seconds) || 0);
+			if (directElapsedSeconds > 0) {
+				return directElapsedSeconds;
+			}
+
+			const requestMeta = normalizedMeta.request && typeof normalizedMeta.request === 'object'
+				? normalizedMeta.request
+				: {};
+			const requestElapsedSeconds = Math.max(0, Number(requestMeta.elapsed_seconds) || 0);
+			if (requestElapsedSeconds > 0) {
+				return requestElapsedSeconds;
+			}
+
+			const requestCreatedAt = this.normalizeEpochSeconds(requestMeta.created_at || createdAtSeconds);
+			const requestFinishedAt = this.normalizeEpochSeconds(requestMeta.finished_at);
+			if (requestCreatedAt > 0 && requestFinishedAt >= requestCreatedAt) {
+				return Math.max(1, requestFinishedAt - requestCreatedAt);
+			}
+
+			return this.getElapsedSeconds(requestStartedAtMs, requestCreatedAt || createdAtSeconds);
 		},
 
 		mergeThoughtLists(...thoughtLists) {
