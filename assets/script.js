@@ -1473,9 +1473,15 @@ return;
 
 			const maxAttempts = Math.max(1, Number(options.maxAttempts) || 120);
 			const intervalMs = Math.max(500, Number(options.intervalMs) || 2000);
-			const startedAtMs = Date.now();
+			const inactivityTimeoutMs = this.getAjaxTimeoutSecondsForModel(this.getSelectedModel()) * 1000;
+			let lastActivityAtMs = Date.now();
+			let lastObservedUpdatedAt = 0;
 
 			for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+				if ((Date.now() - lastActivityAtMs) >= inactivityTimeoutMs) {
+					break;
+				}
+
 				if (attempt > 0) {
 					await new Promise((resolve) => globalThis.setTimeout(resolve, intervalMs));
 				}
@@ -1492,6 +1498,11 @@ return;
 					const payload = response?.data && typeof response.data === 'object' ? response.data : {};
 					const status = String(payload.status || '').trim();
 					this.updateLoaderFromJobProgress($loader, payload.progress);
+					const payloadUpdatedAt = Number(payload.updated_at || 0) > 0 ? Number(payload.updated_at) * 1000 : 0;
+					if (payloadUpdatedAt > 0 && payloadUpdatedAt > lastObservedUpdatedAt) {
+						lastObservedUpdatedAt = payloadUpdatedAt;
+						lastActivityAtMs = Date.now();
+					}
 
 					const handledResult = await this.handlePolledJobStatus(status, payload, $loader);
 					if (handledResult !== null) {
@@ -1509,7 +1520,7 @@ return;
 				data: {
 					message: t('requestTimedOut', 'The AI request timed out. Please try again.'),
 					meta: {
-						elapsed_seconds: Math.max(1, Math.round((Date.now() - startedAtMs) / 1000))
+						elapsed_seconds: Math.max(1, Math.round((Date.now() - lastActivityAtMs) / 1000))
 					}
 				}
 			}, $loader);
