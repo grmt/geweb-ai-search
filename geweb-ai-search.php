@@ -3,7 +3,7 @@
 Plugin Name: Workspace AI Search
 Plugin URI: https://aisearch.mygeweb.com/
 Description: Workspace AI Search is an AI-powered search workspace for WordPress using Google Gemini. Smart answers, source links, chats, prompts, and documents in one place. A spinoff of geweb.
-Version: 2.1.4.32
+Version: 2.1.4.33
 Author: grmt
 Author URI: https://github.com/grmt
 License: GPL2
@@ -16,7 +16,7 @@ defined('ABSPATH') || exit;
 
 // Plugin version
 if (!defined('GEWEB_AI_SEARCH_VERSION')) {
-    define('GEWEB_AI_SEARCH_VERSION', implode('.', ['2', '1', '4', '32']));
+    define('GEWEB_AI_SEARCH_VERSION', implode('.', ['2', '1', '4', '33']));
 }
 
 // Plugin directory path
