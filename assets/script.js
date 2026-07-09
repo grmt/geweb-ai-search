@@ -1308,12 +1308,18 @@ return;
 		},
 
 		getAjaxTimeoutSecondsForModel(model) {
+			const fallbackFlashTimeout = Math.max(15, Number(geweb_aisearch.gemini_timeout_flash_seconds) || 90);
+			const fallbackProTimeout = Math.max(15, Number(geweb_aisearch.gemini_timeout_pro_seconds) || fallbackFlashTimeout);
 			const resolvedModel = String(model || this.getSelectedModel() || '').trim().toLowerCase();
-			const flashTimeout = Math.max(15, Number(geweb_aisearch.gemini_timeout_flash_seconds) || 90);
-			const proTimeout = Math.max(15, Number(geweb_aisearch.gemini_timeout_pro_seconds) || flashTimeout);
-			const bufferSeconds = Math.max(0, Number(geweb_aisearch.frontend_ai_ajax_timeout_buffer_seconds) || 120);
-			const baseTimeout = resolvedModel.includes('pro') ? proTimeout : flashTimeout;
-			return Math.max(30, baseTimeout + bufferSeconds);
+			const serverTimeout = Math.max(
+				30,
+				Number(geweb_aisearch.frontend_ai_request_timeout_seconds) || (
+					resolvedModel.includes('pro')
+						? fallbackProTimeout + 30
+						: fallbackFlashTimeout + 30
+				)
+			);
+			return serverTimeout;
 		},
 
 			getPromptDescriptors() {
@@ -1497,6 +1503,7 @@ return;
 
 					const payload = response?.data && typeof response.data === 'object' ? response.data : {};
 					const status = String(payload.status || '').trim();
+					lastActivityAtMs = Date.now();
 					this.updateLoaderFromJobProgress($loader, payload.progress);
 					const payloadUpdatedAt = Number(payload.updated_at || 0) > 0 ? Number(payload.updated_at) * 1000 : 0;
 					if (payloadUpdatedAt > 0 && payloadUpdatedAt > lastObservedUpdatedAt) {

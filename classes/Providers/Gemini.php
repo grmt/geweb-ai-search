@@ -28,8 +28,8 @@ class Gemini implements AIProviderInterface {
     public const OPTION_TIMEOUT_PRO = 'geweb_aisearch_timeout_pro';
     public const OPTION_SYSTEM_RETRIES = 'geweb_aisearch_gemini_system_retries';
     public const OPTION_HUMAN_RETRIES = 'geweb_aisearch_gemini_human_retries';
-    public const DEFAULT_HTTP_TIMEOUT_SECONDS = 90;
-    public const DEFAULT_PRO_HTTP_TIMEOUT_SECONDS = 90;
+    public const DEFAULT_HTTP_TIMEOUT_SECONDS = 180;
+    public const DEFAULT_PRO_HTTP_TIMEOUT_SECONDS = 300;
     public const DEFAULT_SYSTEM_RETRIES = 2;
     public const DEFAULT_HUMAN_RETRIES = 2;
 

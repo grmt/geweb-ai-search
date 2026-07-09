@@ -2,6 +2,8 @@
 namespace Geweb\AISearch;
 
 defined('ABSPATH') || exit;
+
+$fieldHelper = new \Geweb\AISearch\AdminSettingFieldHelper();
         ?>
         <div class="wrap">
             <h1>Workspace AI Search</h1>
@@ -204,35 +206,140 @@ defined('ABSPATH') || exit;
                         $maxAttempts = $systemRetries * (1 + $humanRetries);
                         $frontendAjaxTimeoutBufferSeconds = 60;
                         $selectedModel = (string) ($selectedModel ?? '');
-                        $selectedModelTimeoutSeconds = strpos(strtolower($selectedModel), 'pro') !== false
+                        $selectedModelIsPro = strpos(strtolower($selectedModel), 'pro') !== false;
+                        $selectedModelTimeoutDefaultSeconds = $selectedModelIsPro
+                            ? \Geweb\AISearch\Gemini::DEFAULT_PRO_HTTP_TIMEOUT_SECONDS
+                            : \Geweb\AISearch\Gemini::DEFAULT_HTTP_TIMEOUT_SECONDS;
+                        $selectedModelTimeoutSeconds = $selectedModelIsPro
                             ? (int) get_option(\Geweb\AISearch\Gemini::OPTION_TIMEOUT_PRO, \Geweb\AISearch\Gemini::DEFAULT_PRO_HTTP_TIMEOUT_SECONDS)
                             : (int) get_option(\Geweb\AISearch\Gemini::OPTION_TIMEOUT_FLASH, \Geweb\AISearch\Gemini::DEFAULT_HTTP_TIMEOUT_SECONDS);
                         if ($selectedModelTimeoutSeconds <= 0) {
-                            $selectedModelTimeoutSeconds = strpos(strtolower($selectedModel), 'pro') !== false
-                                ? \Geweb\AISearch\Gemini::DEFAULT_PRO_HTTP_TIMEOUT_SECONDS
-                                : \Geweb\AISearch\Gemini::DEFAULT_HTTP_TIMEOUT_SECONDS;
+                            $selectedModelTimeoutSeconds = $selectedModelTimeoutDefaultSeconds;
                         }
                         $frontendAjaxTimeoutSeconds = max(30, $selectedModelTimeoutSeconds + $frontendAjaxTimeoutBufferSeconds);
+                        $timeoutFlashField = $fieldHelper->numberFieldConfig((int) get_option(\Geweb\AISearch\Gemini::OPTION_TIMEOUT_FLASH, \Geweb\AISearch\Gemini::DEFAULT_HTTP_TIMEOUT_SECONDS), \Geweb\AISearch\Gemini::DEFAULT_HTTP_TIMEOUT_SECONDS);
+                        $timeoutProField = $fieldHelper->numberFieldConfig((int) get_option(\Geweb\AISearch\Gemini::OPTION_TIMEOUT_PRO, \Geweb\AISearch\Gemini::DEFAULT_PRO_HTTP_TIMEOUT_SECONDS), \Geweb\AISearch\Gemini::DEFAULT_PRO_HTTP_TIMEOUT_SECONDS);
+                        $systemRetriesField = $fieldHelper->numberFieldConfig($systemRetries, \Geweb\AISearch\Gemini::DEFAULT_SYSTEM_RETRIES);
+                        $humanRetriesField = $fieldHelper->numberFieldConfig($humanRetries, \Geweb\AISearch\Gemini::DEFAULT_HUMAN_RETRIES);
+                        $conversationTrimMessageLimitField = $fieldHelper->numberFieldConfig($conversationTrimMessageLimit, \Geweb\AISearch\FrontendAiContext::DEFAULT_CONVERSATION_TRIM_MESSAGE_LIMIT);
+                        $conversationTrimCharLimitField = $fieldHelper->numberFieldConfig($conversationTrimCharLimit, \Geweb\AISearch\FrontendAiContext::DEFAULT_CONVERSATION_TRIM_CHAR_LIMIT);
+                        $localConversationArchiveLimitField = $fieldHelper->numberFieldConfig($localConversationArchiveLimit, \Geweb\AISearch\FrontendAiContext::DEFAULT_LOCAL_CONVERSATION_ARCHIVE_LIMIT);
+                        $storedContextMessageLimitField = $fieldHelper->numberFieldConfig($storedContextMessageLimit, \Geweb\AISearch\FrontendAiContext::DEFAULT_STORED_CONTEXT_MESSAGE_LIMIT);
+                        $storedContextCharLimitField = $fieldHelper->numberFieldConfig($storedContextCharLimit, \Geweb\AISearch\FrontendAiContext::DEFAULT_STORED_CONTEXT_CHAR_LIMIT);
+                        $promptHistoryLimitField = $fieldHelper->numberFieldConfig($promptHistoryLimit, 10);
+                        $timeoutFields = [
+                            [
+                                'id' => 'geweb_aisearch_timeout_flash',
+                                'name' => \Geweb\AISearch\Gemini::OPTION_TIMEOUT_FLASH,
+                                'label' => 'Standard/Flash Model Timeout (seconds)',
+                                'default_label' => $timeoutFlashField['default_label'] . ' seconds',
+                                'value' => $timeoutFlashField['value'],
+                                'class' => $timeoutFlashField['class'],
+                                'min' => 15,
+                                'max' => 300,
+                                'step' => 1,
+                            ],
+                            [
+                                'id' => 'geweb_aisearch_timeout_pro',
+                                'name' => \Geweb\AISearch\Gemini::OPTION_TIMEOUT_PRO,
+                                'label' => 'Pro Model Timeout (seconds)',
+                                'default_label' => $timeoutProField['default_label'] . ' seconds',
+                                'value' => $timeoutProField['value'],
+                                'class' => $timeoutProField['class'],
+                                'min' => 15,
+                                'max' => 300,
+                                'step' => 1,
+                            ],
+                            [
+                                'id' => 'geweb_aisearch_gemini_system_retries',
+                                'name' => \Geweb\AISearch\Gemini::OPTION_SYSTEM_RETRIES,
+                                'label' => 'Automatic retries per request',
+                                'default_label' => $systemRetriesField['default_label'],
+                                'value' => $systemRetriesField['value'],
+                                'class' => $systemRetriesField['class'],
+                                'min' => 1,
+                                'max' => 4,
+                                'step' => 1,
+                            ],
+                            [
+                                'id' => 'geweb_aisearch_gemini_human_retries',
+                                'name' => \Geweb\AISearch\Gemini::OPTION_HUMAN_RETRIES,
+                                'label' => 'Manual retry rounds allowed after timeouts',
+                                'default_label' => $humanRetriesField['default_label'],
+                                'value' => $humanRetriesField['value'],
+                                'class' => $humanRetriesField['class'],
+                                'min' => 0,
+                                'max' => 4,
+                                'step' => 1,
+                            ],
+                        ];
+                        $compactionFields = [
+                            [
+                                'id' => 'geweb_ai_search_conversation_trim_message_limit',
+                                'name' => 'geweb_ai_search_conversation_trim_message_limit',
+                                'label' => 'Start trimming request context after this many messages',
+                                'default_label' => $conversationTrimMessageLimitField['default_label'],
+                                'value' => $conversationTrimMessageLimitField['value'],
+                                'class' => $conversationTrimMessageLimitField['class'],
+                                'min' => 2,
+                                'max' => null,
+                                'step' => 1,
+                            ],
+                            [
+                                'id' => 'geweb_ai_search_conversation_trim_char_limit',
+                                'name' => 'geweb_ai_search_conversation_trim_char_limit',
+                                'label' => 'Maximum request-context size in characters',
+                                'default_label' => $conversationTrimCharLimitField['default_label'],
+                                'value' => $conversationTrimCharLimitField['value'],
+                                'class' => $conversationTrimCharLimitField['class'],
+                                'min' => 500,
+                                'max' => null,
+                                'step' => 100,
+                            ],
+                            [
+                                'id' => 'geweb_ai_search_local_conversation_archive_limit',
+                                'name' => 'geweb_ai_search_local_conversation_archive_limit',
+                                'label' => 'Saved conversations to show in the chat sidebar',
+                                'default_label' => $localConversationArchiveLimitField['default_label'],
+                                'value' => $localConversationArchiveLimitField['value'],
+                                'class' => $localConversationArchiveLimitField['class'],
+                                'min' => 1,
+                                'max' => null,
+                                'step' => 1,
+                            ],
+                            [
+                                'id' => 'geweb_ai_search_stored_context_message_limit',
+                                'name' => 'geweb_ai_search_stored_context_message_limit',
+                                'label' => 'Hard max stored context messages (definitive purge)',
+                                'default_label' => $storedContextMessageLimitField['default_label'],
+                                'value' => $storedContextMessageLimitField['value'],
+                                'class' => $storedContextMessageLimitField['class'],
+                                'min' => 10,
+                                'max' => 500,
+                                'step' => 1,
+                            ],
+                            [
+                                'id' => 'geweb_ai_search_stored_context_char_limit',
+                                'name' => 'geweb_ai_search_stored_context_char_limit',
+                                'label' => 'Hard max stored context characters (definitive purge)',
+                                'default_label' => $storedContextCharLimitField['default_label'],
+                                'value' => $storedContextCharLimitField['value'],
+                                'class' => $storedContextCharLimitField['class'],
+                                'min' => 5000,
+                                'max' => 500000,
+                                'step' => 1000,
+                            ],
+                        ];
                         ?>
-                        <p style="margin-top:0;">
-                            <label for="geweb_aisearch_timeout_flash"><strong>Standard/Flash Model Timeout (seconds)</strong></label><br>
-                            <input type="number" id="geweb_aisearch_timeout_flash" name="<?php echo esc_attr(\Geweb\AISearch\Gemini::OPTION_TIMEOUT_FLASH); ?>" min="15" max="300" step="1" value="<?php echo esc_attr((string) get_option(\Geweb\AISearch\Gemini::OPTION_TIMEOUT_FLASH, '')); ?>" placeholder="<?php echo esc_attr((string) \Geweb\AISearch\Gemini::DEFAULT_HTTP_TIMEOUT_SECONDS); ?>" class="small-text">
-                        </p>
-                        <p style="margin-top:12px;">
-                            <label for="geweb_aisearch_timeout_pro"><strong>Pro Model Timeout (seconds)</strong></label><br>
-                            <input type="number" id="geweb_aisearch_timeout_pro" name="<?php echo esc_attr(\Geweb\AISearch\Gemini::OPTION_TIMEOUT_PRO); ?>" min="15" max="300" step="1" value="<?php echo esc_attr((string) get_option(\Geweb\AISearch\Gemini::OPTION_TIMEOUT_PRO, '')); ?>" placeholder="<?php echo esc_attr((string) \Geweb\AISearch\Gemini::DEFAULT_PRO_HTTP_TIMEOUT_SECONDS); ?>" class="small-text">
-                        </p>
-                        <p style="margin-top:12px;">
-                            <label for="geweb_aisearch_gemini_system_retries"><strong>Automatic retries per request</strong></label><br>
-                            <input type="number" id="geweb_aisearch_gemini_system_retries" name="<?php echo esc_attr(\Geweb\AISearch\Gemini::OPTION_SYSTEM_RETRIES); ?>" min="1" max="4" step="1" value="<?php echo esc_attr((string) $systemRetries); ?>" class="small-text">
-                        </p>
-                        <p style="margin-top:12px;">
-                            <label for="geweb_aisearch_gemini_human_retries"><strong>Manual retry rounds allowed after timeouts</strong></label><br>
-                            <input type="number" id="geweb_aisearch_gemini_human_retries" name="<?php echo esc_attr(\Geweb\AISearch\Gemini::OPTION_HUMAN_RETRIES); ?>" min="0" max="4" step="1" value="<?php echo esc_attr((string) $humanRetries); ?>" class="small-text">
-                        </p>
-                        <p class="description">Maximum time WordPress will wait for a response from the Gemini API. Complex queries or large document contexts take longer to process. Leave empty to use the defaults.</p>
-                        <p class="description">Retries are tracked per same question + model + prompt combination. The total maximum attempts for the same combination are currently <strong><?php echo esc_html((string) $maxAttempts); ?></strong>.</p>
-                        <p class="description">Current frontend browser wait for the selected model (<code><?php echo esc_html($selectedModel !== '' ? $selectedModel : 'default'); ?></code>) is about <strong><?php echo esc_html((string) $frontendAjaxTimeoutSeconds); ?> seconds</strong> after adding the <strong><?php echo esc_html((string) $frontendAjaxTimeoutBufferSeconds); ?> second</strong> buffer.</p>
+                        <?php foreach ($timeoutFields as $index => $field): ?>
+                            <p style="margin-top:<?php echo $index === 0 ? '0' : '12px'; ?>;">
+                                <label for="<?php echo esc_attr($field['id']); ?>"><strong><?php echo esc_html($field['label']); ?></strong> <span class="description">Default: <?php echo esc_html($field['default_label']); ?></span></label><br>
+                                <input type="number" id="<?php echo esc_attr($field['id']); ?>" name="<?php echo esc_attr($field['name']); ?>" min="<?php echo esc_attr((string) $field['min']); ?>" max="<?php echo esc_attr((string) $field['max']); ?>" step="<?php echo esc_attr((string) $field['step']); ?>" value="<?php echo esc_attr($field['value']); ?>" class="<?php echo esc_attr($field['class']); ?>">
+                            </p>
+                        <?php endforeach; ?>
+                        <p class="description">Maximum time WordPress will wait for a response from the Gemini API. Complex queries or large document contexts take longer to process. Defaults are shown next to each field, and non-default values are highlighted.</p>
+                        <p class="description">Retries are tracked per same question + model + prompt combination. The total maximum attempts for the same combination are currently <strong><?php echo esc_html((string) $maxAttempts); ?></strong>. Default retries are <strong><?php echo esc_html((string) \Geweb\AISearch\Gemini::DEFAULT_SYSTEM_RETRIES); ?></strong> automatic and <strong><?php echo esc_html((string) \Geweb\AISearch\Gemini::DEFAULT_HUMAN_RETRIES); ?></strong> manual rounds.</p>
+                        <p class="description">Current frontend browser wait for the selected model (<code><?php echo esc_html($selectedModel !== '' ? $selectedModel : 'default'); ?></code>) is about <strong><?php echo esc_html((string) $frontendAjaxTimeoutSeconds); ?> seconds</strong> with the current setting, which includes the <strong><?php echo esc_html((string) $frontendAjaxTimeoutBufferSeconds); ?> second</strong> buffer on top of the selected model timeout.</p>
                     </td>
                 </tr>
 
@@ -264,30 +371,17 @@ defined('ABSPATH') || exit;
                     <tr>
                         <th><label for="geweb_ai_search_conversation_trim_message_limit">Compaction:</label></th>
                         <td>
-                            <p style="margin-top:0;">
-                                <label for="geweb_ai_search_conversation_trim_message_limit"><strong>Start trimming request context after this many messages</strong></label><br>
-                                <input type="number" id="geweb_ai_search_conversation_trim_message_limit" name="geweb_ai_search_conversation_trim_message_limit" min="2" step="1" value="<?php echo esc_attr((string) $conversationTrimMessageLimit); ?>" class="small-text">
-                            </p>
-                            <p style="margin-top:12px;">
-                                <label for="geweb_ai_search_conversation_trim_char_limit"><strong>Maximum request-context size in characters</strong></label><br>
-                                <input type="number" id="geweb_ai_search_conversation_trim_char_limit" name="geweb_ai_search_conversation_trim_char_limit" min="500" step="100" value="<?php echo esc_attr((string) $conversationTrimCharLimit); ?>" class="small-text">
-                            </p>
-                            <p style="margin-top:12px;">
-                                <label for="geweb_ai_search_local_conversation_archive_limit"><strong>Saved conversations to show in the chat sidebar</strong></label><br>
-                                <input type="number" id="geweb_ai_search_local_conversation_archive_limit" name="geweb_ai_search_local_conversation_archive_limit" min="1" step="1" value="<?php echo esc_attr((string) $localConversationArchiveLimit); ?>" class="small-text">
-                            </p>
-                            <p style="margin-top:12px;">
-                                <label for="geweb_ai_search_stored_context_message_limit"><strong>Hard max stored context messages (definitive purge)</strong></label><br>
-                                <input type="number" id="geweb_ai_search_stored_context_message_limit" name="geweb_ai_search_stored_context_message_limit" min="10" max="500" step="1" value="<?php echo esc_attr((string) $storedContextMessageLimit); ?>" class="small-text">
-                            </p>
-                            <p style="margin-top:12px;">
-                                <label for="geweb_ai_search_stored_context_char_limit"><strong>Hard max stored context characters (definitive purge)</strong></label><br>
-                                <input type="number" id="geweb_ai_search_stored_context_char_limit" name="geweb_ai_search_stored_context_char_limit" min="5000" max="500000" step="1000" value="<?php echo esc_attr((string) $storedContextCharLimit); ?>" class="small-text">
-                            </p>
-                            <p class="description">Number of saved chats to show in the frontend chat sidebar at once. Full chat history is stored in WordPress, while only a shorter trimmed context is sent to the AI model.</p>
-                            <p class="description">Stored context limits are validated and clamped on save and again at runtime (messages: 10-500, characters: 5000-500000), so values cannot become too small or too large.</p>
-                        </td>
-                    </tr>
+                            <?php foreach ($compactionFields as $index => $field): ?>
+                                <p style="margin-top:<?php echo $index === 0 ? '0' : '12px'; ?>;">
+                                    <label for="<?php echo esc_attr($field['id']); ?>"><strong><?php echo esc_html($field['label']); ?></strong> <span class="description">Default: <?php echo esc_html($field['default_label']); ?></span></label><br>
+                                    <input type="number" id="<?php echo esc_attr($field['id']); ?>" name="<?php echo esc_attr($field['name']); ?>" min="<?php echo esc_attr((string) $field['min']); ?>"<?php echo $field['max'] !== null ? ' max="' . esc_attr((string) $field['max']) . '"' : ''; ?> step="<?php echo esc_attr((string) $field['step']); ?>" value="<?php echo esc_attr($field['value']); ?>" class="<?php echo esc_attr($field['class']); ?>">
+                                </p>
+                            <?php endforeach; ?>
+                        <p class="description">Number of saved chats to show in the frontend chat sidebar at once. Full chat history is stored in WordPress, while only a shorter trimmed context is sent to the AI model.</p>
+                        <p class="description">Stored context limits are validated and clamped on save and again at runtime (messages: 10-500, characters: 5000-500000), so values cannot become too small or too large.</p>
+                        <p class="description">Defaults are shown next to each field, and any non-default value is highlighted.</p>
+                    </td>
+                </tr>
 
                     <tr>
                         <th>Select Post Types for AI Search:</th>
@@ -610,8 +704,9 @@ defined('ABSPATH') || exit;
                     <tr>
                         <th><label for="geweb_ai_search_prompt_history_limit">Prompt History:</label></th>
                         <td>
-                            <input type="number" id="geweb_ai_search_prompt_history_limit" name="geweb_ai_search_prompt_history_limit" min="1" step="1" value="<?php echo esc_attr((string) $promptHistoryLimit); ?>" class="small-text">
-                            <p class="description">Number of prompt versions to keep per scope. The generic prompt keeps its own history, and each model-specific prompt keeps its own history too.</p>
+                            <label for="geweb_ai_search_prompt_history_limit"><strong>Prompt versions to keep per scope</strong> <span class="description">Default: <?php echo esc_html($promptHistoryLimitField['default_label']); ?></span></label><br>
+                            <input type="number" id="geweb_ai_search_prompt_history_limit" name="geweb_ai_search_prompt_history_limit" min="1" step="1" value="<?php echo esc_attr($promptHistoryLimitField['value']); ?>" class="<?php echo esc_attr($promptHistoryLimitField['class']); ?>">
+                            <p class="description">Number of prompt versions to keep per scope. The generic prompt keeps its own history, and each model-specific prompt keeps its own history too. Defaults are shown next to each field, and non-default values are highlighted.</p>
                             <?php if (!empty($promptHistoryItems)): ?>
                                 <div id="geweb-ai-prompt-history-list" style="margin-top: 12px; display: flex; flex-direction: column; gap: 8px; max-width: 800px;">
                                     <?php foreach ($promptHistoryItems as $item): ?>

@@ -169,7 +169,7 @@ class FrontendAiWorkspaceController {
             'selected_model' => $selectedModel,
             'gemini_timeout_flash_seconds' => (int) get_option(Gemini::OPTION_TIMEOUT_FLASH, Gemini::DEFAULT_HTTP_TIMEOUT_SECONDS),
             'gemini_timeout_pro_seconds' => (int) get_option(Gemini::OPTION_TIMEOUT_PRO, Gemini::DEFAULT_PRO_HTTP_TIMEOUT_SECONDS),
-            'frontend_ai_ajax_timeout_buffer_seconds' => 120,
+            'frontend_ai_request_timeout_seconds' => $this->getFrontendAiRequestTimeoutSeconds($selectedModel),
             'prompt_descriptors' => ($this->getFrontendPromptDescriptors)($provider, $models, $selectedModel),
             'frontend_ai_interface' => FrontendAiContext::getFrontendAiInterface(),
             'frontend_ai_page_url' => FrontendAiContext::getCurrentFrontendAiPageUrl(),
@@ -719,6 +719,19 @@ class FrontendAiWorkspaceController {
                 'searchWithAi' => $searchWithAiLabel,
             ],
         ];
+    }
+
+    private function getFrontendAiRequestTimeoutSeconds(string $selectedModel): int {
+        $resolvedModel = strtolower(trim($selectedModel));
+        $isPro = str_contains($resolvedModel, 'pro');
+        $configuredTimeout = $isPro
+            ? (int) get_option(Gemini::OPTION_TIMEOUT_PRO, Gemini::DEFAULT_PRO_HTTP_TIMEOUT_SECONDS)
+            : (int) get_option(Gemini::OPTION_TIMEOUT_FLASH, Gemini::DEFAULT_HTTP_TIMEOUT_SECONDS);
+        $baseTimeout = $isPro ? Gemini::DEFAULT_PRO_HTTP_TIMEOUT_SECONDS : Gemini::DEFAULT_HTTP_TIMEOUT_SECONDS;
+        $effectiveTimeout = max(1, $configuredTimeout > 0 ? $configuredTimeout : $baseTimeout);
+
+        // Keep the browser wait longer than the backend timeout so streaming/polling has room to breathe.
+        return $effectiveTimeout + 60;
     }
 
     private function hasCurrentPageShortcode(): bool {

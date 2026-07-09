@@ -74,4 +74,20 @@
     .geweb-referenced-documents-table-form .search-box.is-collapsed {
         display: none;
     }
+
+    .geweb-ai-setting-nondefault {
+        background-color: #fff8e5;
+        border-color: #c58a00;
+        box-shadow: 0 0 0 1px rgba(197, 138, 0, 0.35);
+    }
+
+    .geweb-ai-setting-nondefault:focus {
+        border-color: #a56a00;
+        box-shadow: 0 0 0 1px #a56a00;
+    }
+
+    .geweb-ai-setting-nondefault + .description,
+    .geweb-ai-setting-nondefault ~ .description {
+        color: #8a5a00;
+    }
 }
