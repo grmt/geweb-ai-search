@@ -80,6 +80,7 @@ trait WPAjaxTrait {
 
             $this->aiChatJobStore->write([
                 'id' => $jobId,
+                'owner_scope' => UserScope::getCurrentUserScopeKey(),
                 'status' => 'queued',
                 'conversation_id' => $resolvedConversationId,
                 'messages' => $fullMessages,
@@ -126,6 +127,10 @@ trait WPAjaxTrait {
         }
 
         $job = $this->aiChatJobStore->read($jobId);
+        // Only the user (or guest cookie) that started the job may read it.
+        if ($job !== null && (string) ($job['owner_scope'] ?? '') !== UserScope::getCurrentUserScopeKey()) {
+            $job = null;
+        }
         if ($job === null) {
             wp_send_json_error(['message' => __('AI chat job was not found or has expired.', 'geweb-ai-search')], 404);
         }

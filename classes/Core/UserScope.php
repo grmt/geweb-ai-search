@@ -192,11 +192,16 @@ class UserScope {
             $requestedWorkspaceId = WorkspaceRegistry::normalizeWorkspaceId((string) wp_unslash($_GET['geweb_workspace_id']));
         }
 
-        if ($requestedWorkspaceId !== '') {
+        $membershipService = new WorkspaceMembershipService();
+        // A requested workspace counts only for its members (and
+        // administrators): its id in a request is no key to its sources.
+        if ($requestedWorkspaceId !== '' && (
+            current_user_can('manage_options')
+            || $membershipService->userBelongsToWorkspace(get_current_user_id(), $requestedWorkspaceId)
+        )) {
             return $requestedWorkspaceId;
         }
 
-        $membershipService = new WorkspaceMembershipService();
         $primaryWorkspaceId = $membershipService->getPrimaryWorkspaceId(get_current_user_id());
         if ($primaryWorkspaceId !== '') {
             return $primaryWorkspaceId;

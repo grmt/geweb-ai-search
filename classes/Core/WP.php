@@ -51,27 +51,17 @@ class WP {
         add_action('admin_post_geweb_save', [$this, 'saveSettings']);
         add_filter('plugin_action_links_' . plugin_basename(GEWEB_AI_SEARCH_PATH . 'geweb-ai-search.php'), [$this, 'addPluginActionLinks']);
 
-        add_action('wp_ajax_geweb_search', [$this, 'ajaxSearch']);
-        add_action('wp_ajax_nopriv_geweb_search', [$this, 'ajaxSearch']);
+        GuestAccess::registerFrontendAjax('geweb_search', [$this, 'ajaxSearch']);
 
-        add_action('wp_ajax_geweb_ai_chat', [$this, 'ajaxAiChat']);
-        add_action('wp_ajax_nopriv_geweb_ai_chat', [$this, 'ajaxAiChat']);
-        add_action('wp_ajax_geweb_get_ai_chat_job', [$this, 'ajaxGetAiChatJob']);
-        add_action('wp_ajax_nopriv_geweb_get_ai_chat_job', [$this, 'ajaxGetAiChatJob']);
-        add_action('wp_ajax_geweb_get_frontend_conversations', [$conversationAjaxController, 'ajaxGetFrontendConversations']);
-        add_action('wp_ajax_nopriv_geweb_get_frontend_conversations', [$conversationAjaxController, 'ajaxGetFrontendConversations']);
-        add_action('wp_ajax_geweb_get_frontend_conversation', [$conversationAjaxController, 'ajaxGetFrontendConversation']);
-        add_action('wp_ajax_nopriv_geweb_get_frontend_conversation', [$conversationAjaxController, 'ajaxGetFrontendConversation']);
-        add_action('wp_ajax_geweb_save_frontend_conversation', [$conversationAjaxController, 'ajaxSaveFrontendConversation']);
-        add_action('wp_ajax_nopriv_geweb_save_frontend_conversation', [$conversationAjaxController, 'ajaxSaveFrontendConversation']);
-        add_action('wp_ajax_geweb_resolve_source_references', [$sourceReferenceAjaxController, 'ajaxResolveSourceReferences']);
-        add_action('wp_ajax_nopriv_geweb_resolve_source_references', [$sourceReferenceAjaxController, 'ajaxResolveSourceReferences']);
-        add_action('wp_ajax_geweb_reconstruct_source_contexts', [$sourceReferenceAjaxController, 'ajaxReconstructSourceContexts']);
-        add_action('wp_ajax_nopriv_geweb_reconstruct_source_contexts', [$sourceReferenceAjaxController, 'ajaxReconstructSourceContexts']);
-        add_action('wp_ajax_geweb_frontend_rename_conversation', [$conversationAjaxController, 'ajaxFrontendRenameConversation']);
-        add_action('wp_ajax_nopriv_geweb_frontend_rename_conversation', [$conversationAjaxController, 'ajaxFrontendRenameConversation']);
-        add_action('wp_ajax_geweb_frontend_delete_conversation', [$conversationAjaxController, 'ajaxFrontendDeleteConversation']);
-        add_action('wp_ajax_nopriv_geweb_frontend_delete_conversation', [$conversationAjaxController, 'ajaxFrontendDeleteConversation']);
+        GuestAccess::registerFrontendAjax('geweb_ai_chat', [$this, 'ajaxAiChat']);
+        GuestAccess::registerFrontendAjax('geweb_get_ai_chat_job', [$this, 'ajaxGetAiChatJob']);
+        GuestAccess::registerFrontendAjax('geweb_get_frontend_conversations', [$conversationAjaxController, 'ajaxGetFrontendConversations']);
+        GuestAccess::registerFrontendAjax('geweb_get_frontend_conversation', [$conversationAjaxController, 'ajaxGetFrontendConversation']);
+        GuestAccess::registerFrontendAjax('geweb_save_frontend_conversation', [$conversationAjaxController, 'ajaxSaveFrontendConversation']);
+        GuestAccess::registerFrontendAjax('geweb_resolve_source_references', [$sourceReferenceAjaxController, 'ajaxResolveSourceReferences']);
+        GuestAccess::registerFrontendAjax('geweb_reconstruct_source_contexts', [$sourceReferenceAjaxController, 'ajaxReconstructSourceContexts']);
+        GuestAccess::registerFrontendAjax('geweb_frontend_rename_conversation', [$conversationAjaxController, 'ajaxFrontendRenameConversation']);
+        GuestAccess::registerFrontendAjax('geweb_frontend_delete_conversation', [$conversationAjaxController, 'ajaxFrontendDeleteConversation']);
         add_action('wp_ajax_geweb_clear_prompt_history', [$promptHistoryAjaxController, 'ajaxClearPromptHistory']);
         add_action('wp_ajax_geweb_delete_prompt_history_item', [$promptHistoryAjaxController, 'ajaxDeletePromptHistoryItem']);
         add_action('wp_ajax_geweb_render_prompt_diff', [$promptHistoryAjaxController, 'ajaxRenderPromptDiff']);
@@ -94,8 +84,7 @@ class WP {
         add_action('wp_ajax_geweb_refresh_models', [$adminDataAjaxController, 'ajaxRefreshModels']);
         add_action('wp_ajax_geweb_test_model', [$adminDataAjaxController, 'ajaxTestModel']);
 
-        add_action('wp_ajax_geweb_get_nonce', [$this, 'ajaxGetNonce']);
-        add_action('wp_ajax_nopriv_geweb_get_nonce', [$this, 'ajaxGetNonce']);
+        GuestAccess::registerFrontendAjax('geweb_get_nonce', [$this, 'ajaxGetNonce']);
 
         add_action('init', [self::class, 'registerFrontendAiRewrite']);
         add_action('init', [self::class, 'maybeRefreshFrontendAiRewrite'], 20);
